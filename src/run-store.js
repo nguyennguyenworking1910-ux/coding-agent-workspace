@@ -11,7 +11,11 @@ const runsDirectory = path.join(
   "runs"
 );
 
-export async function createRun(task, agentName) {
+export async function createRun(
+    task, 
+    agentName,
+    options = {}
+) {
   await fs.mkdir(runsDirectory, {
     recursive: true
   });
@@ -27,6 +31,8 @@ export async function createRun(task, agentName) {
     id: runId,
     agent: agentName,
     task,
+    parentRunId: options.parentRunId ?? null,
+    contextRunId: options.contextRunId ?? null,
     status: "running",
     createdAt: new Date().toISOString(),
     completedAt: null,

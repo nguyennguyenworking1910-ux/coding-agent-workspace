@@ -24,10 +24,13 @@ const command = args[0];
 
 async function main() {
   if (command === "run") {
-    const agentName = args[1];
-    const task = args.slice(2).join(" ");
+    const {
+        agentName,
+        task,
+        contextRunId
+    } = parseRunArguments(args.slice(1));
 
-    await handleRun(agentName, task);
+    await handleRun(agentName, task, contextRunId);
     return;
   }
 
@@ -79,7 +82,55 @@ async function handleGitStatus() {
   }
 }
 
-async function handleRun(agentName, task) {
+function parseRunArguments(runArguments) {
+  const agentName = runArguments[0];
+
+  const contextFlagIndex =
+    runArguments.indexOf("--context");
+
+  let taskArguments;
+  let contextRunId = null;
+
+  if (contextFlagIndex === -1) {
+    taskArguments = runArguments.slice(1);
+  } else {
+    taskArguments = runArguments.slice(
+      1,
+      contextFlagIndex
+    );
+
+    contextRunId =
+      runArguments[contextFlagIndex + 1];
+
+    if (!contextRunId) {
+      throw new Error(
+        "Missing run ID after --context"
+      );
+    }
+
+    if (
+      contextFlagIndex + 2 <
+      runArguments.length
+    ) {
+      throw new Error(
+        "--context must be the final option"
+      );
+    }
+  }
+
+  return {
+    agentName,
+    task: taskArguments.join(" ").trim(),
+    contextRunId
+  };
+}
+
+async function handleRun(
+    agentName, 
+    task,
+    contextRunId,
+    options = {}
+  ) {
   if (!agentName || !task) {
     throw new Error(
       'Usage: npm start -- run <agent-name> "your task"'
@@ -88,7 +139,10 @@ async function handleRun(agentName, task) {
 
   const agent = getAgent(agentName);
 
-  if (agent.mode === "write") {
+  if (
+    agent.mode === "write" &&
+    !options.skipGitSafety
+  ) {
     const gitStatus = await requireCleanRepository();
 
     console.log("Write-agent safety check passed.");
@@ -101,14 +155,57 @@ async function handleRun(agentName, task) {
   console.log(`Mode: ${agent.mode}`);
   console.log(`Task: ${task}`);
 
+  let parentRunId = null;
+  let resolvedContextRunId = null;
+  let contextOutput = null;
+
+  if (contextRunId) {
+    const { run: contextRun } =
+        await findRun(contextRunId);
+
+    if (contextRun.status !== "completed") {
+        throw new Error(
+        `Context run must be completed: ${contextRun.id}`
+        );
+    }
+
+    contextOutput = await readRunOutput(
+        contextRun.id
+    );
+
+    resolvedContextRunId = contextRun.id;
+
+    parentRunId =
+        contextRun.parentRunId ??
+        contextRun.id;
+
+    console.log(
+        `Context run: ${resolvedContextRunId}`
+    );
+
+    console.log(
+        `Parent run: ${parentRunId}`
+    );
+  }
+
   const { run, runDirectory } = await createRun(
     task,
-    agent.name
+    agent.name,
+    {
+        parentRunId,
+        contextRunId: resolvedContextRunId
+    }
   );
 
   console.log(`Run ID: ${run.id}`);
 
-  const prompt = agent.createPrompt(task);
+  const basePrompt = agent.createPrompt(task);
+
+  const prompt = buildPromptWithContext(
+    basePrompt,
+    contextOutput,
+    resolvedContextRunId
+  )
 
   try {
     const response = await runClaude(
@@ -126,6 +223,12 @@ async function handleRun(agentName, task) {
 
     console.log("\n\nAgent completed successfully.");
     console.log(`Output saved to: ${runDirectory}`);
+
+    return {
+        run,
+        runDirectory,
+        response
+    };
   } catch (error) {
     await failRun(
       run,
@@ -165,6 +268,8 @@ async function handleListRuns() {
       id: run.id,
       agent: run.agent ?? "unknown",
       status: run.status,
+      parent: shortenRunId(run.parentRunId),
+      context: shortenRunId(run.contextRunId),
       created: run.createdAt,
       task: shorten(run.task, 50)
     }))
@@ -203,17 +308,57 @@ function shorten(text, maximumLength) {
   return `${text.slice(0, maximumLength - 3)}...`;
 }
 
+function buildPromptWithContext(
+  basePrompt,
+  contextOutput,
+  contextRunId
+) {
+  if (!contextOutput) {
+    return basePrompt;
+  }
+
+  return `
+${basePrompt}
+
+## Previous Agent Context
+
+The following report was produced by run:
+${contextRunId}
+
+Treat this report as supporting context only.
+
+You must:
+
+- Independently verify its claims against the repository.
+- Not assume its findings are correct.
+- Use relevant findings to continue the assigned task.
+- Clearly mention any claim that cannot be verified.
+
+<previous-agent-report>
+${contextOutput}
+</previous-agent-report>
+`.trim();
+}
+
+function shortenRunId(runId) {
+  if (!runId) {
+    return "-";
+  }
+
+  return runId.slice(-6);
+}
+
 function showHelp() {
   console.log(`
 Coding Agent Workspace
 
 Commands:
   npm start -- agents
-  npm start -- run <agent-name> "your task"
+  npm start -- run <agent-name> "your task" [--context <run-id>]
   npm start -- runs
   npm start -- show <run-id>
   npm start -- output <run-id>
-  npm start -- git status
+  npm start -- git-status
 `.trim());
 }
 
