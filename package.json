@@ -4,7 +4,8 @@
   "description": "CLI workspace for coordinating coding agents",
   "type": "module",
   "scripts": {
-    "start": "node src/cli.js"
+    "start": "node src/cli.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"
