@@ -28,6 +28,10 @@ export async function createWorkflow(task) {
     task,
     status: "running",
     stages: [],
+    repositoryRoot: null,
+    worktreePath: null,
+    branchName: null,
+    baseCommit: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
     error: null
@@ -60,6 +64,29 @@ export async function addWorkflowStage(
     runId: run.id,
     status: run.status
   });
+
+  await saveWorkflow(
+    workflowDirectory,
+    workflow
+  );
+}
+
+export async function setWorkflowWorktree(
+  workflow,
+  workflowDirectory,
+  worktree
+) {
+  workflow.repositoryRoot =
+    worktree.repositoryRoot;
+
+  workflow.worktreePath =
+    worktree.worktreePath;
+
+  workflow.branchName =
+    worktree.branchName;
+
+  workflow.baseCommit =
+    worktree.baseCommit;
 
   await saveWorkflow(
     workflowDirectory,

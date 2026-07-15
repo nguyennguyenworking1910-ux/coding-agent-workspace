@@ -34,6 +34,8 @@ export async function createRun(
     workflowId: options.workflowId ?? null,
     parentRunId: options.parentRunId ?? null,
     contextRunId: options.contextRunId ?? null,
+    workingDirectory:
+        options.workingDirectory ?? null,
     status: "running",
     createdAt: new Date().toISOString(),
     completedAt: null,

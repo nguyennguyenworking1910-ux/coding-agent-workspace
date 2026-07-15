@@ -37,7 +37,9 @@ export async function executeAgentRun(
     !options.skipGitSafety
   ) {
     const gitStatus =
-      await requireCleanRepository();
+      await requireCleanRepository(
+        options.requireCleanRepository
+      );
 
     console.log(
       "Write-agent safety check passed."
@@ -95,7 +97,9 @@ export async function executeAgentRun(
             options.workflowId ?? null,
         parentRunId,
         contextRunId: 
-            resolvedContextRunId
+            resolvedContextRunId,
+        workingDirectory:
+            options.workingDirectory ?? null
       }
     );
 
@@ -115,7 +119,11 @@ export async function executeAgentRun(
       prompt,
       agent.tools,
       agent.permissionMode,
-      agent.allowedTools
+      agent.allowedTools,
+      {
+        workingDirectory:
+            options.workingDirectory
+      }
     );
 
     await completeRun(

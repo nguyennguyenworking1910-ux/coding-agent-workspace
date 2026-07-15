@@ -4,7 +4,8 @@ export function runClaude(
     prompt,
     tools,
     permissionMode = "default",
-    allowedTools = []
+    allowedTools = [],
+    options = {}
 ) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -27,6 +28,9 @@ export function runClaude(
     console.log("\nStarting Claude...\n");
 
     const child = spawn("claude", args, {
+      cwd:
+        options.workingDirectory ??
+        process.cwd(),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
