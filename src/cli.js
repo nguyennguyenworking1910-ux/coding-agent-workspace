@@ -14,6 +14,8 @@ import {
   getAgent
 } from "./agents.js";
 
+import { getGitStatus } from "./git-utils.js";
+
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -46,7 +48,32 @@ async function main() {
     return;
   }
 
+  if (command === "git-status") {
+    await handleGitStatus();
+    return;
+  }
+
   showHelp();
+}
+
+async function handleGitStatus() {
+  const status = await getGitStatus();
+
+  if (!status.isRepository) {
+    console.log("Current directory is not a Git repository.");
+    return;
+  }
+
+  console.log(`Branch: ${status.branch}`);
+  console.log(`Clean: ${status.isClean ? "yes" : "no"}`);
+
+  if (status.changes.length > 0) {
+    console.log("\nUncommitted changes:");
+
+    for (const change of status.changes) {
+      console.log(`  ${change}`);
+    }
+  }
 }
 
 async function handleRun(agentName, task) {
@@ -174,6 +201,7 @@ Commands:
   npm start -- runs
   npm start -- show <run-id>
   npm start -- output <run-id>
+  npm start -- git status
 `.trim());
 }
 
