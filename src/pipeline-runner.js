@@ -6,6 +6,13 @@ import {
   requireCleanRepository
 } from "./git-utils.js";
 
+import {
+  createWorkflow,
+  addWorkflowStage,
+  completeWorkflow,
+  failWorkflow
+} from "./workflow-store.js";
+
 export async function executePipeline(task) {
   if (!task?.trim()) {
     throw new Error(
@@ -16,8 +23,14 @@ export async function executePipeline(task) {
   const gitStatus =
     await requireCleanRepository();
 
+  const {
+    workflow,
+    workflowDirectory
+  } = await createWorkflow(task);
+
   console.log("Coding Agent Pipeline");
   console.log("---------------------");
+  console.log(`Workflow ID: ${workflow.id}`);
   console.log(`Branch: ${gitStatus.branch}`);
   console.log(`Task: ${task}`);
   console.log(
@@ -25,67 +38,150 @@ export async function executePipeline(task) {
   );
 
   const results = [];
+  let currentStage = null;
 
-  console.log(
-    "\n[Stage 1/4] Diagnostician"
-  );
+  try {
+    currentStage = "diagnostician";
 
-  const diagnosis =
-    await executeAgentRun(
-      "diagnostician",
-      task
+    console.log(
+      "\n[Stage 1/4] Diagnostician"
     );
 
-  results.push(diagnosis.run);
+    const diagnosis =
+      await executeAgentRun(
+        "diagnostician",
+        task,
+        null,
+        {
+          workflowId: workflow.id
+        }
+      );
 
-  console.log(
-    "\n[Stage 2/4] Bug-fixer"
-  );
+    results.push(diagnosis.run);
 
-  const fix = await executeAgentRun(
-    "bug-fixer",
-    createBugFixerTask(task),
-    diagnosis.run.id,
-    {
-      skipGitSafety: true
+    await addWorkflowStage(
+      workflow,
+      workflowDirectory,
+      diagnosis.run
+    );
+
+    currentStage = "bug-fixer";
+
+    console.log(
+      "\n[Stage 2/4] Bug-fixer"
+    );
+
+    const fix = await executeAgentRun(
+      "bug-fixer",
+      createBugFixerTask(task),
+      diagnosis.run.id,
+      {
+        workflowId: workflow.id,
+        skipGitSafety: true
+      }
+    );
+
+    results.push(fix.run);
+
+    await addWorkflowStage(
+      workflow,
+      workflowDirectory,
+      fix.run
+    );
+
+    currentStage = "test-agent";
+
+    console.log(
+      "\n[Stage 3/4] Test-agent"
+    );
+
+    const tests = await executeAgentRun(
+      "test-agent",
+      createTestTask(task),
+      fix.run.id,
+      {
+        workflowId: workflow.id,
+        skipGitSafety: true
+      }
+    );
+
+    results.push(tests.run);
+
+    await addWorkflowStage(
+      workflow,
+      workflowDirectory,
+      tests.run
+    );
+
+    currentStage = "reviewer";
+
+    console.log(
+      "\n[Stage 4/4] Reviewer"
+    );
+
+    const review = await executeAgentRun(
+      "reviewer",
+      createReviewTask(task),
+      tests.run.id,
+      {
+        workflowId: workflow.id
+      }
+    );
+
+    results.push(review.run);
+
+    await addWorkflowStage(
+      workflow,
+      workflowDirectory,
+      review.run
+    );
+
+    await completeWorkflow(
+      workflow,
+      workflowDirectory
+    );
+
+    printPipelineSummary(
+      workflow,
+      results
+    );
+
+    return {
+      workflow,
+      workflowDirectory,
+      runs: results
+    };
+  } catch (error) {
+    if (error.runId) {
+      await addWorkflowStage(
+        workflow,
+        workflowDirectory,
+        {
+          id: error.runId,
+          agent:
+            error.agentName ??
+            currentStage,
+          status: "failed"
+        }
+      );
     }
-  );
 
-  results.push(fix.run);
+    await failWorkflow(
+      workflow,
+      workflowDirectory,
+      error
+    );
 
-  console.log(
-    "\n[Stage 3/4] Test-agent"
-  );
+    console.error(
+      `\nPipeline failed at stage: ${currentStage}`
+    );
 
-  const tests = await executeAgentRun(
-    "test-agent",
-    createTestTask(task),
-    fix.run.id,
-    {
-      skipGitSafety: true
-    }
-  );
+    console.error(
+      `Workflow ID: ${workflow.id}`
+    );
 
-  results.push(tests.run);
-
-  console.log(
-    "\n[Stage 4/4] Reviewer"
-  );
-
-  const review = await executeAgentRun(
-    "reviewer",
-    createReviewTask(task),
-    tests.run.id
-  );
-
-  results.push(review.run);
-
-  printPipelineSummary(results);
-
-  return {
-    rootRunId: diagnosis.run.id,
-    runs: results
-  };
+    throw error;
+  }
 }
 
 function createBugFixerTask(originalTask) {
@@ -124,9 +220,16 @@ security risks, and missing coverage. Do not modify files.
 `.trim();
 }
 
-function printPipelineSummary(runs) {
+function printPipelineSummary(
+    workflow,
+    runs
+) {
   console.log(
     "\nPipeline completed successfully.\n"
+  );
+
+  console.log(
+    `Workflow ID: ${workflow.id}`
   );
 
   console.table(

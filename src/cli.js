@@ -129,6 +129,8 @@ async function handleListRuns() {
       id: run.id,
       agent: run.agent ?? "unknown",
       status: run.status,
+      workflow:
+        run.workflowId?.slice(-6) ?? "-",
       parent: shortenRunId(run.parentRunId),
       context: shortenRunId(run.contextRunId),
       created: run.createdAt,

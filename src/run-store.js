@@ -31,6 +31,7 @@ export async function createRun(
     id: runId,
     agent: agentName,
     task,
+    workflowId: options.workflowId ?? null,
     parentRunId: options.parentRunId ?? null,
     contextRunId: options.contextRunId ?? null,
     status: "running",

@@ -91,8 +91,11 @@ export async function executeAgentRun(
       task,
       agent.name,
       {
+        workflowId:
+            options.workflowId ?? null,
         parentRunId,
-        contextRunId: resolvedContextRunId
+        contextRunId: 
+            resolvedContextRunId
       }
     );
 
@@ -140,6 +143,9 @@ export async function executeAgentRun(
       runDirectory,
       error
     );
+
+    error.runId = run.id;
+    error.agentName = agent.name;
 
     throw error;
   }
