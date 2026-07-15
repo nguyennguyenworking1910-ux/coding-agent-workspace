@@ -24,6 +24,12 @@ import {
   executePipeline
 } from "./pipeline-runner.js";
 
+import {
+  listWorkflows,
+  findWorkflow,
+  readWorkflowOutput
+} from "./workflow-store.js";
+
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -50,6 +56,21 @@ async function main() {
     }
 
     await executePipeline(task);
+    return;
+  }
+
+  if (command === "pipelines") {
+    await handleListWorkflows();
+    return;
+  }
+
+  if (command === "pipeline-show") {
+    await handleShowWorkflow(args[1]);
+    return;
+  }
+
+  if (command === "pipeline-output") {
+    await handleWorkflowOutput(args[1]);
     return;
   }
 
@@ -133,10 +154,92 @@ async function handleListRuns() {
         run.workflowId?.slice(-6) ?? "-",
       parent: shortenRunId(run.parentRunId),
       context: shortenRunId(run.contextRunId),
+      stages: workflow.stages?.length ?? 0,
       created: run.createdAt,
       task: shorten(run.task, 50)
     }))
   );
+}
+
+async function handleListWorkflows() {
+  const workflows =
+    await listWorkflows();
+
+  if (workflows.length === 0) {
+    console.log(
+      "No pipeline workflows found."
+    );
+
+    return;
+  }
+
+  console.log("Pipeline history\n");
+
+  console.table(
+    workflows.map((workflow) => ({
+      id: workflow.id,
+      status: workflow.status,
+      stages: workflow.stages.length,
+      completed:
+        countCompletedStages(workflow),
+      created: workflow.createdAt,
+      task: shorten(workflow.task, 50)
+    }))
+  );
+}
+
+async function handleShowWorkflow(
+  workflowId
+) {
+  requireWorkflowId(
+    workflowId,
+    "pipeline-show"
+  );
+
+  const {
+    workflow,
+    workflowDirectory
+  } = await findWorkflow(workflowId);
+
+  console.log(
+    JSON.stringify(workflow, null, 2)
+  );
+
+  console.log(
+    `\nDirectory: ${workflowDirectory}`
+  );
+}
+
+function countCompletedStages(workflow) {
+  return workflow.stages.filter(
+    (stage) =>
+      stage.status === "completed"
+  ).length;
+}
+
+function requireWorkflowId(
+  workflowId,
+  commandName
+) {
+  if (!workflowId) {
+    throw new Error(
+      `Usage: npm start -- ${commandName} <workflow-id>`
+    );
+  }
+}
+
+async function handleWorkflowOutput(
+  workflowId
+) {
+  requireWorkflowId(
+    workflowId,
+    "pipeline-output"
+  );
+
+  const output =
+    await readWorkflowOutput(workflowId);
+
+  console.log(output);
 }
 
 async function handleShowRun(runId) {
@@ -191,6 +294,9 @@ Commands:
   npm start -- output <run-id>
   npm start -- git-status
   npm start -- pipeline "your task"
+  npm start -- pipelines
+  npm start -- pipeline-show <workflow-id>
+  npm start -- pipeline-output <workflow-id>
 `.trim());
 }
 
