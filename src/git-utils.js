@@ -44,6 +44,24 @@ function samePath(first, second) {
   return normalize(first) === normalize(second);
 }
 
+async function sameExistingPath(
+  first,
+  second
+) {
+  const [
+    canonicalFirst,
+    canonicalSecond
+  ] = await Promise.all([
+    fs.realpath(first),
+    fs.realpath(second)
+  ]);
+
+  return samePath(
+    canonicalFirst,
+    canonicalSecond
+  );
+}
+
 function resolveGitPath(workingDirectory, gitPath) {
   return path.resolve(workingDirectory, gitPath);
 }
@@ -219,7 +237,12 @@ export async function getPipelineStatus(workflow) {
     workflow.repositoryRoot
   );
 
-  if (!samePath(repositoryRoot, workflow.repositoryRoot)) {
+  if (
+    !await sameExistingPath(
+      repositoryRoot,
+      workflow.repositoryRoot
+    )
+  ) {
     throw new Error(
       "Recorded repository root does not match the Git repository"
     );
@@ -239,7 +262,12 @@ export async function getPipelineStatus(workflow) {
     workflow.worktreePath
   );
 
-  if (!samePath(worktreeRoot, workflow.worktreePath)) {
+  if (
+    !await sameExistingPath(
+      worktreeRoot,
+      workflow.worktreePath
+    )
+  ) {
     throw new Error(
       "Recorded worktree path does not match the Git worktree"
     );
@@ -254,10 +282,12 @@ export async function getPipelineStatus(workflow) {
       )
     );
 
-  if (!samePath(
-    repositoryCommonDirectory,
-    worktreeCommonDirectory
-  )) {
+  if (
+    !await sameExistingPath(
+      repositoryCommonDirectory,
+      worktreeCommonDirectory
+    )
+  ) {
     throw new Error(
       "Recorded worktree does not belong to the recorded repository"
     );

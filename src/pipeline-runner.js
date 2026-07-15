@@ -101,7 +101,7 @@ export async function executePipeline(task) {
     currentStage = "diagnostician";
 
     console.log(
-      "\n[Stage 1/4] Diagnostician"
+      "\n[Stage 1/5] Diagnostician"
     );
 
     const diagnosis =
@@ -127,7 +127,7 @@ export async function executePipeline(task) {
     currentStage = "bug-fixer";
 
     console.log(
-      "\n[Stage 2/4] Bug-fixer"
+      "\n[Stage 2/5] Bug-fixer"
     );
 
     const fix =
@@ -154,7 +154,7 @@ export async function executePipeline(task) {
     currentStage = "test-agent";
 
     console.log(
-      "\n[Stage 3/4] Test-agent"
+      "\n[Stage 3/5] Test-agent"
     );
 
     const tests =
@@ -181,7 +181,7 @@ export async function executePipeline(task) {
     currentStage = "reviewer";
 
     console.log(
-      "\n[Stage 4/4] Reviewer"
+      "\n[Stage 4/5] Reviewer"
     );
 
     const review =
@@ -202,6 +202,32 @@ export async function executePipeline(task) {
       workflow,
       workflowDirectory,
       review.run
+    );
+
+    currentStage = "red-team";
+
+    console.log(
+      "\n[Stage 5/5] Red-team"
+    );
+
+    const redTeam =
+      await executeAgentRun(
+        "red-team",
+        createRedTeamTask(task),
+        review.run.id,
+        {
+          workflowId: workflow.id,
+          workingDirectory:
+            worktree.worktreePath
+        }
+      );
+
+    results.push(redTeam.run);
+
+    await addWorkflowStage(
+      workflow,
+      workflowDirectory,
+      redTeam.run
     );
 
     await completeWorkflow(
@@ -329,6 +355,29 @@ Do not modify files.
 
 Clearly separate blocking findings from non-blocking
 recommendations.
+`.trim();
+}
+
+function createRedTeamTask(
+  originalTask
+) {
+  return `
+Adversarially validate the final implementation for the following task:
+
+${originalTask}
+
+Use the reviewer report as supporting context, but independently
+inspect the repository state, implementation changes, and tests.
+
+Requirements:
+
+- Challenge assumptions made by earlier agents.
+- Inspect the Git diff and relevant implementation.
+- Look for hidden regressions, unsafe states, and security risks.
+- Run only approved read-only verification commands when useful.
+- Do not modify files.
+- Clearly separate blocking findings from non-blocking findings.
+- Report the exact verification commands executed and their real results.
 `.trim();
 }
 
