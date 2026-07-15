@@ -114,7 +114,8 @@ async function handleRun(agentName, task) {
     const response = await runClaude(
       prompt,
       agent.tools,
-      agent.permissionMode
+      agent.permissionMode,
+      agent.allowedTools
     );
 
     await completeRun(

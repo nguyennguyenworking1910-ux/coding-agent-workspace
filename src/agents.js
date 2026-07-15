@@ -5,6 +5,7 @@ const agents = {
     mode: "read-only",
     permissionMode: "default",
     tools: ["Read", "Glob", "Grep"],
+    allowedTools: [],
 
     createPrompt(task) {
       return `
@@ -41,6 +42,7 @@ Return a Markdown report containing:
     mode: "read-only",
     permissionMode: "default",
     tools: ["Read", "Glob", "Grep"],
+    allowedTools: [],
 
     createPrompt(task) {
       return `
@@ -87,6 +89,8 @@ Return a Markdown report containing:
       "Write"
     ],
 
+    allowedTools: [],
+
   createPrompt(task) {
     return `
 You are a focused bug-fixing agent.
@@ -116,6 +120,62 @@ Return a Markdown report containing:
 3. Changes made
 4. Recommended verification
 5. Remaining risks
+  `.trim();
+    }
+  },
+
+  "test-agent": {
+    name: "test-agent",
+    description: "Creates regression tests and runs approved test commands",
+    mode: "write",
+    permissionMode: "acceptEdits",
+
+    tools: [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+
+  allowedTools: [
+    "Bash(npm test)",
+    "Bash(npm test:*)",
+    "Bash(node --test:*)"
+  ],
+
+  createPrompt(task) {
+    return `
+You are a software testing agent.
+
+Task:
+${task}
+
+Responsibilities:
+- Inspect the relevant implementation.
+- Identify the behavior that must be verified.
+- Create focused regression tests when tests are missing.
+- Follow the existing test structure and conventions.
+- Run only the approved test commands.
+- Report the exact command and its real result.
+
+Restrictions:
+- Do not modify production code merely to make a test pass.
+- Do not weaken or delete existing assertions.
+- Do not skip, disable, or silently ignore failing tests.
+- Do not install packages.
+- Do not use npx.
+- Do not create commits.
+- Keep tests deterministic.
+- Clearly report failures and unresolved defects.
+
+Return a Markdown report containing:
+1. Test scope
+2. Tests created or changed
+3. Commands executed
+4. Test results
+5. Failures or remaining coverage gaps
   `.trim();
     }
   }

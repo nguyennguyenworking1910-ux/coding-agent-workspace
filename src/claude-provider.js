@@ -4,6 +4,7 @@ export function runClaude(
     prompt,
     tools,
     permissionMode = "default",
+    allowedTools = []
 ) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -15,6 +16,13 @@ export function runClaude(
       "--output-format",
       "text"
     ];
+
+    if (allowedTools.length > 0) {
+        args.push(
+            "--allowedTools",
+            ...allowedTools
+        );
+    }
 
     console.log("\nStarting Claude...\n");
 
