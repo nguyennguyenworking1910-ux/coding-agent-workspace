@@ -1,11 +1,17 @@
 import { spawn } from "node:child_process";
 
-export function runClaude(prompt,tools) {
+export function runClaude(
+    prompt,
+    tools,
+    permissionMode = "default",
+) {
   return new Promise((resolve, reject) => {
     const args = [
       "--print",
       "--tools",
       tools.join(","),
+      "--permission-mode",
+      permissionMode,
       "--output-format",
       "text"
     ];

@@ -3,6 +3,7 @@ const agents = {
     name: "diagnostician",
     description: "Investigates bugs and identifies their root cause",
     mode: "read-only",
+    permissionMode: "default",
     tools: ["Read", "Glob", "Grep"],
 
     createPrompt(task) {
@@ -38,6 +39,7 @@ Return a Markdown report containing:
     name: "reviewer",
     description: "Reviews code for defects and maintainability issues",
     mode: "read-only",
+    permissionMode: "default",
     tools: ["Read", "Glob", "Grep"],
 
     createPrompt(task) {
@@ -69,6 +71,52 @@ Return a Markdown report containing:
 5. Missing tests
 6. Final assessment
 `.trim();
+    }
+  },
+
+  "bug-fixer": {
+    name: "bug-fixer",
+    description: "Investigates and implements focused bug fixes",
+    mode: "write",
+    permissionMode: "acceptEdits",
+    tools: [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write"
+    ],
+
+  createPrompt(task) {
+    return `
+You are a focused bug-fixing agent.
+
+Task:
+${task}
+
+Responsibilities:
+- Inspect the relevant source files.
+- Determine the root cause before editing.
+- Implement the smallest robust correction.
+- Preserve existing architecture and coding style.
+- Avoid unrelated refactoring.
+- Report every file changed.
+- Explain what should be tested afterward.
+
+Restrictions:
+- Do not delete files unless the task explicitly requires it.
+- Do not modify unrelated code.
+- Do not create commits.
+- Do not claim tests passed because you cannot execute commands.
+- Stop and report if the requested change is ambiguous or unsafe.
+
+Return a Markdown report containing:
+1. Root cause
+2. Files inspected
+3. Changes made
+4. Recommended verification
+5. Remaining risks
+  `.trim();
     }
   }
 };

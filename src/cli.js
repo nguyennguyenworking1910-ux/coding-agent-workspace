@@ -14,7 +14,10 @@ import {
   getAgent
 } from "./agents.js";
 
-import { getGitStatus } from "./git-utils.js";
+import { 
+    getGitStatus,
+    requireCleanRepository
+} from "./git-utils.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -85,6 +88,13 @@ async function handleRun(agentName, task) {
 
   const agent = getAgent(agentName);
 
+  if (agent.mode === "write") {
+    const gitStatus = await requireCleanRepository();
+
+    console.log("Write-agent safety check passed.");
+    console.log(`Branch: ${gitStatus.branch}`);
+  }
+
   console.log("Coding Agent Workspace");
   console.log("----------------------");
   console.log(`Agent: ${agent.name}`);
@@ -103,7 +113,8 @@ async function handleRun(agentName, task) {
   try {
     const response = await runClaude(
       prompt,
-      agent.tools
+      agent.tools,
+      agent.permissionMode
     );
 
     await completeRun(
