@@ -9,7 +9,10 @@ import {
 } from "./agents.js";
 
 import { 
-    getGitStatus
+    getGitStatus,
+    getPipelineStatus,
+    getPipelineDiff,
+    cleanupPipelineWorktree
 } from "./git-utils.js";
 
 import {
@@ -71,6 +74,21 @@ async function main() {
 
   if (command === "pipeline-output") {
     await handleWorkflowOutput(args[1]);
+    return;
+  }
+
+  if (command === "pipeline-status") {
+    await handlePipelineStatus(args[1]);
+    return;
+  }
+
+  if (command === "pipeline-diff") {
+    await handlePipelineDiff(args[1]);
+    return;
+  }
+
+  if (command === "pipeline-cleanup") {
+    await handlePipelineCleanup(args.slice(1));
     return;
   }
 
@@ -154,11 +172,67 @@ async function handleListRuns() {
         run.workflowId?.slice(-6) ?? "-",
       parent: shortenRunId(run.parentRunId),
       context: shortenRunId(run.contextRunId),
-      stages: workflow.stages?.length ?? 0,
       created: run.createdAt,
       task: shorten(run.task, 50)
     }))
   );
+}
+
+async function handlePipelineStatus(workflowId) {
+  requireWorkflowId(workflowId, "pipeline-status");
+  const { workflow } = await findWorkflow(workflowId);
+  const status = await getPipelineStatus(workflow);
+
+  console.log(`Workflow: ${workflow.id}`);
+  console.log(`Workflow status: ${workflow.status}`);
+  console.log(`Branch: ${status.branch}`);
+  console.log(`Worktree: ${status.worktreePath}`);
+  console.log(`Clean: ${status.isClean ? "yes" : "no"}`);
+  console.log(`Base commit: ${status.baseCommit}`);
+  console.log(`HEAD commit: ${status.headCommit}`);
+  console.log(`Commits ahead: ${status.commitsAhead}`);
+
+  if (status.changes.length > 0) {
+    console.log("\nUncommitted changes:");
+    status.changes.forEach((change) =>
+      console.log(`  ${change}`)
+    );
+  }
+}
+
+async function handlePipelineDiff(workflowId) {
+  requireWorkflowId(workflowId, "pipeline-diff");
+  const { workflow } = await findWorkflow(workflowId);
+  const result = await getPipelineDiff(workflow);
+
+  console.log(result.diff || "No tracked changes.");
+
+  if (result.untrackedFiles.length > 0) {
+    console.log("\nUntracked files:");
+    result.untrackedFiles.forEach((file) =>
+      console.log(`  ${file}`)
+    );
+  }
+}
+
+async function handlePipelineCleanup(commandArguments) {
+  const [workflowId, ...options] = commandArguments;
+  requireWorkflowId(workflowId, "pipeline-cleanup");
+
+  if (options.some((option) => option !== "--discard")) {
+    throw new Error(
+      "Usage: npm start -- pipeline-cleanup <workflow-id> [--discard]"
+    );
+  }
+
+  const { workflow } = await findWorkflow(workflowId);
+  const result = await cleanupPipelineWorktree(
+    workflow,
+    { discard: options.includes("--discard") }
+  );
+
+  console.log(`Removed worktree: ${result.worktreePath}`);
+  console.log(`Deleted branch: ${result.branchName}`);
 }
 
 async function handleListWorkflows() {
@@ -297,6 +371,9 @@ Commands:
   npm start -- pipelines
   npm start -- pipeline-show <workflow-id>
   npm start -- pipeline-output <workflow-id>
+  npm start -- pipeline-status <workflow-id>
+  npm start -- pipeline-diff <workflow-id>
+  npm start -- pipeline-cleanup <workflow-id> [--discard]
 `.trim());
 }
 

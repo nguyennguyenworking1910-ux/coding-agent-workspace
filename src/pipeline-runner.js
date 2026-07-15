@@ -4,7 +4,8 @@ import {
 
 import {
   requireCleanRepository,
-  createPipelineWorktree
+  createPipelineWorktree,
+  cleanupPipelineWorktree
 } from "./git-utils.js";
 
 import {
@@ -43,11 +44,30 @@ export async function executePipeline(task) {
         workflow.id
       );
 
-    await setWorkflowWorktree(
-      workflow,
-      workflowDirectory,
-      worktree
-    );
+    try {
+      await setWorkflowWorktree(
+        workflow,
+        workflowDirectory,
+        worktree
+      );
+    } catch (metadataError) {
+      try {
+        await cleanupPipelineWorktree(
+          workflow,
+          { discard: true }
+        );
+
+        worktree = null;
+      } catch (cleanupError) {
+        metadataError.message = [
+          metadataError.message,
+          `Recovery cleanup failed: ${cleanupError.message}`,
+          `Worktree may remain at: ${worktree.worktreePath}`
+        ].join("\n");
+      }
+
+      throw metadataError;
+    }
 
     console.log("Coding Agent Pipeline");
     console.log("---------------------");

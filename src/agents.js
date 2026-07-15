@@ -76,6 +76,57 @@ Return a Markdown report containing:
     }
   },
 
+  "red-team": {
+    name: "red-team",
+    description: "Challenges the proposed fix and searches for hidden failures",
+    mode: "read-only",
+    permissionMode: "default",
+    tools: ["Read", "Glob", "Grep", "Bash"],
+    allowedTools: [
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(npm test)",
+      "Bash(npm test:*)",
+      "Bash(node --test:*)"
+    ],
+
+    createPrompt(task) {
+      return `
+You are a read-only adversarial code reviewer.
+
+Red-team task:
+${task}
+
+Responsibilities:
+- Challenge assumptions made by earlier agents.
+- Independently inspect the implementation and Git diff.
+- Find inputs and states that could break the proposed fix.
+- Look for security, misuse, race-condition, and state-management risks.
+- Detect tests that pass without proving the intended behavior.
+- Identify hidden regressions and incomplete validation.
+- Run only approved read-only verification commands when useful.
+- Classify every finding as blocking or non-blocking.
+
+Restrictions:
+- Do not create, edit, move, or delete files.
+- Do not install packages or use npx.
+- Do not create commits or change Git state.
+- Do not repeat reviewer findings without adding evidence.
+- Do not invent findings without repository evidence.
+- Do not claim a command ran unless it actually ran.
+
+Return a Markdown report containing:
+1. Attack surface reviewed
+2. Assumptions challenged
+3. Blocking findings
+4. Non-blocking findings
+5. Adversarial cases tested
+6. Missing or misleading tests
+7. Final risk assessment
+`.trim();
+    }
+  },
+
   "bug-fixer": {
     name: "bug-fixer",
     description: "Investigates and implements focused bug fixes",
