@@ -3,6 +3,7 @@
 import json
 import os
 from typing import Dict, List, Optional, Any
+from pathlib import Path
 from .workspace import Workspace
 
 
@@ -11,6 +12,7 @@ class TerminalSpawner:
 
     def __init__(self, workspace: str = ".claude-workspace"):
         self.workspace = Workspace(workspace)
+        self.workspace_path = workspace
         self.spawned_terminals = {}
         self.terminal_processes = {}
 
@@ -80,10 +82,10 @@ from agents import Workspace
 # Initialize workspace
 ws = Workspace()
 
-# Get agent info
-agent_id = "{agent_id}"
-job_id = "{job_id}"
-task = "{task}"
+# Get agent info (using json.dumps for safe escaping)
+agent_id = {json.dumps(agent_id)}
+job_id = {json.dumps(job_id)}
+task = {json.dumps(task)}
 
 print(f"\\n{{'='*60}}")
 print(f"Agent Terminal: {{agent_id}}")
@@ -126,9 +128,15 @@ try:
     )
 
     # Save output
-    output_file = f".claude-workspace/jobs/{{job_id}}/OUTPUT/{{agent_id}}.txt"
-    with open(output_file, "w") as f:
-        f.write(result)
+    import os
+    output_dir = os.path.join(".", "jobs", job_id, "OUTPUT")
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, f"{{agent_id}}.txt")
+    try:
+        with open(output_file, "w") as f:
+            f.write(result)
+    except (IOError, OSError) as e:
+        print(f"[WARNING] Failed to write output: {{e}}")
 
     print(f"\\n[COMPLETED] Agent {{agent_id}} - {{datetime.now().isoformat()}}")
     print(f"Result: {{result}}")
@@ -166,14 +174,15 @@ print(f"{{'='*60}}")
         Returns:
             Path to saved script
         """
-        scripts_dir = ".claude-workspace/scripts"
-        os.makedirs(scripts_dir, exist_ok=True)
-
-        script_file = os.path.join(scripts_dir, f"agent_{agent_id}.py")
-        with open(script_file, "w") as f:
-            f.write(script)
-
-        return script_file
+        scripts_dir = os.path.join(self.workspace_path, "scripts")
+        try:
+            os.makedirs(scripts_dir, exist_ok=True)
+            script_file = os.path.join(scripts_dir, f"agent_{agent_id}.py")
+            with open(script_file, "w") as f:
+                f.write(script)
+            return script_file
+        except (IOError, OSError) as e:
+            raise IOError(f"Failed to save agent script for {agent_id}: {e}") from e
 
     def spawn_multiple_terminals(
         self,
@@ -244,7 +253,7 @@ Claude Code terminal windows:
 
         for i, agent in enumerate(agents, 1):
             agent_id = agent["id"]
-            script_file = f".claude-workspace/scripts/agent_{agent_id}.py"
+            script_file = os.path.join(self.workspace_path, "scripts", f"agent_{agent_id}.py")
 
             instructions += f"""
 Terminal {i}: Agent {agent_id}

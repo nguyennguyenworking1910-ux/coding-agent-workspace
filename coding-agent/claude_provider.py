@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from typing import Callable, List, Optional
+from threading import Lock
 
 
 class ClaudeError(RuntimeError):
@@ -72,7 +73,13 @@ def run_claude(
                 bufsize=1,
             )
         except OSError as error:  # e.g. claude not on PATH
-            raise ClaudeError(f"Could not start Claude Code: {error}") from error
+            last_error = error
+            if attempt < max_retries - 1:
+                backoff_time = 2 ** attempt
+                time.sleep(backoff_time)
+                continue
+            else:
+                raise ClaudeError(f"Could not start Claude Code: {error}") from error
 
         try:
             # Send the prompt, then close stdin so the CLI starts producing output.
@@ -86,6 +93,7 @@ def run_claude(
             # Drain stderr on a background thread so a full stderr pipe can never
             # deadlock us while we read stdout.
             stderr_chunks: List[str] = []
+            stderr_lock = Lock()
 
             def _drain_stderr() -> None:
                 assert process.stderr is not None
@@ -93,7 +101,8 @@ def run_claude(
                     chunk = process.stderr.read(4096)
                     if not chunk:
                         break
-                    stderr_chunks.append(chunk)
+                    with stderr_lock:
+                        stderr_chunks.append(chunk)
                     if stream:
                         sys.stderr.write(chunk)
                         sys.stderr.flush()
@@ -120,7 +129,8 @@ def run_claude(
             stderr_thread.join()
 
             stdout = "".join(stdout_chunks)
-            stderr = "".join(stderr_chunks)
+            with stderr_lock:
+                stderr = "".join(stderr_chunks)
 
             if process.returncode != 0:
                 raise ClaudeError(

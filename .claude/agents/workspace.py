@@ -3,9 +3,12 @@
 import json
 import os
 import uuid
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class Workspace:
@@ -50,7 +53,7 @@ class Workspace:
         Returns:
             Job ID
         """
-        job_id = f"job-{int(uuid.uuid4().int % 1000000):06d}"
+        job_id = f"job-{str(uuid.uuid4())[:12]}"
         job_path = os.path.join(self.jobs_dir, job_id)
         Path(job_path).mkdir(parents=True, exist_ok=True)
         Path(os.path.join(job_path, "OUTPUT")).mkdir(exist_ok=True)
@@ -61,11 +64,15 @@ class Workspace:
             for i, task in enumerate(subtasks, 1):
                 context += f"- [{i}] {task}\n"
 
-        with open(os.path.join(job_path, "CONTEXT.md"), "w") as f:
-            f.write(context)
+        try:
+            with open(os.path.join(job_path, "CONTEXT.md"), "w") as f:
+                f.write(context)
 
-        with open(os.path.join(job_path, "STATUS.md"), "w") as f:
-            f.write(f"# Status: CREATED\n\nStarted: {datetime.now().isoformat()}\n")
+            with open(os.path.join(job_path, "STATUS.md"), "w") as f:
+                f.write(f"# Status: CREATED\n\nStarted: {datetime.now().isoformat()}\n")
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to create job {job_id}: {e}")
+            raise
 
         return job_id
 
@@ -80,8 +87,12 @@ class Workspace:
         """
         context_file = os.path.join(self.jobs_dir, job_id, "CONTEXT.md")
         if os.path.exists(context_file):
-            with open(context_file) as f:
-                return f.read()
+            try:
+                with open(context_file) as f:
+                    return f.read()
+            except IOError as e:
+                logger.error(f"Failed to read job context {job_id}: {e}")
+                return None
         return None
 
     def list_jobs(self) -> List[str]:
@@ -107,7 +118,7 @@ class Workspace:
         Returns:
             Tuple of (agent_id, agent_record)
         """
-        agent_id = f"{int(uuid.uuid4().int % 1000000):06d}"
+        agent_id = f"agent-{str(uuid.uuid4())[:12]}"
 
         agent = {
             "id": agent_id,
@@ -124,8 +135,12 @@ class Workspace:
         }
 
         agent_file = os.path.join(self.agents_dir, f"{agent_id}.json")
-        with open(agent_file, "w") as f:
-            json.dump(agent, f, indent=2)
+        try:
+            with open(agent_file, "w") as f:
+                json.dump(agent, f, indent=2)
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to create agent {agent_id}: {e}")
+            raise
 
         self._update_registry(agent_id, job_id, agent_type)
         return agent_id, agent
@@ -141,8 +156,12 @@ class Workspace:
         """
         agent_file = os.path.join(self.agents_dir, f"{agent_id}.json")
         if os.path.exists(agent_file):
-            with open(agent_file) as f:
-                return json.load(f)
+            try:
+                with open(agent_file) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to load agent {agent_id}: {e}")
+                return None
         return None
 
     def update_agent(self, agent_id: str, **kwargs) -> bool:
@@ -161,9 +180,13 @@ class Workspace:
 
         agent.update(kwargs)
         agent_file = os.path.join(self.agents_dir, f"{agent_id}.json")
-        with open(agent_file, "w") as f:
-            json.dump(agent, f, indent=2)
-        return True
+        try:
+            with open(agent_file, "w") as f:
+                json.dump(agent, f, indent=2)
+            return True
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to update agent {agent_id}: {e}")
+            return False
 
     def list_agents(self, job_id: str = None) -> List[Dict]:
         """List agents.
@@ -175,12 +198,19 @@ class Workspace:
             List of agents
         """
         agents = []
+        if not os.path.exists(self.agents_dir):
+            return agents
+
         for file in os.listdir(self.agents_dir):
             if file.endswith(".json") and file != "registry.json":
-                with open(os.path.join(self.agents_dir, file)) as f:
-                    agent = json.load(f)
-                    if job_id is None or agent["job_id"] == job_id:
-                        agents.append(agent)
+                try:
+                    with open(os.path.join(self.agents_dir, file)) as f:
+                        agent = json.load(f)
+                        if job_id is None or agent["job_id"] == job_id:
+                            agents.append(agent)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.error(f"Failed to load agent from {file}: {e}")
+                    continue
         return agents
 
     def get_job_agents(self, job_id: str) -> List[Dict]:
@@ -218,8 +248,12 @@ class Workspace:
         }
 
         terminal_file = os.path.join(self.terminals_dir, f"{agent_id}.json")
-        with open(terminal_file, "w") as f:
-            json.dump(terminal, f, indent=2)
+        try:
+            with open(terminal_file, "w") as f:
+                json.dump(terminal, f, indent=2)
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to register terminal {agent_id}: {e}")
+            raise
 
         return terminal
 
@@ -234,8 +268,12 @@ class Workspace:
         """
         terminal_file = os.path.join(self.terminals_dir, f"{agent_id}.json")
         if os.path.exists(terminal_file):
-            with open(terminal_file) as f:
-                return json.load(f)
+            try:
+                with open(terminal_file) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to load terminal {agent_id}: {e}")
+                return None
         return None
 
     def update_terminal(self, agent_id: str, **kwargs) -> bool:
@@ -254,9 +292,13 @@ class Workspace:
 
         terminal.update(kwargs)
         terminal_file = os.path.join(self.terminals_dir, f"{agent_id}.json")
-        with open(terminal_file, "w") as f:
-            json.dump(terminal, f, indent=2)
-        return True
+        try:
+            with open(terminal_file, "w") as f:
+                json.dump(terminal, f, indent=2)
+            return True
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to update terminal {agent_id}: {e}")
+            return False
 
     def get_job_terminals(self, job_id: str) -> List[Dict]:
         """Get terminals for a job.
@@ -273,10 +315,14 @@ class Workspace:
 
         for file in os.listdir(self.terminals_dir):
             if file.endswith(".json"):
-                with open(os.path.join(self.terminals_dir, file)) as f:
-                    terminal = json.load(f)
-                    if terminal["job_id"] == job_id:
-                        terminals.append(terminal)
+                try:
+                    with open(os.path.join(self.terminals_dir, file)) as f:
+                        terminal = json.load(f)
+                        if terminal["job_id"] == job_id:
+                            terminals.append(terminal)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.error(f"Failed to load terminal from {file}: {e}")
+                    continue
 
         return terminals
 
@@ -391,14 +437,17 @@ class Workspace:
         """Update agent registry."""
         registry_file = os.path.join(self.agents_dir, "registry.json")
 
-        with open(registry_file) as f:
-            registry = json.load(f)
+        try:
+            with open(registry_file) as f:
+                registry = json.load(f)
 
-        registry["agents"][agent_id] = {
-            "job_id": job_id,
-            "type": agent_type,
-            "spawned_at": datetime.now().isoformat()
-        }
+            registry["agents"][agent_id] = {
+                "job_id": job_id,
+                "type": agent_type,
+                "spawned_at": datetime.now().isoformat()
+            }
 
-        with open(registry_file, "w") as f:
-            json.dump(registry, f, indent=2)
+            with open(registry_file, "w") as f:
+                json.dump(registry, f, indent=2)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Failed to update registry: {e}")
