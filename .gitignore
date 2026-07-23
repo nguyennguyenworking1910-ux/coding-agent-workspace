@@ -1,2 +1,15 @@
+# Agent run history (may contain prompts, source excerpts, and errors)
 .agent-workspace/
-node_modules/
+.claude-workspace/
+
+# Local harness / tooling config
+.octogent/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/

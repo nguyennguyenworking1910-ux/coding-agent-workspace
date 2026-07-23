@@ -1,0 +1,263 @@
+{
+  "agents": [
+    {
+      "id": "team_leader",
+      "name": "Team Leader",
+      "description": "Orchestrates agent team for code analysis and quality assurance",
+      "enabled": true,
+      "type": "coordinator",
+      "tools": ["thought"],
+      "canSpawn": ["diagnostician", "bug_fixer", "reviewer", "group_sale_manager"],
+      "permissions": "read-only"
+    },
+    {
+      "id": "diagnostician",
+      "name": "Diagnostician",
+      "description": "Analyzes code and finds bugs",
+      "enabled": true,
+      "type": "analyzer",
+      "tools": ["thought"],
+      "permissions": "read-only"
+    },
+    {
+      "id": "bug_fixer",
+      "name": "Bug Fixer",
+      "description": "Fixes bugs in code with write access",
+      "enabled": true,
+      "type": "implementer",
+      "tools": ["thought"],
+      "permissions": "write"
+    },
+    {
+      "id": "reviewer",
+      "name": "Reviewer",
+      "description": "Reviews and validates code changes",
+      "enabled": true,
+      "type": "validator",
+      "tools": ["thought"],
+      "permissions": "read-only"
+    },
+    {
+      "id": "group_sale_manager",
+      "name": "Group Sale Manager",
+      "description": "Manages group sales operations with BigQuery data access",
+      "enabled": true,
+      "type": "sales_manager",
+      "mode": "read-write",
+      "tools": ["thought", "schema_reader", "query_builder", "query_executor", "data_fetcher"],
+      "permissions": ["read", "write"],
+      "bigquery_access": {
+        "enabled": true,
+        "datasets": ["group_sales", "sales_metrics"],
+        "operations": ["query", "insert", "update", "aggregate"]
+      },
+      "capabilities": [
+        "query_sales",
+        "get_sales_summary",
+        "identify_top_groups",
+        "evaluate_group_performance"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "id": "thought",
+      "name": "Thought Tool",
+      "description": "Reasoning and thinking capability for agents",
+      "type": "reasoning",
+      "enabled": true,
+      "module": ".claude.tools.thought",
+      "class": "ThoughtTool",
+      "methods": [
+        {
+          "name": "execute",
+          "description": "Execute a thought/reasoning step"
+        },
+        {
+          "name": "analyze",
+          "description": "Analyze a task through reasoning"
+        },
+        {
+          "name": "plan",
+          "description": "Create a plan through reasoning"
+        },
+        {
+          "name": "evaluate",
+          "description": "Evaluate something through reasoning"
+        }
+      ]
+    },
+    {
+      "id": "bigquery",
+      "name": "BigQuery Tool (Legacy)",
+      "description": "Query and manage BigQuery datasets - use specialized tools instead",
+      "type": "data_access",
+      "enabled": true,
+      "module": ".claude.tools.bigquery",
+      "class": "BigQueryTool",
+      "deprecated": true,
+      "methods": [
+        {
+          "name": "query",
+          "description": "Execute a BigQuery query"
+        },
+        {
+          "name": "list_tables",
+          "description": "List tables in a dataset"
+        },
+        {
+          "name": "get_table_schema",
+          "description": "Get table schema"
+        },
+        {
+          "name": "insert_rows",
+          "description": "Insert rows into table"
+        },
+        {
+          "name": "get_group_sales_data",
+          "description": "Get group sales data"
+        },
+        {
+          "name": "aggregate_sales",
+          "description": "Aggregate sales data"
+        }
+      ]
+    },
+    {
+      "id": "schema_reader",
+      "name": "Schema Reader Tool",
+      "description": "Read and parse BigQuery table schemas from markdown files",
+      "type": "schema_access",
+      "enabled": true,
+      "module": ".claude.tools.schema_reader",
+      "class": "SchemaReaderTool",
+      "methods": [
+        {
+          "name": "read_schema_from_file",
+          "description": "Read table schema from a markdown file"
+        },
+        {
+          "name": "get_table_columns",
+          "description": "Get columns for a specific table"
+        },
+        {
+          "name": "list_available_schemas",
+          "description": "List all available schema files"
+        },
+        {
+          "name": "validate_schema_compatibility",
+          "description": "Validate schema contains required columns"
+        }
+      ]
+    },
+    {
+      "id": "query_builder",
+      "name": "Query Builder Tool",
+      "description": "Build SQL queries for BigQuery operations",
+      "type": "query_builder",
+      "enabled": true,
+      "module": ".claude.tools.query_builder",
+      "class": "QueryBuilderTool",
+      "methods": [
+        {
+          "name": "build_select_query",
+          "description": "Build a SELECT query"
+        },
+        {
+          "name": "build_aggregate_query",
+          "description": "Build an aggregate query (SUM, COUNT, AVG, etc)"
+        },
+        {
+          "name": "build_insert_query",
+          "description": "Build an INSERT query"
+        },
+        {
+          "name": "build_join_query",
+          "description": "Build a JOIN query"
+        }
+      ]
+    },
+    {
+      "id": "query_executor",
+      "name": "Query Executor Tool",
+      "description": "Execute SQL queries in BigQuery",
+      "type": "query_executor",
+      "enabled": true,
+      "module": ".claude.tools.query_executor",
+      "class": "QueryExecutorTool",
+      "methods": [
+        {
+          "name": "execute_query",
+          "description": "Execute a BigQuery query"
+        },
+        {
+          "name": "execute_and_fetch",
+          "description": "Execute query and fetch all results"
+        },
+        {
+          "name": "validate_query",
+          "description": "Validate a query without executing it"
+        },
+        {
+          "name": "cancel_query",
+          "description": "Cancel a running BigQuery job"
+        },
+        {
+          "name": "get_job_status",
+          "description": "Get the status of a BigQuery job"
+        },
+        {
+          "name": "batch_execute_queries",
+          "description": "Execute multiple queries in batch"
+        },
+        {
+          "name": "setup_connection",
+          "description": "Setup BigQuery connection"
+        }
+      ]
+    },
+    {
+      "id": "data_fetcher",
+      "name": "Data Fetcher Tool",
+      "description": "Fetch and process BigQuery query results",
+      "type": "data_access",
+      "enabled": true,
+      "module": ".claude.tools.data_fetcher",
+      "class": "DataFetcherTool",
+      "methods": [
+        {
+          "name": "fetch_results",
+          "description": "Fetch results from a completed BigQuery job"
+        },
+        {
+          "name": "fetch_all_results",
+          "description": "Fetch all results from a BigQuery job"
+        },
+        {
+          "name": "convert_to_dataframe",
+          "description": "Convert BigQuery results to pandas DataFrame format"
+        },
+        {
+          "name": "export_results",
+          "description": "Export query results to a file"
+        },
+        {
+          "name": "get_result_schema",
+          "description": "Get the schema of query results"
+        },
+        {
+          "name": "filter_results",
+          "description": "Filter results in memory based on conditions"
+        },
+        {
+          "name": "aggregate_results",
+          "description": "Aggregate results in memory"
+        },
+        {
+          "name": "get_statistics",
+          "description": "Calculate statistics from results"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+"""Agent implementations - Organized by departments."""
+
+# Import from departments
+from .technical import (
+    TeamLeaderAgent,
+    DiagnosticianAgent,
+    BugFixerAgent,
+    ReviewerAgent,
+    get_technical_agent,
+    list_technical_agents,
+)
+
+from .business import (
+    GroupSaleManagerAgent,
+    get_business_agent,
+    list_business_agents,
+)
+
+# Import multi-terminal support
+from .workspace import Workspace
+from .orchestrator import Orchestrator
+from .terminal_spawner import TerminalSpawner
+from .orchestrator_enhanced import OrchestratorWithTerminals
+
+__all__ = [
+    # Technical agents
+    "TeamLeaderAgent",
+    "DiagnosticianAgent",
+    "BugFixerAgent",
+    "ReviewerAgent",
+    # Business agents
+    "GroupSaleManagerAgent",
+    # Multi-terminal support
+    "Workspace",
+    "Orchestrator",
+    "TerminalSpawner",
+    "OrchestratorWithTerminals",
+    # Functions
+    "get_agent",
+    "list_agents",
+    "get_technical_agent",
+    "get_business_agent",
+    "list_technical_agents",
+    "list_business_agents",
+]
+
+# Combined agent registry (Technical + Business)
+AGENTS = {
+    # Technical Department
+    "team_leader": TeamLeaderAgent,
+    "diagnostician": DiagnosticianAgent,
+    "bug_fixer": BugFixerAgent,
+    "reviewer": ReviewerAgent,
+    # Business Department
+    "group_sale_manager": GroupSaleManagerAgent,
+}
+
+# Multi-terminal system
+MULTI_TERMINAL = {
+    "Workspace": Workspace,
+    "Orchestrator": Orchestrator,
+}
+
+def get_agent(name: str):
+    """Get agent by name from any department."""
+    return AGENTS.get(name)
+
+def list_agents():
+    """List all available agents from all departments."""
+    return list(AGENTS.keys())
