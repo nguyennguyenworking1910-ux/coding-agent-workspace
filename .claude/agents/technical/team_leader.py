@@ -5,6 +5,11 @@ from datetime import datetime
 from tools import get_tool
 from config import get_config
 
+# Import agent classes for execution
+from .diagnostician import DiagnosticianAgent
+from .bug_fixer import BugFixerAgent
+from .reviewer import ReviewerAgent
+
 
 class TeamLeaderAgent:
     """Orchestrator agent that coordinates other specialist agents."""
@@ -81,6 +86,110 @@ class TeamLeaderAgent:
         log_format = f"[{timestamp}] [TRACE:{self.trace_id}] [{event_type}] {message}"
         print(log_format)
 
+    def _execute_workflow(self, task: str, task_type: str, workflow: dict, agents_needed: list) -> dict:
+        """
+        Execute the workflow by spawning and running agents in sequence.
+
+        Args:
+            task: Original task description
+            task_type: Classified task type
+            workflow: Workflow structure
+            agents_needed: List of agents to execute
+
+        Returns:
+            Final execution results
+        """
+        execution_results = []
+        agent_outputs = {}
+        current_context = {"original_task": task, "task_type": task_type}
+
+        # Execute each agent in the workflow
+        for step in workflow.get("workflow_steps", []):
+            agent_name = step["agent"]
+            agent_task = step["task"]
+
+            # Create task context with previous results
+            enriched_task = f"{agent_task}\n\nContext: {current_context}"
+
+            self._log_event("SPAWN_AGENT", f"Spawning {agent_name}", {"task": agent_task})
+
+            # Execute the agent
+            agent_result = self._spawn_agent(agent_name, enriched_task)
+
+            self._log_event("AGENT_RESULT", f"{agent_name} completed",
+                          {"status": agent_result.get("status"), "agent": agent_name})
+
+            # Store results
+            execution_results.append(agent_result)
+            agent_outputs[agent_name] = agent_result
+
+            # Update context with this agent's findings
+            if "thinking" in agent_result:
+                current_context["latest_findings"] = agent_result.get("thinking", {})
+            if "findings" in agent_result:
+                current_context["issues"] = agent_result.get("findings", [])
+            if "changes" in agent_result:
+                current_context["changes"] = agent_result.get("changes", [])
+
+        # Build final result
+        final_result = {
+            "success": True,
+            "agent": "team_leader",
+            "task": task,
+            "task_type": task_type,
+            "response": f"Team Leader successfully executed {task_type} workflow",
+            "workflow_type": self._get_workflow_name(task_type),
+            "agent_execution_results": execution_results,
+            "agent_outputs": agent_outputs,
+            "status": "execution_complete",
+            "tools_used": self.tools
+        }
+
+        return final_result
+
+    def _spawn_agent(self, agent_name: str, task: str) -> dict:
+        """
+        Spawn and execute a specific agent.
+
+        Args:
+            agent_name: Name of agent to spawn (diagnostician, bug_fixer, reviewer)
+            task: Task description for the agent
+
+        Returns:
+            Agent execution results
+        """
+        try:
+            agent = None
+
+            # Instantiate the appropriate agent
+            if agent_name == "diagnostician":
+                agent = DiagnosticianAgent()
+            elif agent_name == "bug_fixer":
+                agent = BugFixerAgent()
+            elif agent_name == "reviewer":
+                agent = ReviewerAgent()
+            else:
+                return {
+                    "success": False,
+                    "agent": agent_name,
+                    "error": f"Unknown agent type: {agent_name}",
+                    "status": "failed"
+                }
+
+            # Execute the agent with the task
+            result = agent.execute(task)
+            self._log_event("AGENT_EXECUTED", f"{agent_name} executed successfully")
+            return result
+
+        except Exception as e:
+            self._log_event("AGENT_ERROR", f"Error executing {agent_name}: {str(e)}")
+            return {
+                "success": False,
+                "agent": agent_name,
+                "error": str(e),
+                "status": "failed"
+            }
+
     def execute(self, task: str) -> dict:
         """
         Intelligently analyze task and spawn appropriate agents.
@@ -89,7 +198,7 @@ class TeamLeaderAgent:
             task: Description of task to complete
 
         Returns:
-            Workflow with appropriate spawned agents
+            Execution results from agent team
         """
         self._log_event("EXECUTE", f"Task received: {task}")
 
@@ -109,13 +218,18 @@ class TeamLeaderAgent:
         workflow = self._build_workflow(task, task_type, agents_needed, plan)
         self._log_event("WORKFLOW_BUILT", "Workflow construction complete")
 
-        # Add experimental metadata to workflow
-        if self.experimental_mode:
-            workflow["trace_id"] = self.trace_id
-            workflow["execution_log"] = self.execution_log
-            workflow["experimental_mode"] = True
+        # Step 5: Execute the workflow with agents
+        self._log_event("EXECUTION_START", "Starting agent team execution")
+        execution_results = self._execute_workflow(task, task_type, workflow, agents_needed)
+        self._log_event("EXECUTION_COMPLETE", "Agent team execution complete")
 
-        return workflow
+        # Add experimental metadata to results
+        if self.experimental_mode:
+            execution_results["trace_id"] = self.trace_id
+            execution_results["execution_log"] = self.execution_log
+            execution_results["experimental_mode"] = True
+
+        return execution_results
 
     def _classify_task(self, task: str) -> str:
         """
