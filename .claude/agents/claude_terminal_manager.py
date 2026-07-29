@@ -18,7 +18,33 @@ class ClaudeTerminalManager:
         self.system = platform.system()
         self.temp_scripts = []
         self.session_name = session_name
+        self.auto_attach = self._should_auto_attach()
         self._ensure_tmux_session()
+        if self.auto_attach:
+            self._auto_attach_to_session()
+
+    def _should_auto_attach(self) -> bool:
+        """Check if auto-attach is enabled in config."""
+        try:
+            config_path = Path(__file__).parent.parent / "settings.json"
+            if config_path.exists():
+                import json
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    prefs = config.get("preferences", {})
+                    return prefs.get("tmuxAutoAttach", False)
+        except Exception:
+            pass
+        return False
+
+    def _auto_attach_to_session(self):
+        """Automatically attach to tmux session."""
+        try:
+            print(f"\n[TMUX] Auto-attaching to session: {self.session_name}")
+            print("[TMUX] Use Ctrl+B then 'n' for next window, 'p' for previous, 'd' to detach\n")
+            subprocess.run(["tmux", "attach-session", "-t", self.session_name])
+        except Exception as e:
+            print(f"[WARNING] Could not auto-attach: {e}")
 
     def _ensure_tmux_session(self):
         """Ensure tmux session exists, create if needed."""
