@@ -1,13 +1,15 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "coding-agent-workspace"
-version = "0.1.0"
-description = "CLI workspace for coordinating coding agents (Python port)"
+version = "0.2.0"
+description = "Claude Code agent orchestration system"
 requires-python = ">=3.9"
-dependencies = []
+authors = [
+    {name = "Nguyen Le Dang Nguyen", email = "nguyen.nguyen30@momo.vn"}
+]
 
 [project.scripts]
 coding-agent-workspace = "workspace_cli.cli:main"

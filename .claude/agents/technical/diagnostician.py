@@ -26,8 +26,9 @@ class DiagnosticianAgent:
         findings = []
         project_root = Path(__file__).parent.parent.parent.parent
 
-        # Find Python files
-        py_files = list(project_root.glob("**/*.py"))
+        # Find Python files (exclude generated/temporary files)
+        all_files = list(project_root.glob("**/*.py"))
+        py_files = [f for f in all_files if "agent_runners" not in str(f) and "__pycache__" not in str(f)]
         total_files = min(len(py_files), 10)
 
         stream.stream_event("SCAN_START", f"Scanning {total_files} Python files")
