@@ -102,13 +102,13 @@ class AgentConfig:
 
         if self.experimental_agent_teams_enabled:
             summary += "[ENABLED] Experimental Agent Teams Mode\n"
-            summary += "  └─ Agent Tracing: ENABLED\n"
-            summary += "  └─ Structured Logging: ENABLED\n"
-            summary += "  └─ Agent Spawning: ENABLED\n"
+            summary += "  - Agent Tracing: ENABLED\n"
+            summary += "  - Structured Logging: ENABLED\n"
+            summary += "  - Agent Spawning: ENABLED\n"
         else:
             summary += "[DISABLED] Standard Mode\n"
-            summary += "  └─ Agents simulated\n"
-            summary += "  └─ Basic logging only\n"
+            summary += "  - Agents simulated\n"
+            summary += "  - Basic logging only\n"
 
         summary += "\n" + "=" * 50
 

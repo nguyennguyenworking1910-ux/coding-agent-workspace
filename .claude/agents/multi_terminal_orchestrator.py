@@ -24,17 +24,19 @@ class MultiTerminalOrchestrator:
         ],
     }
 
-    def __init__(self, use_multi_terminal: bool = True):
+    def __init__(self, use_multi_terminal: bool = True, use_vscode_terminal: bool = False):
         """Initialize orchestrator.
 
         Args:
             use_multi_terminal: Whether to use separate terminals
+            use_vscode_terminal: Whether to use VS Code integrated terminal
         """
         self.name = "multi_terminal_orchestrator"
         self.use_multi_terminal = use_multi_terminal
+        self.use_vscode_terminal = use_vscode_terminal
         self.trace_id = str(uuid.uuid4())[:8]
         self.config = get_config()
-        self.terminal_manager = TerminalManager()
+        self.terminal_manager = TerminalManager(use_vscode_terminal=use_vscode_terminal)
         self.execution_log: List[Dict] = []
 
     def _log_event(self, event_type: str, message: str, data: Dict = None):
@@ -122,8 +124,8 @@ class MultiTerminalOrchestrator:
         print(f"Trace ID: {self.trace_id}")
         print(f"Spawned Agents: {', '.join(spawned_agents)}")
         print("="*70)
-        print("\n✓ Check the open terminals for real-time agent output")
-        print("✓ Each agent is running in its own terminal window\n")
+        print("\n[OK] Check the open terminals for real-time agent output")
+        print("[OK] Each agent is running in its own terminal window\n")
 
         return {
             "success": True,
@@ -175,7 +177,10 @@ class MultiTerminalOrchestrator:
 
         self._log_event("COMPLETE", "Execution complete", result)
 
-        # Cleanup
-        self.terminal_manager.cleanup()
+        # For spawned terminals, don't cleanup immediately - files are needed for execution
+        # Scripts will be overwritten on next run anyway
+        # Only cleanup for inline execution mode
+        if not self.use_multi_terminal:
+            self.terminal_manager.cleanup()
 
         return result
