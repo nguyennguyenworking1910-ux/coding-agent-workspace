@@ -21,10 +21,13 @@ try:
     if str(agent_path) not in sys.path:
         sys.path.insert(0, str(agent_path))
     from agents.technical import TeamLeaderAgent
+    from agents.multi_terminal_orchestrator import MultiTerminalOrchestrator
     from config import get_config, is_experimental_mode
     TEAM_LEADER_AVAILABLE = True
+    MULTI_TERMINAL_AVAILABLE = True
 except ImportError:
     TEAM_LEADER_AVAILABLE = False
+    MULTI_TERMINAL_AVAILABLE = False
     def get_config():
         class DummyConfig:
             experimental_agent_teams_enabled = False
@@ -130,6 +133,72 @@ Spawned Agents:
                 "task": task,
                 "result": output,
                 "status": "completed"
+            }
+
+        except Exception as error:
+            return {
+                "success": False,
+                "run_id": run_id,
+                "task": task,
+                "error": str(error),
+                "status": "failed"
+            }
+
+    def execute_multi_terminal(self, task: str) -> Dict[str, Any]:
+        """Execute task with agents in separate terminals.
+
+        Args:
+            task: Task description
+
+        Returns:
+            Execution result
+        """
+        run_id = self.create_run_id()
+
+        if not MULTI_TERMINAL_AVAILABLE:
+            return {
+                "success": False,
+                "run_id": run_id,
+                "task": task,
+                "error": "Multi-terminal orchestrator not available",
+                "status": "failed"
+            }
+
+        try:
+            orchestrator = MultiTerminalOrchestrator(use_multi_terminal=True)
+            result = orchestrator.execute(task)
+
+            output = f"""
+MULTI-TERMINAL EXECUTION REPORT
+{'='*60}
+
+Task: {task}
+Task Type: {result.get('task_type', 'unknown').upper()}
+Run ID: {result['run_id']}
+Trace ID: {result['trace_id']}
+Mode: Multi-Terminal (Separate Windows)
+
+Spawned Agents:
+"""
+            for agent in result.get('agents_spawned', []):
+                output += f"  ✓ {agent.upper()} (in separate terminal)\n"
+
+            output += f"\nExecution Log:\n"
+            for log_entry in result.get('execution_log', []):
+                output += f"  [{log_entry['event']}] {log_entry['message']}\n"
+
+            output += f"\n✓ Agents are running in separate terminal windows\n"
+            output += f"✓ Each agent shows its own execution details\n"
+            output += f"✓ Check the open terminals to track progress\n"
+
+            self.save_mission(run_id, task, output)
+
+            return {
+                "success": True,
+                "run_id": run_id,
+                "task": task,
+                "result": output,
+                "status": "agents_spawned_in_terminals"
             }
 
         except Exception as error:
@@ -248,6 +317,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--multi-terminal",
+        action="store_true",
+        help="Run agents in separate terminal windows for real-time tracking"
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 0.1.0"
@@ -288,8 +363,13 @@ def execute_command(args: argparse.Namespace) -> int:
         print(f"📋 Task: {args.task}\n")
         print("=" * 60)
 
+        # Use multi-terminal mode if requested
+        if args.multi_terminal:
+            print("\n🖥️  MULTI-TERMINAL MODE")
+            print("    Spawning agents in separate terminal windows...\n")
+            result = orchestrator.execute_multi_terminal(task=args.task)
         # Use direct team leader execution for "solve" command
-        if args.command == "solve":
+        elif args.command == "solve":
             result = orchestrator.execute_solve(task=args.task)
 
             # Show tracing info if experimental mode

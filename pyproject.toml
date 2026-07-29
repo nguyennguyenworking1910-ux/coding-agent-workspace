@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
-coding-agent-workspace = "coding_agent_workspace.cli:main"
+coding-agent-workspace = "workspace_cli.cli:main"
 
 [tool.setuptools]
-packages = ["coding_agent_workspace"]
+packages = ["workspace_cli"]
