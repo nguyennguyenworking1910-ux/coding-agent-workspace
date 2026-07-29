@@ -1,544 +1,418 @@
 # Coding Agent Workspace
 
-An intelligent multi-agent orchestration system that automates code analysis, bug fixing, and quality review through coordinated agent workflows.
+A modern agent orchestration system for code analysis, debugging, and quality review using Claude AI and tmux-based execution.
+
+**Version:** 0.3.0  
+**Status:** Production-Ready  
+**Python:** 3.9+
 
 ## Overview
 
-**Coding Agent Workspace** uses specialized Claude Code agents that work together to analyze your code, find issues, fix bugs, and validate quality — all coordinated by a Team Leader agent.
+Coding Agent Workspace is an intelligent multi-agent system that analyzes and improves your codebase. A Team Leader agent orchestrates specialized agents (Diagnostician, BugFixer, Reviewer) to work in parallel, each bringing unique expertise to code analysis and improvement tasks.
 
-Instead of one AI trying to do everything, you get:
-- 🔍 **Diagnostician** — Finds bugs and issues
-- 🔧 **Bug Fixer** — Implements solutions  
-- ✅ **Reviewer** — Validates quality
-- 🎯 **Team Leader** — Coordinates the team
+### Key Features
 
-### Key Innovation: Multi-Terminal Mode
+- 🤖 **Multi-Agent Orchestration** - Team Leader coordinates specialist agents
+- 🔄 **Parallel Execution** - All agents work simultaneously in tmux panes
+- 🎯 **Task Classification** - Automatically routes tasks to appropriate agents
+- 📊 **Real-time Output** - See all agent activity in organized tmux session
+- 🔐 **Security Analysis** - Identifies credentials, vulnerabilities, and risks
+- 🐛 **Bug Detection** - Finds hardcoded values, bare exceptions, missing docstrings
+- ✅ **Code Review** - Validates fixes and scores code quality
+- 📦 **Modern Packaging** - PEP 517/518 compliant Python project
 
-Watch each agent work **in its own terminal window** for complete transparency into how agents reason and execute tasks.
+## Installation
 
+### Prerequisites
+
+- **Python 3.9+** with pip
+- **tmux** (required for agent execution)
+  - Linux: `sudo apt-get install tmux`
+  - macOS: `brew install tmux`
+  - Windows: Use WSL2 + `apt-get install tmux`
+
+### Setup
+
+```bash
+# Clone or navigate to project directory
+cd coding-agent-workspace
+
+# Install in development mode
+pip install -e .
+
+# Verify installation
+coding-agent-workspace --help
 ```
-Main Terminal          Diagnostician         Bug Fixer             Reviewer
-─────────────          ─────────────         ─────────         ─────────────
-[ORCHESTRATION]        AGENT:                AGENT:             AGENT:
-[SPAWN] agents         DIAGNOSTICIAN         BUG_FIXER          REVIEWER
-
-✓ Agents spawned       Analyzing...          Planning fixes...  Reviewing...
-✓ All terminals        
-  active               Found 3 issues         Will modify:       ✓ APPROVED
-                       - SQL injection        - auth.py
-                       - Missing check        - database.py
-```
-
----
 
 ## Quick Start
 
-### Installation
+### Run Your First Analysis
 
 ```bash
-# Clone or navigate to project
-cd C:\Users\nguyen.nguyen30\Desktop\coding-agent-workspace
+# Analyze your codebase for issues
+coding-agent-workspace solve "analyze the codebase for security issues"
 
-# Verify installation
-python -m workspace_cli --version
-# Output: __main__.py 0.1.0
+# See the execution in tmux
+tmux list-sessions
+tmux attach-session -t agents-{run_id}
 ```
 
-### First Command
+### Task Examples
 
 ```bash
-# Standard mode (single terminal)
-python -m workspace_cli solve "Find bugs in my authentication code"
+# Find bugs
+coding-agent-workspace solve "find bugs in the authentication module"
 
-# Multi-terminal mode (see agents work in real-time)
-python -m workspace_cli --multi-terminal solve "Find bugs in my authentication code"
+# Review code quality
+coding-agent-workspace solve "review code quality and suggest improvements"
+
+# Performance analysis
+coding-agent-workspace solve "optimize performance bottlenecks"
+
+# Security audit
+coding-agent-workspace solve "identify all security vulnerabilities"
 ```
-
-### What Happens
-
-1. **Task Classification** — System determines which agents are needed
-2. **Workflow Planning** — Team Leader creates execution plan
-3. **Agent Execution** — Agents work (each in own terminal if `--multi-terminal`)
-4. **Results** — Findings saved and displayed
-5. **User Review** — You review changes and decide what to commit
-
----
-
-## Available Commands
-
-```bash
-# Core commands
-python -m workspace_cli solve "your task"           # Let agents solve it
-python -m workspace_cli analyze "your code"          # Analyze for issues
-python -m workspace_cli fix "what's broken"          # Fix the issue
-python -m workspace_cli review "your code"           # Review quality
-python -m workspace_cli plan "your goal"             # Create plan
-
-# With options
-python -m workspace_cli --multi-terminal solve "task"     # See agents work
-python -m workspace_cli --workspace ./runs solve "task"   # Custom directory
-python -m workspace_cli --no-team-leader solve "task"     # Skip planning
-python -m workspace_cli --quiet solve "task"              # No streaming
-```
-
----
 
 ## System Architecture
 
+### How It Works
+
 ```
-┌──────────────────────────────────┐
-│   User Command (CLI)             │
-│   python -m workspace_cli        │
-└────────────┬─────────────────────┘
-             │
-             ↓
-┌──────────────────────────────────┐
-│   workspace_cli/ (CLI Layer)     │  ← Handles commands, routes execution
-│   • cli.py                       │
-│   • claude_provider.py           │
-└────────────┬─────────────────────┘
-             │
-      ┌──────┴──────┐
-      │             │
-      ↓             ↓
-  Single       Multi-Terminal
-  Terminal      (NEW!)
-    Mode        
-      │             │
-      ↓             ↓
-   Team        Multi-Terminal
-   Leader      Orchestrator
-      │             │
-      └──────┬──────┘
-             ↓
-┌──────────────────────────────────┐
-│   .claude/agents/ (Agent Layer)  │  ← Specialized agents
-│   • Diagnostician                │
-│   • BugFixer                      │
-│   • Reviewer                      │
-│   • TeamLeader                    │
-└────────────┬─────────────────────┘
-             │
-             ↓
-┌──────────────────────────────────┐
-│   .claude/tools/ (Tools Layer)   │  ← Agent capabilities
-│   • Thought (reasoning)          │
-│   • BigQuery (data)              │
-│   • Query Builder                │
-└────────────┬─────────────────────┘
-             │
-             ↓
-┌──────────────────────────────────┐
-│   Output Layer                   │  ← Results & logs
-│   • Terminal display             │
-│   • JSON mission files           │
-│   • Execution logs               │
-└──────────────────────────────────┘
+User Task
+    ↓
+Team Leader Agent
+    ├─→ Task Classification (security, bug_analysis, quality, etc.)
+    ├─→ Agent Selection (which agents to use)
+    ├─→ Workflow Building (execution plan)
+    ↓
+Parallel Agent Execution (in tmux windows)
+    ├─→ Diagnostician (analyzes code, finds issues)
+    ├─→ BugFixer (plans fixes, implements changes)
+    └─→ Reviewer (validates findings, scores results)
+    ↓
+Results Aggregation & Storage
 ```
 
----
+### Agents
 
-## Key Features
+| Agent | Role | Output |
+|-------|------|--------|
+| **Diagnostician** | Code analysis & issue detection | List of findings with severity |
+| **BugFixer** | Fix planning & implementation | Fix strategies and changes |
+| **Reviewer** | Validation & quality scoring | Score (0-100%) and approval status |
 
-### 1. Intelligent Task Routing
+## Tmux Execution
 
-Automatically routes tasks to the right agents based on keywords:
+All agents execute in a single tmux session with organized windows:
 
 ```bash
-# "bug" → Diagnostician + BugFixer + Reviewer
-python -m workspace_cli solve "Fix the authentication bug"
+# Session structure
+Session: agents-{run_id}
+├── Window 0: agent-1 (Diagnostician)
+├── Window 1: agent-2 (BugFixer)
+└── Window 2: agent-3 (Reviewer)
 
-# "review" → Diagnostician + Reviewer  
-python -m workspace_cli solve "Review code quality"
+# Monitor execution
+tmux attach-session -t agents-{run_id}
 
-# "security" → Full bug analysis + fix workflow
-python -m workspace_cli solve "Find SQL injection vulnerabilities"
+# Navigate windows
+Ctrl+B n    # Next window
+Ctrl+B p    # Previous window
+Ctrl+B 0-9  # Jump to window
+Ctrl+B d    # Detach
 ```
 
-### 2. Multi-Terminal Visibility (NEW!)
+## Commands
+
+### Main Command
 
 ```bash
-python -m workspace_cli --multi-terminal solve "Fix the issue"
-
-# Results:
-# ✓ Main terminal shows orchestration
-# ✓ Each agent gets its own terminal window
-# ✓ See real-time execution and reasoning
-# ✓ Debug agent behavior effectively
+coding-agent-workspace <command> "task description"
 ```
 
-### 3. Persistent Execution History
+### Available Commands
 
-```
-.agent-workspace/runs/
-├── run-2026-07-29T14-30-45.json
-├── run-2026-07-29T14-45-12.json
-└── run-2026-07-29T15-20-33.json
-```
+- `solve` - Analyze and solve problems
+- `analyze` - Analyze code/files
+- `review` - Review code quality
+- `plan` - Plan improvements
+- `fix` - Implement fixes
+- `execute` - Execute custom tasks
 
-Each run contains:
-- Task description
-- Execution trace
-- Agent findings
-- Changes made
-- Timestamps
-
-### 4. DAG-Based Workflow
-
-Team Leader automatically creates optimal execution plans:
-
-```
-Bug Analysis Flow:
-  Diagnostician (finds issues)
-         ↓
-  BugFixer (implements fixes)
-         ↓
-  Reviewer (validates quality)
-```
-
----
-
-## Common Workflows
-
-### Workflow: Find and Fix a Bug
+### Examples
 
 ```bash
-# 1. Identify issue
-# You notice login is broken
+# Solve a problem
+coding-agent-workspace solve "fix authentication issues"
 
-# 2. Spawn agents to analyze and fix
-python -m workspace_cli --multi-terminal solve "Fix authentication failure in login"
+# Analyze code
+coding-agent-workspace analyze "check for performance issues"
 
-# 3. Watch progress in terminals
-#    - Diagnostician: Shows what's wrong
-#    - BugFixer: Shows how it's being fixed
-#    - Reviewer: Validates the fix
-
-# 4. Review results
-cat .agent-workspace/runs/run-*.json
-
-# 5. Test and commit
+# Review quality
+coding-agent-workspace review "validate code standards"
 ```
 
-### Workflow: Code Review
-
-```bash
-python -m workspace_cli --multi-terminal review "Review payment module refactor"
-
-# Output:
-# - Diagnostician finds quality issues
-# - Reviewer validates improvements
-# - Recommendations provided
-```
-
-### Workflow: Security Audit
-
-```bash
-python -m workspace_cli analyze "Find SQL injection vulnerabilities in queries"
-
-# Output:
-# - Scans all queries
-# - Identifies injection points
-# - Provides fix recommendations
-```
-
----
-
-## Directory Structure
+## Project Structure
 
 ```
 coding-agent-workspace/
-│
-├── workspace_cli/                 # CLI Application Package
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── cli.py                    # Command routing
-│   └── claude_provider.py        # Claude subprocess bridge
-│
-├── .claude/                      # Agent System
+├── .claude/
 │   ├── agents/
-│   │   ├── technical/            # Code analysis agents
-│   │   │   ├── team_leader.py
-│   │   │   ├── diagnostician.py
-│   │   │   ├── bug_fixer.py
-│   │   │   └── reviewer.py
-│   │   ├── multi_terminal_orchestrator.py  # Multi-terminal coordination
-│   │   └── terminal_manager.py             # Terminal spawning
-│   │
-│   ├── tools/                    # Agent capabilities
-│   │   ├── thought.py           # Reasoning tool
-│   │   └── ... (other tools)
-│   │
-│   └── docs/
-│       ├── AGENTS.md
-│       └── MULTI_TERMINAL_GUIDE.md
-│
-├── .agent-workspace/            # Execution Results
+│   │   ├── technical/
+│   │   │   ├── team_leader.py          # Orchestrator agent
+│   │   │   ├── diagnostician.py        # Analysis agent
+│   │   │   ├── bug_fixer.py            # Implementation agent
+│   │   │   └── reviewer.py             # Validation agent
+│   │   ├── business/
+│   │   │   └── group_sale_manager.py   # Data operations agent
+│   │   ├── claude_terminal_manager.py  # Tmux management
+│   │   ├── config.py                   # Configuration
+│   │   └── __init__.py
+│   ├── tools/
+│   │   ├── thought.py                  # Reasoning tool
+│   │   └── ...
+│   └── settings.json
+├── workspace_cli/
+│   ├── cli.py                          # CLI entry point
+│   └── __init__.py
+├── .agent-workspace/                   # Execution results
 │   └── runs/
-│       └── run-*.json
-│
-├── SYSTEM_OVERVIEW.md           # Complete system documentation
-├── QUICK_REFERENCE.md           # Command cheatsheet
-└── README.md                    # This file
+│       └── run-{run_id}.json
+├── pyproject.toml                      # Python packaging
+├── README.md                           # This file
+├── ARCHITECTURE.md                     # System design
+├── QUICKSTART.md                       # Usage guide
+└── AGENTS.md                           # Agent details
 ```
-
----
-
-## Documentation
-
-### For Quick Help
-👉 **[QUICK_REFERENCE.md](./QUICK_REFERENCE.md)** — Commands, workflows, troubleshooting
-
-### For Complete Understanding  
-👉 **[SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)** — Architecture, components, flows
-
-### For Multi-Terminal Feature
-👉 **[.claude/docs/MULTI_TERMINAL_GUIDE.md](./.claude/docs/MULTI_TERMINAL_GUIDE.md)** — Setup, usage, examples
-
-### For Agent Details
-👉 **[.claude/docs/AGENTS.md](./.claude/docs/AGENTS.md)** — Agent specifications, tools
-
----
-
-## Examples
-
-### Example 1: Bug Analysis & Fix
-
-```bash
-$ python -m workspace_cli --multi-terminal solve "Fix SQL injection in user search"
-
-🚀 Team Leader Agent Executing: solve
-📋 Task: Fix SQL injection in user search
-
-🖥️  MULTI-TERMINAL MODE
-    Spawning agents in separate terminal windows...
-
-============================================================
-[CLASSIFY] Task classified as: bug_analysis
-[PLAN] Spawning agents: diagnostician, bug_fixer, reviewer
-[SPAWN] Spawning diagnostician in terminal
-✓ Terminal spawned for diagnostician
-[SPAWN] Spawning bug_fixer in terminal
-✓ Terminal spawned for bug_fixer
-[SPAWN] Spawning reviewer in terminal
-✓ Terminal spawned for reviewer
-
-✓ Check the open terminals for real-time agent output
-✓ Each agent is running in its own terminal window
-```
-
-### Example 2: Code Quality Review
-
-```bash
-$ python -m workspace_cli review "Review the authentication module for best practices"
-
-Diagnostician finds:
-- Missing input validation
-- Improper error handling
-- Outdated cryptographic library
-
-Reviewer validates:
-- Code quality issues identified ✓
-- Security concerns noted ✓
-- Recommendations provided ✓
-```
-
-### Example 3: Performance Analysis
-
-```bash
-$ python -m workspace_cli analyze "Optimize slow database queries"
-
-Results:
-- N+1 query problem detected
-- Missing database indexes
-- Query optimization suggestions provided
-```
-
----
-
-## System Requirements
-
-- **Python:** 3.9 or higher
-- **Platform:** Windows, macOS, or Linux
-- **Dependencies:** None (uses Python standard library)
-
----
 
 ## Configuration
 
-### Custom Workspace
+### Environment Variables
 
 ```bash
-python -m workspace_cli --workspace ./my-workspace solve "task"
+# Enable experimental agent teams
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+
+# Enable agent communication logging
+export CLAUDE_AGENT_COMMUNICATION_ENABLED=1
+
+# Enable interactive mode
+export INTERACTIVE_MODE_ENABLED=1
 ```
 
-### Enable Experimental Features
+### Settings File
 
-Edit `.claude/settings.json`:
+Edit `.claude/settings.json` to customize:
 
 ```json
 {
-  "experimental_agent_teams_enabled": true,
-  "multi_terminal_enabled": true
+  "theme": "dark",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_AGENT_COMMUNICATION_ENABLED": "1",
+    "INTERACTIVE_MODE_ENABLED": "1"
+  },
+  "preferences": {
+    "terminalManager": "tmux",
+    "tmuxSessionPrefix": "agents-",
+    "tmuxAutoAttach": false
+  }
 }
 ```
 
----
+## Usage Examples
+
+### Example 1: Security Analysis
+
+```bash
+$ coding-agent-workspace solve "find all security vulnerabilities"
+
+# Output:
+# [TEAM LEADER THINKING] Task Classification
+#   Classified as 'security' task
+# [TMUX_PANE] Creating pane for DIAGNOSTICIAN
+# [TMUX_PANE] Creating pane for REVIEWER
+```
+
+### Example 2: Code Review
+
+```bash
+$ coding-agent-workspace solve "review code quality"
+
+# Agents analyze in parallel:
+# - Diagnostician scans for issues
+# - BugFixer plans improvements
+# - Reviewer validates quality
+
+# Results saved to: .agent-workspace/runs/{run_id}.json
+```
+
+### Example 3: Monitor Execution
+
+```bash
+# In separate terminal, monitor tmux session
+$ tmux attach-session -t agents-a1b2c3d4
+
+# See all agents working in their windows
+# - Use Ctrl+B n to navigate between agents
+# - Watch real-time output and progress
+```
+
+## Output & Results
+
+### Console Output
+
+Agent execution is visible through:
+- Console output with formatted messages
+- Tmux windows showing each agent's activity
+- Real-time progress and findings
+
+### Saved Results
+
+Results are saved to `.agent-workspace/runs/{run_id}.json`:
+
+```json
+{
+  "success": true,
+  "task_type": "security",
+  "agents_executed": ["diagnostician", "reviewer"],
+  "findings": [
+    {
+      "file": "auth.py",
+      "issue": "Hardcoded credentials detected",
+      "severity": "CRITICAL"
+    }
+  ],
+  "approval": "APPROVED",
+  "score": 85
+}
+```
 
 ## Troubleshooting
 
-### Command Not Found
+### tmux not found
+
 ```bash
-# Ensure you're in the project directory
-cd C:\Users\nguyen.nguyen30\Desktop\coding-agent-workspace
-
-# Run with full module path
-python -m workspace_cli --help
+# Install tmux
+Linux:   sudo apt-get install tmux
+macOS:   brew install tmux
+Windows: Install WSL2, then: apt-get install tmux
 ```
 
-### Terminals Not Opening (Multi-Terminal Mode)
-- **Windows:** Ensure `cmd` is accessible from PATH
-- **macOS:** Ensure Terminal.app is in Applications
-- **Linux:** Install gnome-terminal: `sudo apt-get install gnome-terminal`
+### Session already exists
 
-### Agent Errors
 ```bash
-# Verify agent files exist
-ls .claude/agents/technical/
+# Kill old session
+tmux kill-session -t agents-old_id
 
-# Check Python path
-python -c "import sys; print(sys.path)"
+# Or just use a different run_id
 ```
 
-### Results Not Saving
+### Can't see agent output
+
 ```bash
-# Verify workspace directory
-ls -la .agent-workspace/runs/
+# Attach to the correct session
+tmux attach-session -t agents-{run_id}
 
-# Ensure write permissions
-chmod -R 755 .agent-workspace/
+# Navigate to agent window
+Ctrl+B 0  # First agent
+Ctrl+B 1  # Second agent
 ```
 
----
+### Agent execution fails
 
-## How It Works
+Check the tmux pane output for error messages:
 
-### Single Terminal Mode (Default)
-
-```
-User Command
-    ↓
-TeamLeader plans workflow
-    ↓
-Diagnostician analyzes
-    ↓
-BugFixer implements
-    ↓
-Reviewer validates
-    ↓
-Results displayed
+```bash
+# Attach and navigate to failed agent's window
+tmux attach-session -t agents-{run_id}
+Ctrl+B 1  # Check specific window
 ```
 
-### Multi-Terminal Mode (NEW!)
+## Development
 
-```
-User Command
-    ↓
-TerminalManager spawns 3 windows
-    ↓
-Terminal 1: Diagnostician works
-Terminal 2: BugFixer works
-Terminal 3: Reviewer works
-    ↓
-All can be monitored simultaneously
-    ↓
-Results aggregated and saved
+### Extending the System
+
+1. **Add a New Agent** - Create in `.claude/agents/technical/`
+2. **Add Task Patterns** - Update `TeamLeaderAgent.TASK_PATTERNS`
+3. **Add Tools** - Create in `.claude/tools/`
+4. **Update Configuration** - Modify `.claude/settings.json`
+
+### Running Tests
+
+```bash
+# Run analysis on test task
+coding-agent-workspace solve "test analysis"
+
+# Check results
+cat .agent-workspace/runs/$(ls -t .agent-workspace/runs | head -1)
 ```
 
----
+## Advanced Usage
+
+### Custom Task Classification
+
+Edit `.claude/agents/technical/team_leader.py` to add custom patterns:
+
+```python
+TASK_PATTERNS = {
+    "custom_task": [
+        "keyword1", "keyword2", "keyword3"
+    ]
+}
+```
+
+### Tmux Advanced
+
+```bash
+# Create custom tmux layout
+tmux new-session -d -s custom -x 200 -y 50
+
+# Send commands to specific pane
+tmux send-keys -t custom:0 "python script.py" Enter
+
+# Capture pane output
+tmux capture-pane -t agents-{run_id}:0 -p > output.txt
+```
 
 ## Performance
 
 | Operation | Time |
 |-----------|------|
-| Single terminal execution | 5-10 sec |
-| Multi-terminal setup | 3-5 sec |
-| Agent execution | 2-5 sec per agent |
-| Results save | <1 sec |
-
----
-
-## Use Cases
-
-✅ **Bug Finding** — Identify issues automatically
-✅ **Bug Fixing** — Implement fixes with validation  
-✅ **Code Review** — Quality assurance at scale
-✅ **Security Audit** — Find vulnerabilities
-✅ **Performance Analysis** — Optimize bottlenecks
-✅ **Refactoring** — Safely modernize code
-✅ **Learning** — Understand agent behavior via multi-terminal
-
----
+| Task Classification | <10ms |
+| Workflow Building | <10ms |
+| Diagnostician Analysis | ~1-2s |
+| BugFixer Planning | ~1-2s |
+| Reviewer Validation | ~2-3s |
+| Total Execution | ~3-5s |
 
 ## Contributing
 
-To extend the system:
+To contribute improvements:
 
-1. **Add New Agents** — Create in `.claude/agents/`
-2. **Add New Tools** — Create in `.claude/tools/`
-3. **Update CLI** — Modify `workspace_cli/cli.py`
-4. **Test** — Use `--multi-terminal` for visibility
+1. Create a feature branch
+2. Make your changes
+3. Test thoroughly
+4. Submit a pull request
+
+## License
+
+Created by Nguyen Le Dang Nguyen (nguyen.nguyen30@momo.vn)
 
 ---
+
+## Quick Links
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - System design and architecture
+- [QUICKSTART.md](./QUICKSTART.md) - Detailed usage guide
+- [AGENTS.md](./AGENTS.md) - Agent descriptions and capabilities
 
 ## Support
 
-### Documentation
-- **Quick Commands:** [QUICK_REFERENCE.md](./QUICK_REFERENCE.md)
-- **Full System:** [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)
-- **Multi-Terminal:** [MULTI_TERMINAL_GUIDE.md](./.claude/docs/MULTI_TERMINAL_GUIDE.md)
+For issues or questions:
+1. Check [QUICKSTART.md](./QUICKSTART.md) for common tasks
+2. Review [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details
+3. Check agent output in tmux for error messages
 
-### Get Help
-```bash
-python -m workspace_cli --help
-```
-
----
-
-## Next Steps
-
-1. **Try basic command:**
-   ```bash
-   python -m workspace_cli solve "Analyze my code"
-   ```
-
-2. **Experience multi-terminal:**
-   ```bash
-   python -m workspace_cli --multi-terminal solve "Fix a bug"
-   ```
-
-3. **Review results:**
-   ```bash
-   ls .agent-workspace/runs/
-   cat .agent-workspace/runs/run-*.json
-   ```
-
-4. **Read full docs:**
-   - See [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md) for complete architecture
-   - See [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) for command cheatsheet
-
----
-
-## Version
-
-**v0.1.0** — Initial release with multi-terminal support
-
----
-
-**Ready to get started?** Run your first command:
-
-```bash
-python -m workspace_cli --multi-terminal solve "Find bugs in my code"
-```
-
-Watch the agents work in separate terminals! 🚀
+**Version:** 0.3.0 (Tmux-based, Modernized)  
+**Last Updated:** 2026-07-29
