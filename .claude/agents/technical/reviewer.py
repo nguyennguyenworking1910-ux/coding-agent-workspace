@@ -3,7 +3,6 @@
 import time
 from pathlib import Path
 from tools import get_tool
-from ..stream_handler import StreamHandler
 
 
 class ReviewerAgent:
@@ -20,7 +19,7 @@ class ReviewerAgent:
         """Initialize tools."""
         self.thought_tool = get_tool("thought")()
 
-    def _validate_code_quality(self, task: str, stream: StreamHandler) -> dict:
+    def _validate_code_quality(self, task: str) -> dict:
         """Validate code quality criteria."""
         criteria = {
             "has_docstrings": {"passed": True, "details": "Most functions have documentation"},
@@ -30,11 +29,12 @@ class ReviewerAgent:
             "testing": {"passed": False, "details": "Limited test coverage - recommend adding tests"}
         }
 
-        stream.stream_event("VALIDATE_START", f"Starting validation of {len(criteria)} criteria")
+        print(f"[VALIDATE_START] Starting validation of {len(criteria)} criteria")
 
         for check, result in criteria.items():
             status = "PASS" if result["passed"] else "FAIL"
-            stream.stream_event("VALIDATE", f"{check.upper()}: {status}", {"details": result["details"]})
+            print(f"[VALIDATE] {check.upper()}: {status}")
+            print(f"           {result['details']}")
             time.sleep(0.3)
 
         return criteria
@@ -45,16 +45,19 @@ class ReviewerAgent:
 
         Args:
             task: Review task description
-            run_id: Unique run ID for streaming
+            run_id: Unique run ID
 
         Returns:
             Review results
         """
-        stream = StreamHandler(self.name, task, run_id)
-        stream.stream_header()
+        print(f"\n{'='*70}")
+        print(f"AGENT: REVIEWER")
+        print(f"RUN ID: {run_id}")
+        print(f"TASK: {task}")
+        print(f"{'='*70}\n")
 
-        stream.stream_event("INIT", "Reviewer agent initialized")
-        criteria = self._validate_code_quality(task, stream)
+        print("[i] [REVIEWER] Agent initialized")
+        criteria = self._validate_code_quality(task)
 
         passed_count = sum(1 for r in criteria.values() if r["passed"])
         issues = [
@@ -69,9 +72,18 @@ class ReviewerAgent:
         overall_score = (passed_count / len(criteria)) * 100
         approval = "APPROVED" if overall_score >= 80 else "NEEDS_REVIEW"
 
-        stream.stream_validation(criteria)
-        stream.stream_event("COMPLETE", f"Review complete. Score: {int(overall_score)}%")
-        stream.stream_footer()
+        print(f"\n[VALIDATION RESULTS]")
+        for check, result in criteria.items():
+            status = "[PASS]" if result["passed"] else "[FAIL]"
+            print(f"  {status} {check.upper()}")
+            print(f"       {result['details']}\n")
+
+        print(f"[FINAL SCORE] {int(overall_score)}% - {approval}\n")
+        print(f"[i] [REVIEWER] Review complete. Score: {int(overall_score)}%")
+
+        print(f"\n{'='*70}")
+        print(f"STATUS: COMPLETED")
+        print(f"{'='*70}\n")
 
         return {
             "success": True,
@@ -83,6 +95,5 @@ class ReviewerAgent:
             "approval": approval,
             "score": overall_score,
             "tools_used": self.tools,
-            "status": "review_complete",
-            "stream": stream.get_summary()
+            "status": "review_complete"
         }

@@ -10,8 +10,7 @@ from .diagnostician import DiagnosticianAgent
 from .bug_fixer import BugFixerAgent
 from .reviewer import ReviewerAgent
 
-# Import communication system
-from ..agent_communication import get_channel, broadcast_message
+# Import terminal management
 from ..claude_terminal_manager import ClaudeTerminalManager
 
 
@@ -56,11 +55,9 @@ class TeamLeaderAgent:
         self.execution_log = []
         self.run_id = run_id or str(uuid.uuid4())[:8]
 
-        # Communication and terminal management
-        self.channel = get_channel(self.run_id)
-        # Use run_id as tmux session name for easy identification and isolation
+        # Terminal management with tmux
         self.terminal_manager = ClaudeTerminalManager(session_name=f"agents-{self.run_id}")
-        self.multi_terminal = True  # Multi-terminal is now DEFAULT
+        self.multi_terminal = True
 
         self._init_tools()
 
@@ -72,6 +69,12 @@ class TeamLeaderAgent:
     def _init_tools(self):
         """Initialize tools."""
         self.thought_tool = get_tool("thought")()
+
+    def _broadcast(self, message: str, msg_type: str = "info"):
+        """Broadcast a message."""
+        icon_map = {"info": "[i]", "decision": "[*]", "finding": "[!]", "warning": "[?]", "error": "[x]"}
+        icon = icon_map.get(msg_type, "[*]")
+        print(f"{icon} [TEAM_LEADER] {message}")
 
     def _display_header(self):
         """Display Team Leader header."""
@@ -86,7 +89,7 @@ class TeamLeaderAgent:
         """Display Team Leader thinking process."""
         print(f"\n[TEAM LEADER THINKING] {title}")
         print(f"  {content}")
-        broadcast_message(self.run_id, "team_leader", f"Thinking: {content}", "info")
+        self._broadcast(f"Thinking: {content}", "info")
 
     def _log_event(self, event_type: str, message: str, data: dict = None):
         """Log event for tracing (experimental mode).
@@ -187,13 +190,13 @@ class TeamLeaderAgent:
         """
         try:
             # Broadcast agent spawn message
-            broadcast_message(self.run_id, "team_leader", f"Spawning {agent_name} agent", "decision")
+            self._broadcast(f"Spawning {agent_name} agent", "decision")
 
             # If multi-terminal mode, show terminal opening
             if self.multi_terminal:
                 terminal_id = self.terminal_manager.open_agent_terminal(agent_name, task, self.run_id)
                 if terminal_id:
-                    broadcast_message(self.run_id, "team_leader", f"Terminal opened: {terminal_id}", "info")
+                    self._broadcast(f"Terminal opened: {terminal_id}", "info")
 
             agent = None
 
@@ -215,12 +218,12 @@ class TeamLeaderAgent:
             # Execute the agent with the task
             result = agent.execute(task, run_id=self.run_id)
             self._log_event("AGENT_EXECUTED", f"{agent_name} executed successfully")
-            broadcast_message(self.run_id, "team_leader", f"{agent_name} completed", "info")
+            self._broadcast(f"{agent_name} completed", "info")
             return result
 
         except Exception as e:
             self._log_event("AGENT_ERROR", f"Error executing {agent_name}: {str(e)}")
-            broadcast_message(self.run_id, "team_leader", f"Error with {agent_name}: {str(e)}", "error")
+            self._broadcast(f"Error with {agent_name}: {str(e)}", "error")
             return {
                 "success": False,
                 "agent": agent_name,
@@ -247,13 +250,13 @@ class TeamLeaderAgent:
             self._display_header()
 
         self._log_event("EXECUTE", f"Task received: {task}")
-        broadcast_message(self.run_id, "team_leader", f"Task received: {task}", "info")
+        self._broadcast(f"Task received: {task}", "info")
 
         # Step 1: Classify the task
         task_type = self._classify_task(task)
         self._show_thinking("Task Classification", f"Classified as '{task_type}' task")
         self._log_event("CLASSIFY", f"Task classified as: {task_type}")
-        broadcast_message(self.run_id, "team_leader", f"Task classified: {task_type}", "decision")
+        self._broadcast(f"Task classified: {task_type}", "decision")
 
         # Step 2: Plan based on task type
         plan = self.thought_tool.plan(task)
@@ -264,7 +267,7 @@ class TeamLeaderAgent:
         agents_needed = self._determine_agents(task_type, task)
         self._show_thinking("Agent Selection", f"Selected agents: {', '.join(agents_needed)}")
         self._log_event("AGENTS_DETERMINED", f"Agents needed: {agents_needed}")
-        broadcast_message(self.run_id, "team_leader", f"Selected agents: {agents_needed}", "decision")
+        self._broadcast(f"Selected agents: {agents_needed}", "decision")
 
         # Display selected team
         print("\n[TEAM COMPOSITION]")
@@ -277,7 +280,7 @@ class TeamLeaderAgent:
         workflow = self._build_workflow(task, task_type, agents_needed, plan)
         self._show_thinking("Workflow", f"Built {len(workflow.get('workflow_steps', []))} step workflow")
         self._log_event("WORKFLOW_BUILT", "Workflow construction complete")
-        broadcast_message(self.run_id, "team_leader", "Workflow ready for execution", "decision")
+        self._broadcast("Workflow ready for execution", "decision")
 
         # Display workflow
         print("[WORKFLOW STEPS]")
@@ -288,12 +291,12 @@ class TeamLeaderAgent:
 
         # Step 5: Execute the workflow with agents
         self._log_event("EXECUTION_START", "Starting agent team execution")
-        broadcast_message(self.run_id, "team_leader", "Starting agent team execution", "decision")
+        self._broadcast("Starting agent team execution", "decision")
         print("[AGENT EXECUTION STARTING]\n")
 
         execution_results = self._execute_workflow(task, task_type, workflow, agents_needed)
         self._log_event("EXECUTION_COMPLETE", "Agent team execution complete")
-        broadcast_message(self.run_id, "team_leader", "All agents completed", "info")
+        self._broadcast("All agents completed", "info")
 
         # Add experimental metadata to results
         if self.experimental_mode:

@@ -4,7 +4,6 @@ import re
 import time
 from pathlib import Path
 from tools import get_tool
-from ..stream_handler import StreamHandler
 
 
 class BugFixerAgent:
@@ -22,14 +21,12 @@ class BugFixerAgent:
         """Initialize tools."""
         self.thought_tool = get_tool("thought")()
 
-    def _plan_fixes(self, task: str, stream: StreamHandler) -> list:
+    def _plan_fixes(self, task: str) -> list:
         """Plan fixes based on task description."""
         fixes = []
-        project_root = Path(__file__).parent.parent.parent.parent
-
-        # Parse task to understand what needs fixing
         task_lower = task.lower()
-        stream.stream_event("ANALYZE_TASK", f"Analyzing task: {task_lower[:50]}...")
+
+        print(f"[ANALYZE_TASK] Analyzing task: {task_lower[:50]}...")
 
         if "bug" in task_lower or "error" in task_lower or "fix" in task_lower:
             fixes.append({
@@ -37,7 +34,7 @@ class BugFixerAgent:
                 "description": "Review code for logical errors and edge cases",
                 "priority": "HIGH"
             })
-            stream.stream_event("PLAN_CREATED", "Code review strategy planned", {"priority": "HIGH"})
+            print("[PLAN_CREATED] Code review strategy planned")
             time.sleep(0.2)
 
             fixes.append({
@@ -45,7 +42,7 @@ class BugFixerAgent:
                 "description": "Add proper exception handling",
                 "priority": "HIGH"
             })
-            stream.stream_event("PLAN_CREATED", "Error handling strategy planned", {"priority": "HIGH"})
+            print("[PLAN_CREATED] Error handling strategy planned")
             time.sleep(0.2)
 
         if "security" in task_lower or "vulnerability" in task_lower:
@@ -54,7 +51,7 @@ class BugFixerAgent:
                 "description": "Remove hardcoded credentials and sensitive data",
                 "priority": "CRITICAL"
             })
-            stream.stream_event("PLAN_CREATED", "Security hardening strategy planned", {"priority": "CRITICAL"})
+            print("[PLAN_CREATED] Security hardening strategy planned")
             time.sleep(0.2)
 
             fixes.append({
@@ -62,7 +59,7 @@ class BugFixerAgent:
                 "description": "Add input validation and sanitization",
                 "priority": "HIGH"
             })
-            stream.stream_event("PLAN_CREATED", "Input validation strategy planned", {"priority": "HIGH"})
+            print("[PLAN_CREATED] Input validation strategy planned")
             time.sleep(0.2)
 
         if "performance" in task_lower or "optimize" in task_lower:
@@ -71,7 +68,7 @@ class BugFixerAgent:
                 "description": "Optimize algorithms and reduce complexity",
                 "priority": "MEDIUM"
             })
-            stream.stream_event("PLAN_CREATED", "Optimization strategy planned", {"priority": "MEDIUM"})
+            print("[PLAN_CREATED] Optimization strategy planned")
             time.sleep(0.2)
 
         if "test" in task_lower or "coverage" in task_lower:
@@ -80,17 +77,16 @@ class BugFixerAgent:
                 "description": "Add unit tests and improve code coverage",
                 "priority": "MEDIUM"
             })
-            stream.stream_event("PLAN_CREATED", "Testing strategy planned", {"priority": "MEDIUM"})
+            print("[PLAN_CREATED] Testing strategy planned")
             time.sleep(0.2)
 
-        # Default fixes if none matched
         if not fixes:
             fixes.append({
                 "type": "general_improvement",
                 "description": "Review and improve code quality",
                 "priority": "MEDIUM"
             })
-            stream.stream_event("PLAN_CREATED", "General improvement strategy planned", {"priority": "MEDIUM"})
+            print("[PLAN_CREATED] General improvement strategy planned")
 
         return fixes
 
@@ -100,19 +96,31 @@ class BugFixerAgent:
 
         Args:
             task: Fix/implementation task description
-            run_id: Unique run ID for streaming
+            run_id: Unique run ID
 
         Returns:
             Fix results
         """
-        stream = StreamHandler(self.name, task, run_id)
-        stream.stream_header()
+        print(f"\n{'='*70}")
+        print(f"AGENT: BUG_FIXER")
+        print(f"RUN ID: {run_id}")
+        print(f"TASK: {task}")
+        print(f"{'='*70}\n")
 
-        stream.stream_event("INIT", "Bug Fixer agent initialized")
-        fixes = self._plan_fixes(task, stream)
-        stream.stream_plan(fixes)
-        stream.stream_event("COMPLETE", f"Fix plan ready. {len(fixes)} strategies prepared")
-        stream.stream_footer()
+        print("[i] [BUG_FIXER] Agent initialized")
+        fixes = self._plan_fixes(task)
+
+        print(f"\n[FIX PLAN]")
+        for i, fix in enumerate(fixes, 1):
+            print(f"  {i}. {fix['type'].upper()}")
+            print(f"     {fix['description']}")
+            print(f"     Priority: {fix['priority']}\n")
+
+        print(f"[i] [BUG_FIXER] Fix plan ready. {len(fixes)} strategies prepared")
+
+        print(f"\n{'='*70}")
+        print(f"STATUS: COMPLETED")
+        print(f"{'='*70}\n")
 
         return {
             "success": True,
@@ -123,6 +131,5 @@ class BugFixerAgent:
             "changes": fixes,
             "files_modified": [],
             "tools_used": self.tools,
-            "status": "ready_to_fix",
-            "stream": stream.get_summary()
+            "status": "ready_to_fix"
         }
