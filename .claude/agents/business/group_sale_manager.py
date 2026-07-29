@@ -1,32 +1,36 @@
 """Group Sale Management Agent - Manages group sales operations."""
 
-from tools import get_tool
+import re
+from ..base_agent import BaseAgent
 
 
-class GroupSaleManagerAgent:
+class GroupSaleManagerAgent(BaseAgent):
     """Agent for managing group sales with BigQuery access."""
 
     def __init__(self):
-        self.name = "group_sale_manager"
-        self.type = "sales_manager"
-        self.mode = "read-write"
-        self.tools = ["thought", "schema_reader", "query_builder", "query_executor", "data_fetcher"]
-        self._init_tools()
+        super().__init__(
+            "group_sale_manager",
+            "sales_manager",
+            "read-write",
+            ["thought", "schema_reader", "query_builder", "query_executor", "data_fetcher"],
+        )
+        self.identifier_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
-    def _init_tools(self):
-        """Initialize tools."""
-        self.thought_tool = get_tool("thought")()
-        self.schema_reader = get_tool("schema_reader")()
-        self.query_builder = get_tool("query_builder")()
-        self.query_executor = get_tool("query_executor")()
-        self.data_fetcher = get_tool("data_fetcher")()
+    def _validate_identifier(self, name: str, field_type: str = "identifier") -> bool:
+        """Validate identifier to prevent SQL injection."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Invalid {field_type}: empty or not a string")
+        if not self.identifier_pattern.match(name):
+            raise ValueError(f"Invalid {field_type} '{name}': must match pattern ^[A-Za-z_][A-Za-z0-9_]*$")
+        return True
 
-    def execute(self, task: str, context: dict = None) -> dict:
+    def execute(self, task: str, run_id: str = "default", context: dict = None) -> dict:
         """
         Execute group sales management task.
 
         Args:
             task: Task description
+            run_id: Unique run ID for tracking
             context: Optional context (filters, parameters)
 
         Returns:
@@ -37,15 +41,14 @@ class GroupSaleManagerAgent:
         # Analyze task using thought tool
         analysis = self.thought_tool.plan(task)
 
-        return {
-            "success": True,
-            "agent": "group_sale_manager",
-            "task": task,
-            "response": f"Group Sale Manager: {task}",
-            "thinking": analysis,
-            "tools_used": self.tools,
-            "status": "ready"
-        }
+        return self._agent_result(
+            success=True,
+            task=task,
+            response=f"Group Sale Manager: {task}",
+            thinking=analysis,
+            tools_used=self.tools,
+            status="ready",
+        )
 
     def query_sales(self, dataset: str, table: str, query_spec: dict) -> dict:
         """
@@ -161,9 +164,21 @@ class GroupSaleManagerAgent:
         Args:
             dataset: Dataset name
             table: Table name
-            metric: Metric to sort by
-            limit: Number of top groups to return
+            metric: Metric to sort by (must be a valid column name)
+            limit: Number of top groups to return (must be positive integer)
         """
+        try:
+            self._validate_identifier(metric, "metric column")
+            if not isinstance(limit, int) or limit <= 0:
+                raise ValueError(f"Invalid limit: must be a positive integer, got {limit}")
+        except ValueError as e:
+            return {
+                "success": False,
+                "agent": "group_sale_manager",
+                "error": str(e),
+                "status": "failed"
+            }
+
         # Build query to get top groups
         aggregations = {metric: "SUM"}
         group_by = ["group_id"]
@@ -174,7 +189,7 @@ class GroupSaleManagerAgent:
             group_by=group_by
         )
 
-        # Append ORDER BY DESC and LIMIT
+        # Append ORDER BY DESC and LIMIT (with validated values)
         sql = query_result["sql"] + f" ORDER BY {metric} DESC LIMIT {limit}"
 
         # Execute query

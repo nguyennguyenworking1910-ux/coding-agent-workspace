@@ -9,14 +9,12 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from .claude_provider import run_claude, ClaudeError
 
 # Try to import team leader agent and config
 try:
-    import sys
-    from pathlib import Path
     agent_path = Path(__file__).parent.parent / ".claude"
     if str(agent_path) not in sys.path:
         sys.path.insert(0, str(agent_path))
@@ -270,7 +268,7 @@ OPTIONS:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0"
+        version="%(prog)s 0.3.0"
     )
 
     return parser

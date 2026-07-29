@@ -1,24 +1,15 @@
 """Diagnostician Agent - Analyzes code and finds issues."""
 
-import os
 import re
 from pathlib import Path
-from tools import get_tool
+from ..base_agent import BaseAgent
 
 
-class DiagnosticianAgent:
+class DiagnosticianAgent(BaseAgent):
     """Analyzer agent that finds bugs and issues."""
 
     def __init__(self):
-        self.name = "diagnostician"
-        self.type = "analyzer"
-        self.mode = "read-only"
-        self.tools = ["grep", "read", "glob"]
-        self._init_tools()
-
-    def _init_tools(self):
-        """Initialize tools."""
-        self.thought_tool = get_tool("thought")()
+        super().__init__("diagnostician", "analyzer", "read-only", ["grep", "read", "glob"])
 
     def _analyze_python_files(self) -> list:
         """Analyze Python files for common issues."""
@@ -79,27 +70,20 @@ class DiagnosticianAgent:
         Returns:
             Analysis results
         """
-        print(f"\n{'='*70}")
-        print(f"AGENT: DIAGNOSTICIAN")
-        print(f"RUN ID: {run_id}")
-        print(f"TASK: {task}")
-        print(f"{'='*70}\n")
+        self._print_header(task, run_id)
 
         print("[i] [DIAGNOSTICIAN] Agent initialized")
         findings = self._analyze_python_files()
         print(f"[i] [DIAGNOSTICIAN] Analysis complete. Found {len(findings)} issues")
 
-        print(f"\n{'='*70}")
-        print(f"STATUS: COMPLETED")
-        print(f"{'='*70}\n")
+        self._print_footer()
 
-        return {
-            "success": True,
-            "agent": "diagnostician",
-            "task": task,
-            "response": f"Code analysis complete. Found {len(findings)} issues.",
-            "thinking": "Analyzed Python files for security issues, error handling, and code quality.",
-            "findings": findings,
-            "tools_used": self.tools,
-            "status": "analysis_complete"
-        }
+        return self._agent_result(
+            success=True,
+            task=task,
+            response=f"Code analysis complete. Found {len(findings)} issues.",
+            thinking="Analyzed Python files for security issues, error handling, and code quality.",
+            findings=findings,
+            tools_used=self.tools,
+            status="analysis_complete",
+        )

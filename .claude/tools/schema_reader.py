@@ -1,8 +1,11 @@
 """Schema Reader Tool - Reads BigQuery table schemas from markdown files."""
 
 import os
+import re
 import json
 from typing import Dict, Any, List, Optional
+
+from .tool_result import ToolResult
 
 
 class SchemaReaderTool:
@@ -13,6 +16,23 @@ class SchemaReaderTool:
         self.description = "Read and parse BigQuery table schemas from markdown files"
         self.type = "schema_access"
         self.schema_dir = ".schemas"
+        self.identifier_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+    def _validate_identifier(self, name: str, field_type: str = "identifier") -> bool:
+        """Validate identifier to prevent path traversal.
+
+        Args:
+            name: The identifier to validate
+            field_type: Type for error messages
+
+        Returns:
+            True if valid, raises ValueError if invalid
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Invalid {field_type}: empty or not a string")
+        if not self.identifier_pattern.match(name):
+            raise ValueError(f"Invalid {field_type} '{name}': must match pattern ^[A-Za-z_][A-Za-z0-9_]*$")
+        return True
 
     def read_schema_from_file(self, schema_file: str) -> Dict[str, Any]:
         """
@@ -25,37 +45,31 @@ class SchemaReaderTool:
             Parsed schema information
         """
         if not os.path.exists(schema_file):
-            return {
-                "success": False,
-                "tool": "schema_reader",
-                "operation": "read_schema_from_file",
-                "file": schema_file,
-                "error": f"Schema file not found: {schema_file}",
-                "status": "failed"
-            }
+            return ToolResult.fail(
+                "schema_reader",
+                "read_schema_from_file",
+                f"Schema file not found: {schema_file}",
+                file=schema_file,
+            )
 
         try:
             with open(schema_file, 'r', encoding='utf-8') as f:
                 content = f.read()
 
             schema = self._parse_schema_markdown(content)
-            return {
-                "success": True,
-                "tool": "schema_reader",
-                "operation": "read_schema_from_file",
-                "file": schema_file,
-                "schema": schema,
-                "status": "completed"
-            }
+            return ToolResult.ok(
+                "schema_reader",
+                "read_schema_from_file",
+                file=schema_file,
+                schema=schema,
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "tool": "schema_reader",
-                "operation": "read_schema_from_file",
-                "file": schema_file,
-                "error": str(e),
-                "status": "failed"
-            }
+            return ToolResult.fail(
+                "schema_reader",
+                "read_schema_from_file",
+                str(e),
+                file=schema_file,
+            )
 
     def _parse_schema_markdown(self, content: str) -> Dict[str, Any]:
         """Parse markdown schema file into structured format."""
@@ -112,32 +126,38 @@ class SchemaReaderTool:
         Returns:
             Column information
         """
+        try:
+            self._validate_identifier(dataset, "dataset")
+            self._validate_identifier(table, "table")
+        except ValueError as e:
+            return ToolResult.fail(
+                "schema_reader",
+                "get_table_columns",
+                str(e),
+            )
+
         schema_file = f"{self.schema_dir}/{dataset}_{table}.md"
         result = self.read_schema_from_file(schema_file)
 
         if result["success"]:
             schema = result.get("schema", {})
             columns = schema.get("columns", {}).get(table, [])
-            return {
-                "success": True,
-                "tool": "schema_reader",
-                "operation": "get_table_columns",
-                "dataset": dataset,
-                "table": table,
-                "columns": columns,
-                "column_count": len(columns),
-                "status": "completed"
-            }
+            return ToolResult.ok(
+                "schema_reader",
+                "get_table_columns",
+                dataset=dataset,
+                table=table,
+                columns=columns,
+                column_count=len(columns),
+            )
 
-        return {
-            "success": False,
-            "tool": "schema_reader",
-            "operation": "get_table_columns",
-            "dataset": dataset,
-            "table": table,
-            "error": result.get("error"),
-            "status": "failed"
-        }
+        return ToolResult.fail(
+            "schema_reader",
+            "get_table_columns",
+            result.get("error"),
+            dataset=dataset,
+            table=table,
+        )
 
     def list_available_schemas(self) -> Dict[str, Any]:
         """
@@ -152,14 +172,12 @@ class SchemaReaderTool:
                 if file.endswith('.md'):
                     schemas.append(file)
 
-        return {
-            "success": True,
-            "tool": "schema_reader",
-            "operation": "list_available_schemas",
-            "schemas": schemas,
-            "count": len(schemas),
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "schema_reader",
+            "list_available_schemas",
+            schemas=schemas,
+            count=len(schemas),
+        )
 
     def validate_schema_compatibility(self, schema: Dict[str, Any], required_columns: List[str]) -> Dict[str, Any]:
         """
@@ -178,12 +196,11 @@ class SchemaReaderTool:
 
         missing = [col for col in required_columns if col not in schema_columns]
 
-        return {
-            "success": len(missing) == 0,
-            "tool": "schema_reader",
-            "operation": "validate_schema_compatibility",
-            "required_columns": required_columns,
-            "available_columns": schema_columns,
-            "missing_columns": missing,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "schema_reader",
+            "validate_schema_compatibility",
+            success=len(missing) == 0,
+            required_columns=required_columns,
+            available_columns=schema_columns,
+            missing_columns=missing,
+        )

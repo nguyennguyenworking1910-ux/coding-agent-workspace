@@ -1,11 +1,14 @@
 """Agent implementations - Organized by departments."""
 
+from .base_agent import BaseAgent
+
 # Import from departments
 from .technical import (
     TeamLeaderAgent,
     DiagnosticianAgent,
     BugFixerAgent,
     ReviewerAgent,
+    AgentArchitectAgent,
     get_technical_agent,
     list_technical_agents,
 )
@@ -17,11 +20,14 @@ from .business import (
 )
 
 __all__ = [
+    # Base
+    "BaseAgent",
     # Technical agents
     "TeamLeaderAgent",
     "DiagnosticianAgent",
     "BugFixerAgent",
     "ReviewerAgent",
+    "AgentArchitectAgent",
     # Business agents
     "GroupSaleManagerAgent",
     # Functions
@@ -40,6 +46,7 @@ AGENTS = {
     "diagnostician": DiagnosticianAgent,
     "bug_fixer": BugFixerAgent,
     "reviewer": ReviewerAgent,
+    "agent_architect": AgentArchitectAgent,
     # Business Department
     "group_sale_manager": GroupSaleManagerAgent,
 }

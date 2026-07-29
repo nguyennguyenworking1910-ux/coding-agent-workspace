@@ -2,6 +2,8 @@
 
 from typing import Dict, Any, List, Optional
 
+from .tool_result import ToolResult
+
 
 class DataFetcherTool:
     """Tool for fetching, processing, and formatting BigQuery results."""
@@ -31,18 +33,16 @@ class DataFetcherTool:
         Returns:
             Query results with pagination info
         """
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "fetch_results",
-            "job_id": job_id,
-            "project_id": project_id or "default-project",
-            "rows": [],
-            "total_rows": 0,
-            "page_token": None,
-            "schema": [],
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "fetch_results",
+            job_id=job_id,
+            project_id=project_id or "default-project",
+            rows=[],
+            total_rows=0,
+            page_token=None,
+            schema=[],
+        )
 
     def fetch_all_results(
         self,
@@ -59,17 +59,15 @@ class DataFetcherTool:
         Returns:
             All results
         """
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "fetch_all_results",
-            "job_id": job_id,
-            "project_id": project_id or "default-project",
-            "rows": [],
-            "total_rows": 0,
-            "bytes_processed": 0,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "fetch_all_results",
+            job_id=job_id,
+            project_id=project_id or "default-project",
+            rows=[],
+            total_rows=0,
+            bytes_processed=0,
+        )
 
     def convert_to_dataframe(
         self,
@@ -86,18 +84,16 @@ class DataFetcherTool:
         Returns:
             DataFrame representation
         """
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "convert_to_dataframe",
-            "job_id": job_id,
-            "project_id": project_id or "default-project",
-            "rows": 0,
-            "columns": [],
-            "dtypes": {},
-            "format": "dataframe",
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "convert_to_dataframe",
+            job_id=job_id,
+            project_id=project_id or "default-project",
+            rows=0,
+            columns=[],
+            dtypes={},
+            format="dataframe",
+        )
 
     def export_results(
         self,
@@ -118,18 +114,16 @@ class DataFetcherTool:
         Returns:
             Export result
         """
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "export_results",
-            "job_id": job_id,
-            "export_format": export_format,
-            "output_path": output_path,
-            "project_id": project_id or "default-project",
-            "file_size_bytes": 0,
-            "rows_exported": 0,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "export_results",
+            job_id=job_id,
+            export_format=export_format,
+            output_path=output_path,
+            project_id=project_id or "default-project",
+            file_size_bytes=0,
+            rows_exported=0,
+        )
 
     def get_result_schema(
         self,
@@ -146,15 +140,13 @@ class DataFetcherTool:
         Returns:
             Schema information
         """
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "get_result_schema",
-            "job_id": job_id,
-            "project_id": project_id or "default-project",
-            "fields": [],
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "get_result_schema",
+            job_id=job_id,
+            project_id=project_id or "default-project",
+            fields=[],
+        )
 
     def filter_results(
         self,
@@ -176,15 +168,13 @@ class DataFetcherTool:
             if self._match_conditions(row, filter_conditions):
                 filtered.append(row)
 
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "filter_results",
-            "original_count": len(results),
-            "filtered_count": len(filtered),
-            "rows": filtered,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "filter_results",
+            original_count=len(results),
+            filtered_count=len(filtered),
+            rows=filtered,
+        )
 
     def aggregate_results(
         self,
@@ -227,15 +217,13 @@ class DataFetcherTool:
                     agg_row[f"{func}_{col}"] = max(values) if values else None
             aggregated.append(agg_row)
 
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "aggregate_results",
-            "original_rows": len(results),
-            "aggregated_rows": len(aggregated),
-            "rows": aggregated,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "aggregate_results",
+            original_rows=len(results),
+            aggregated_rows=len(aggregated),
+            rows=aggregated,
+        )
 
     def get_statistics(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -270,13 +258,11 @@ class DataFetcherTool:
                         "sum": sum(numeric_values)
                     }
 
-        return {
-            "success": True,
-            "tool": "data_fetcher",
-            "operation": "get_statistics",
-            "statistics": stats,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "data_fetcher",
+            "get_statistics",
+            statistics=stats,
+        )
 
     def _match_conditions(self, row: Dict[str, Any], conditions: Dict[str, Any]) -> bool:
         """Check if a row matches all filter conditions."""

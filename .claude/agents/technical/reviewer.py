@@ -1,23 +1,14 @@
 """Reviewer Agent - Reviews and validates changes."""
 
 import time
-from pathlib import Path
-from tools import get_tool
+from ..base_agent import BaseAgent
 
 
-class ReviewerAgent:
+class ReviewerAgent(BaseAgent):
     """Validator agent that reviews code changes."""
 
     def __init__(self):
-        self.name = "reviewer"
-        self.type = "validator"
-        self.mode = "read-only"
-        self.tools = ["grep", "read", "glob"]
-        self._init_tools()
-
-    def _init_tools(self):
-        """Initialize tools."""
-        self.thought_tool = get_tool("thought")()
+        super().__init__("reviewer", "validator", "read-only", ["grep", "read", "glob"])
 
     def _validate_code_quality(self, task: str) -> dict:
         """Validate code quality criteria."""
@@ -50,11 +41,7 @@ class ReviewerAgent:
         Returns:
             Review results
         """
-        print(f"\n{'='*70}")
-        print(f"AGENT: REVIEWER")
-        print(f"RUN ID: {run_id}")
-        print(f"TASK: {task}")
-        print(f"{'='*70}\n")
+        self._print_header(task, run_id)
 
         print("[i] [REVIEWER] Agent initialized")
         criteria = self._validate_code_quality(task)
@@ -81,19 +68,16 @@ class ReviewerAgent:
         print(f"[FINAL SCORE] {int(overall_score)}% - {approval}\n")
         print(f"[i] [REVIEWER] Review complete. Score: {int(overall_score)}%")
 
-        print(f"\n{'='*70}")
-        print(f"STATUS: COMPLETED")
-        print(f"{'='*70}\n")
+        self._print_footer()
 
-        return {
-            "success": True,
-            "agent": "reviewer",
-            "task": task,
-            "response": f"Review complete. Overall score: {int(overall_score)}%",
-            "thinking": f"Validated {len(criteria)} criteria. {len(issues)} issues found.",
-            "issues": issues,
-            "approval": approval,
-            "score": overall_score,
-            "tools_used": self.tools,
-            "status": "review_complete"
-        }
+        return self._agent_result(
+            success=True,
+            task=task,
+            response=f"Review complete. Overall score: {int(overall_score)}%",
+            thinking=f"Validated {len(criteria)} criteria. {len(issues)} issues found.",
+            issues=issues,
+            approval=approval,
+            score=overall_score,
+            tools_used=self.tools,
+            status="review_complete",
+        )

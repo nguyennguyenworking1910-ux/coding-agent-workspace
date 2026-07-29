@@ -4,12 +4,14 @@ from .team_leader import TeamLeaderAgent
 from .diagnostician import DiagnosticianAgent
 from .bug_fixer import BugFixerAgent
 from .reviewer import ReviewerAgent
+from .agent_architect import AgentArchitectAgent
 
 __all__ = [
     "TeamLeaderAgent",
     "DiagnosticianAgent",
     "BugFixerAgent",
     "ReviewerAgent",
+    "AgentArchitectAgent",
 ]
 
 # Technical agents registry
@@ -18,6 +20,7 @@ TECHNICAL_AGENTS = {
     "diagnostician": DiagnosticianAgent,
     "bug_fixer": BugFixerAgent,
     "reviewer": ReviewerAgent,
+    "agent_architect": AgentArchitectAgent,
 }
 
 def get_technical_agent(name: str):

@@ -1,6 +1,9 @@
 """Query Builder Tool - Creates SQL queries for BigQuery."""
 
+import re
 from typing import Dict, Any, List, Optional
+
+from .tool_result import ToolResult
 
 
 class QueryBuilderTool:
@@ -10,6 +13,23 @@ class QueryBuilderTool:
         self.name = "query_builder"
         self.description = "Build SQL queries for BigQuery operations"
         self.type = "query_builder"
+        self.identifier_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+    def _validate_identifier(self, name: str, field_type: str = "identifier") -> bool:
+        """Validate that an identifier (table, column, etc.) is safe.
+
+        Args:
+            name: The identifier to validate
+            field_type: Type of field for error messages
+
+        Returns:
+            True if valid, raises ValueError if invalid
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Invalid {field_type}: empty or not a string")
+        if not self.identifier_pattern.match(name):
+            raise ValueError(f"Invalid {field_type} '{name}': must match pattern ^[A-Za-z_][A-Za-z0-9_]*$")
+        return True
 
     def build_select_query(
         self,
@@ -28,20 +48,24 @@ class QueryBuilderTool:
             dataset: Dataset name
             table: Table name
             columns: Columns to select (None = all)
-            where_conditions: WHERE clause conditions as dict
+            where_conditions: WHERE clause conditions as dict (values use parameters)
             group_by: Columns to group by
             order_by: Columns to order by
             limit: Row limit
 
         Returns:
-            Query object with SQL string
+            Query object with SQL string and parameters
         """
+        # Validate identifiers
+        self._validate_identifier(dataset, "dataset")
+        self._validate_identifier(table, "table")
+
         select_clause = self._build_select(columns)
         from_clause = f"FROM `{dataset}.{table}`"
-        where_clause = self._build_where(where_conditions) if where_conditions else ""
+        where_clause, params = self._build_where(where_conditions) if where_conditions else ("", {})
         group_by_clause = self._build_group_by(group_by) if group_by else ""
         order_by_clause = self._build_order_by(order_by) if order_by else ""
-        limit_clause = f"LIMIT {limit}" if limit else ""
+        limit_clause = f"LIMIT {limit}" if limit and isinstance(limit, int) and limit > 0 else ""
 
         sql = " ".join([
             select_clause,
@@ -52,23 +76,21 @@ class QueryBuilderTool:
             limit_clause
         ]).strip()
 
-        return {
-            "success": True,
-            "tool": "query_builder",
-            "operation": "build_select_query",
-            "query_type": "SELECT",
-            "dataset": dataset,
-            "table": table,
-            "sql": sql,
-            "parameters": {
+        return ToolResult.ok(
+            "query_builder",
+            "build_select_query",
+            query_type="SELECT",
+            dataset=dataset,
+            table=table,
+            sql=sql,
+            parameters=params,
+            parameter_schema={
                 "columns": columns or ["*"],
-                "where_conditions": where_conditions or {},
                 "group_by": group_by or [],
                 "order_by": order_by or [],
                 "limit": limit
             },
-            "status": "completed"
-        }
+        )
 
     def build_aggregate_query(
         self,
@@ -110,21 +132,19 @@ class QueryBuilderTool:
             group_by_clause
         ]).strip()
 
-        return {
-            "success": True,
-            "tool": "query_builder",
-            "operation": "build_aggregate_query",
-            "query_type": "AGGREGATE",
-            "dataset": dataset,
-            "table": table,
-            "sql": sql,
-            "parameters": {
+        return ToolResult.ok(
+            "query_builder",
+            "build_aggregate_query",
+            query_type="AGGREGATE",
+            dataset=dataset,
+            table=table,
+            sql=sql,
+            parameters={
                 "aggregations": aggregations,
                 "group_by": group_by or [],
                 "where_conditions": where_conditions or {}
             },
-            "status": "completed"
-        }
+        )
 
     def build_insert_query(
         self,
@@ -160,20 +180,18 @@ class QueryBuilderTool:
 
         sql = f"INSERT INTO `{dataset}.{table}` ({col_str}) VALUES {', '.join(values_strs)}"
 
-        return {
-            "success": True,
-            "tool": "query_builder",
-            "operation": "build_insert_query",
-            "query_type": "INSERT",
-            "dataset": dataset,
-            "table": table,
-            "sql": sql,
-            "parameters": {
+        return ToolResult.ok(
+            "query_builder",
+            "build_insert_query",
+            query_type="INSERT",
+            dataset=dataset,
+            table=table,
+            sql=sql,
+            parameters={
                 "columns": columns,
                 "rows": len(values)
             },
-            "status": "completed"
-        }
+        )
 
     def build_join_query(
         self,
@@ -208,49 +226,82 @@ class QueryBuilderTool:
 
         sql = " ".join([select_clause, from_clause, on_clause]).strip()
 
-        return {
-            "success": True,
-            "tool": "query_builder",
-            "operation": "build_join_query",
-            "query_type": "JOIN",
-            "dataset": dataset,
-            "tables": [left_table, right_table],
-            "join_type": join_type,
-            "sql": sql,
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "query_builder",
+            "build_join_query",
+            query_type="JOIN",
+            dataset=dataset,
+            tables=[left_table, right_table],
+            join_type=join_type,
+            sql=sql,
+        )
 
     def _build_select(self, columns: Optional[List[str]] = None) -> str:
-        """Build SELECT clause."""
+        """Build SELECT clause with validated column names."""
         if not columns or len(columns) == 0:
             return "SELECT *"
-        return f"SELECT {', '.join(columns)}"
+        validated = []
+        for col in columns:
+            self._validate_identifier(col, "column")
+            validated.append(col)
+        return f"SELECT {', '.join(validated)}"
 
-    def _build_where(self, conditions: Dict[str, Any]) -> str:
-        """Build WHERE clause."""
+    def _build_where(self, conditions: Dict[str, Any]) -> tuple:
+        """Build WHERE clause with parameterized queries.
+
+        Returns:
+            Tuple of (where_clause_sql, parameters_dict)
+        """
         if not conditions:
-            return ""
+            return "", {}
         conditions_list = []
+        params = {}
+        param_idx = 0
+
         for key, value in conditions.items():
+            self._validate_identifier(key, "column")
+            param_key = f"@param_{param_idx}"
+            param_idx += 1
+
             if isinstance(value, str):
-                conditions_list.append(f"{key} = '{value}'")
+                conditions_list.append(f"{key} = {param_key}")
+                params[param_key] = value
             elif isinstance(value, (list, tuple)):
                 if len(value) == 2 and value[0] in ['>', '<', '>=', '<=', '!=']:
-                    conditions_list.append(f"{key} {value[0]} {value[1]}")
+                    param_key = f"@param_{param_idx}"
+                    param_idx += 1
+                    conditions_list.append(f"{key} {value[0]} {param_key}")
+                    params[param_key] = value[1]
                 else:
-                    conditions_list.append(f"{key} IN ({', '.join(str(v) for v in value)})")
+                    in_params = []
+                    for v in value:
+                        param_key = f"@param_{param_idx}"
+                        param_idx += 1
+                        in_params.append(param_key)
+                        params[param_key] = v
+                    conditions_list.append(f"{key} IN ({', '.join(in_params)})")
             else:
-                conditions_list.append(f"{key} = {value}")
-        return "WHERE " + " AND ".join(conditions_list)
+                conditions_list.append(f"{key} = {param_key}")
+                params[param_key] = value
+
+        return ("WHERE " + " AND ".join(conditions_list), params)
 
     def _build_group_by(self, columns: List[str]) -> str:
-        """Build GROUP BY clause."""
+        """Build GROUP BY clause with validated column names."""
         if not columns:
             return ""
-        return f"GROUP BY {', '.join(columns)}"
+        validated = []
+        for col in columns:
+            self._validate_identifier(col, "column")
+            validated.append(col)
+        return f"GROUP BY {', '.join(validated)}"
 
     def _build_order_by(self, columns: List[str]) -> str:
-        """Build ORDER BY clause."""
+        """Build ORDER BY clause with validated column names."""
         if not columns:
             return ""
-        return f"ORDER BY {', '.join(columns)}"
+        validated = []
+        for col in columns:
+            self._validate_identifier(col, "column")
+            validated.append(col)
+        return f"ORDER BY {', '.join(validated)}"

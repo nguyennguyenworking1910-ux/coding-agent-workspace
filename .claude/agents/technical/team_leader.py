@@ -9,6 +9,8 @@ from config import get_config
 from .diagnostician import DiagnosticianAgent
 from .bug_fixer import BugFixerAgent
 from .reviewer import ReviewerAgent
+from .agent_architect import AgentArchitectAgent
+from ..business.group_sale_manager import GroupSaleManagerAgent
 
 # Import terminal management
 from ..claude_terminal_manager import ClaudeTerminalManager
@@ -39,6 +41,10 @@ class TeamLeaderAgent:
         "data_operations": [
             "query", "bigquery", "sales", "data", "aggregate", "export",
             "dataset", "table", "group", "analyze sales"
+        ],
+        "agent_creation": [
+            "add agent", "create agent", "new agent", "design agent",
+            "implement agent", "build agent", "generate agent"
         ]
     }
 
@@ -207,6 +213,10 @@ class TeamLeaderAgent:
                 agent = BugFixerAgent()
             elif agent_name == "reviewer":
                 agent = ReviewerAgent()
+            elif agent_name == "agent_architect":
+                agent = AgentArchitectAgent()
+            elif agent_name == "group_sale_manager":
+                agent = GroupSaleManagerAgent()
             else:
                 return {
                     "success": False,
@@ -244,7 +254,6 @@ class TeamLeaderAgent:
         """
         if run_id:
             self.run_id = run_id
-            self.channel = get_channel(run_id)
 
         if self.experimental_mode:
             self._display_header()
@@ -314,11 +323,24 @@ class TeamLeaderAgent:
             task: Task description
 
         Returns:
-            Task type: security, bug_analysis, performance, quality, data_operations, or general
+            Task type: agent_creation, security, bug_analysis, performance, quality, data_operations, or general
         """
         task_lower = task.lower()
 
+        # Check agent_creation first (more specific pattern)
+        # Look for explicit phrases or combined words
+        agent_creation_keywords = self.TASK_PATTERNS.get("agent_creation", [])
+        if any(keyword in task_lower for keyword in agent_creation_keywords):
+            return "agent_creation"
+
+        # Also check if task contains both "add" and "agent" or similar combinations
+        if ("add" in task_lower or "create" in task_lower) and "agent" in task_lower:
+            return "agent_creation"
+
+        # Then check other patterns
         for task_type, keywords in self.TASK_PATTERNS.items():
+            if task_type == "agent_creation":
+                continue  # Already checked
             if any(keyword in task_lower for keyword in keywords):
                 return task_type
 
@@ -351,6 +373,9 @@ class TeamLeaderAgent:
 
         elif task_type == "data_operations":
             agents = ["group_sale_manager"]
+
+        elif task_type == "agent_creation":
+            agents = ["agent_architect", "reviewer"]
 
         else:  # general
             agents = ["diagnostician", "reviewer"]
@@ -419,6 +444,15 @@ class TeamLeaderAgent:
             })
             step_num += 1
 
+        if "agent_architect" in agents:
+            steps.append({
+                "step": step_num,
+                "agent": "agent_architect",
+                "task": "Design and generate new agent implementation",
+                "focus": ["Analyze requirements", "Design structure", "Generate code", "Create tests"]
+            })
+            step_num += 1
+
         if "reviewer" in agents:
             steps.append({
                 "step": step_num,
@@ -447,6 +481,7 @@ class TeamLeaderAgent:
             "performance": "Performance Analysis Workflow",
             "quality": "Quality Review Workflow",
             "data_operations": "Data Operations Workflow",
+            "agent_creation": "Agent Creation Workflow",
             "general": "General Analysis Workflow"
         }
         return workflow_names.get(task_type, "General Workflow")
@@ -457,6 +492,7 @@ class TeamLeaderAgent:
             "diagnostician": "Issue Scanner & Analyzer",
             "bug_fixer": "Implementation Specialist",
             "reviewer": "Quality Validator",
+            "agent_architect": "Agent Design & Implementation Specialist",
             "group_sale_manager": "Data Operations Manager"
         }
         return roles.get(agent, "Specialist")

@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from .agent_utils import convert_to_class_name
+
 
 class ClaudeTerminalManager:
     """Manages tmux split panes for agent execution."""
@@ -116,25 +118,45 @@ class ClaudeTerminalManager:
             True if pane created successfully
         """
         try:
-            window_name = f"agent-{self.terminal_count}"
-
-            # Create new window in tmux session
-            subprocess.run(
-                ["tmux", "new-window", "-t", self.session_name, "-n", window_name],
+            # Create split pane (horizontal layout for readability)
+            split_result = subprocess.run(
+                ["tmux", "split-window", "-h", "-t", self.session_name],
                 capture_output=True,
                 check=False
             )
 
-            # Send command to execute agent script in the window
+            if split_result.returncode != 0:
+                print(f"  [WARNING] Failed to create split pane: {split_result.stderr.decode()}")
+                return False
+
+            # Get pane ID from the newly created pane
+            list_result = subprocess.run(
+                ["tmux", "list-panes", "-t", self.session_name, "-F", "#{pane_id}"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+
+            panes = list_result.stdout.strip().split('\n')
+            target_pane = panes[-1] if panes else f"{self.session_name}.0"
+
+            # Send command to execute agent script in the pane
             cmd = f"cd {Path.cwd()} && python '{script_path}'"
             subprocess.run(
-                ["tmux", "send-keys", "-t", f"{self.session_name}:{window_name}", cmd, "Enter"],
+                ["tmux", "send-keys", "-t", target_pane, cmd, "Enter"],
                 capture_output=True,
                 check=False
             )
 
-            print(f"  [OK] Pane created in tmux session '{self.session_name}'")
-            print(f"  [INFO] Window: {window_name}")
+            # Tile panes automatically for better visibility
+            subprocess.run(
+                ["tmux", "select-layout", "-t", self.session_name, "tiled"],
+                capture_output=True,
+                check=False
+            )
+
+            print(f"  [OK] Split pane created in tmux session '{self.session_name}'")
+            print(f"  [INFO] Pane ID: {target_pane}")
             print(f"  [INFO] Command: {cmd}")
             return True
 
@@ -172,24 +194,24 @@ sys.path.insert(0, str(agent_path))
 os.chdir(workspace_root)
 
 try:
-    from agents.agent_communication import get_channel, broadcast_message
-    from agents.technical.{agent_name} import {self._get_class_name(agent_name)}
+    from agents.technical.{agent_name} import {convert_to_class_name(agent_name)}
 
     run_id = "{run_id}"
-    channel = get_channel(run_id)
+    task = {repr(task)}
 
-    # Notify that agent started in tmux pane
-    broadcast_message(run_id, "{agent_name}", "Agent pane opened in tmux", "info")
+    print(f"[{agent_name.upper()}] Starting execution in tmux pane")
+    print(f"[{agent_name.upper()}] Run ID: {{run_id}}")
+    print(f"[{agent_name.upper()}] Task: {{task}}")
+    print("[{agent_name.upper()}] " + "=" * 60)
 
     # Create and execute agent
-    print(f"[{{agent_name.upper()}}] Executing in tmux pane...")
-    agent = {self._get_class_name(agent_name)}()
-    result = agent.execute("{task}", run_id=run_id)
+    agent = {convert_to_class_name(agent_name)}()
+    result = agent.execute(task, run_id=run_id)
 
-    # Notify completion
-    broadcast_message(run_id, "{agent_name}", "Agent execution completed", "info", {{"status": result.get("status")}})
+    if isinstance(result, dict):
+        print(f"\\n[{agent_name.upper()}] Status: {{result.get('status', 'unknown')}}")
 
-    print(f"\\n[{agent_name.upper()}] Execution complete")
+    print(f"[{agent_name.upper()}] Execution complete")
 
 except Exception as e:
     print(f"[ERROR] Failed to execute agent: {{e}}")
@@ -197,7 +219,7 @@ except Exception as e:
     traceback.print_exc()
 
 finally:
-    print("\\n[Agent pane will remain open for inspection]")
+    print("\\n[Agent pane will remain open for inspection - press Ctrl+D or type 'exit' to close]")
 '''
 
         # Create temp directory if needed
@@ -210,16 +232,6 @@ finally:
         self.temp_scripts.append(script_path)
 
         return script_path
-
-    def _get_class_name(self, agent_name: str) -> str:
-        """Convert agent name to class name."""
-        name_map = {
-            "diagnostician": "DiagnosticianAgent",
-            "bug_fixer": "BugFixerAgent",
-            "reviewer": "ReviewerAgent",
-            "team_leader": "TeamLeaderAgent",
-        }
-        return name_map.get(agent_name, f"{agent_name.title()}Agent")
 
     def get_terminal_status(self, terminal_id: str) -> Optional[dict]:
         """Get status of a terminal."""

@@ -1,0 +1,77 @@
+{
+  "agents": {
+    "team_leader": {
+      "name": "team_leader",
+      "class": "TeamLeaderAgent",
+      "type": "coordinator",
+      "department": "technical",
+      "mode": "read-only",
+      "tools": ["thought"],
+      "created": "2026-07-22T00:00:00",
+      "version": "1.0.0"
+    },
+    "diagnostician": {
+      "name": "diagnostician",
+      "class": "DiagnosticianAgent",
+      "type": "analyzer",
+      "department": "technical",
+      "mode": "read-only",
+      "tools": ["grep", "read", "glob"],
+      "created": "2026-07-22T00:00:00",
+      "version": "1.0.0"
+    },
+    "bug_fixer": {
+      "name": "bug_fixer",
+      "class": "BugFixerAgent",
+      "type": "implementer",
+      "department": "technical",
+      "mode": "write",
+      "tools": ["read", "write", "edit", "grep"],
+      "created": "2026-07-22T00:00:00",
+      "version": "1.0.0"
+    },
+    "reviewer": {
+      "name": "reviewer",
+      "class": "ReviewerAgent",
+      "type": "validator",
+      "department": "technical",
+      "mode": "read-only",
+      "tools": ["read", "grep"],
+      "created": "2026-07-22T00:00:00",
+      "version": "1.0.0"
+    },
+    "agent_architect": {
+      "name": "agent_architect",
+      "class": "AgentArchitectAgent",
+      "type": "architect",
+      "department": "technical",
+      "mode": "write",
+      "tools": ["thought", "read", "write", "glob"],
+      "created": "2026-07-29T00:00:00",
+      "version": "1.0.0"
+    },
+    "group_sale_manager": {
+      "name": "group_sale_manager",
+      "class": "GroupSaleManagerAgent",
+      "type": "analyzer",
+      "department": "business",
+      "mode": "read-only",
+      "tools": ["read", "grep", "glob"],
+      "created": "2026-07-22T00:00:00",
+      "version": "1.0.0"
+    }
+  },
+  "departments": {
+    "technical": [
+      "team_leader",
+      "diagnostician",
+      "bug_fixer",
+      "reviewer",
+      "agent_architect"
+    ],
+    "business": [
+      "group_sale_manager"
+    ]
+  },
+  "version": "1.0.0"
+}

@@ -1,5 +1,6 @@
 """Tool implementations for agents."""
 
+from .tool_result import ToolResult
 from .thought import ThoughtTool
 from .schema_reader import SchemaReaderTool
 from .query_builder import QueryBuilderTool
@@ -7,6 +8,7 @@ from .query_executor import QueryExecutorTool
 from .data_fetcher import DataFetcherTool
 
 __all__ = [
+    "ToolResult",
     "ThoughtTool",
     "SchemaReaderTool",
     "QueryBuilderTool",

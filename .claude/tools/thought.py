@@ -1,5 +1,7 @@
 """Thought Tool - Reasoning and thinking capability."""
 
+from .tool_result import ToolResult
+
 
 class ThoughtTool:
     """Tool for agent reasoning and thinking."""
@@ -19,13 +21,11 @@ class ThoughtTool:
         Returns:
             Thought result
         """
-        return {
-            "success": True,
-            "tool": "thought",
-            "input": thought,
-            "type": "reasoning_step",
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "thought",
+            input=thought,
+            type="reasoning_step",
+        )
 
     def analyze(self, task: str, context: dict = None) -> dict:
         """
@@ -38,15 +38,13 @@ class ThoughtTool:
         Returns:
             Analysis result
         """
-        return {
-            "success": True,
-            "tool": "thought",
-            "task": task,
-            "context": context or {},
-            "analysis": f"Analyzed: {task}",
-            "type": "analysis",
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "thought",
+            task=task,
+            context=context or {},
+            analysis=f"Analyzed: {task}",
+            type="analysis",
+        )
 
     def plan(self, goal: str, constraints: list = None) -> dict:
         """
@@ -59,21 +57,19 @@ class ThoughtTool:
         Returns:
             Plan result
         """
-        return {
-            "success": True,
-            "tool": "thought",
-            "goal": goal,
-            "constraints": constraints or [],
-            "plan": [
+        return ToolResult.ok(
+            "thought",
+            goal=goal,
+            constraints=constraints or [],
+            plan=[
                 "1. Understand the goal",
                 "2. Identify constraints",
                 "3. Generate options",
                 "4. Evaluate options",
                 "5. Select best approach"
             ],
-            "type": "planning",
-            "status": "completed"
-        }
+            type="planning",
+        )
 
     def evaluate(self, statement: str, criteria: list = None) -> dict:
         """
@@ -86,12 +82,10 @@ class ThoughtTool:
         Returns:
             Evaluation result
         """
-        return {
-            "success": True,
-            "tool": "thought",
-            "statement": statement,
-            "criteria": criteria or [],
-            "evaluation": f"Evaluated: {statement}",
-            "type": "evaluation",
-            "status": "completed"
-        }
+        return ToolResult.ok(
+            "thought",
+            statement=statement,
+            criteria=criteria or [],
+            evaluation=f"Evaluated: {statement}",
+            type="evaluation",
+        )

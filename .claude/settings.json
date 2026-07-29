@@ -9,7 +9,7 @@
   "preferences" : {
     "terminalManager": "tmux",
     "tmuxSessionPrefix": "agents-",
-    "tmuxAutoAttach": false
+    "tmuxAutoAttach": true
   }
 }
 
