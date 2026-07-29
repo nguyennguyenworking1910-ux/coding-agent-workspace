@@ -161,20 +161,34 @@ AgentMessage(
 
 ---
 
-### 5. **Terminal Management** (`.claude/agents/claude_terminal_manager.py`)
-Manages Claude Code terminal spawning:
+### 5. **Terminal Management (Tmux-based)** (`.claude/agents/claude_terminal_manager.py`)
+Manages agent execution through tmux split panes:
 
 **ClaudeTerminalManager:**
-- `open_agent_terminal(agent_name, task, run_id)` - Open terminal for agent
-- `get_terminal_status(terminal_id)` - Check status
-- `list_active_terminals()` - Monitor all terminals
-- `close_terminal(terminal_id)` - Mark as closed
+- `open_agent_terminal(agent_name, task, run_id)` - Create tmux window/pane for agent
+- `get_terminal_status(terminal_id)` - Check pane status
+- `list_active_terminals()` - Monitor all panes
+- `_create_tmux_pane(script_path, agent_name, terminal_id)` - Create tmux window and execute script
+- `_ensure_tmux_session()` - Create tmux session if needed
 
-**Terminal ID Format:**
+**Session & Pane Format:**
 ```
-{agent_name}_{run_id}_{sequence_number}
-Example: diagnostician_run-2026-07-29T15-55-52.792234_1
+Session: agents-{run_id}
+Windows: agent-1, agent-2, agent-3, ...
+Example: agents-a1b2c3d4 with window agent-1
 ```
+
+**Key Tmux Commands Used:**
+- `tmux new-session -d -s {session_name}` - Create session
+- `tmux new-window -t {session} -n {window}` - Create window for agent
+- `tmux send-keys -t {session}:{window} "python script.py" Enter` - Execute agent
+
+**Benefits Over Subprocess:**
+- Single organized tmux session per execution
+- Better resource management (no separate terminal windows)
+- Consistent behavior across Linux, macOS, Windows (WSL)
+- Panes remain open for inspection after completion
+- Easy session tracking and cleanup
 
 ---
 
@@ -365,18 +379,26 @@ Saved to .agent-workspace/runs/{run_id}.json
 **Removed Legacy Files:**
 - `multi_terminal_orchestrator.py` - Replaced by Team Leader
 - `terminal_manager.py` - Replaced by ClaudeTerminalManager
+- Subprocess-based terminal spawning (replaced with tmux)
+
+**Removed Terminal Spawning Code:**
+- Platform-specific `subprocess.Popen` calls (Windows CMD, macOS Terminal.app, Linux terminal emulators)
+- Multi-window spawning logic (now unified via tmux sessions)
+- Test and verification files (TEAM_LEADER_TEST_REPORT.md, TERMINAL_SPAWNING_VERIFICATION.md, etc.)
 
 **Why:**
-- Redundant orchestration logic
-- Outdated terminal management approach
-- Incompatible with new Team Leader architecture
-- Code duplication
+- Subprocess spawning had platform-specific complexity
+- Difficult to coordinate multiple terminal windows
+- Unpredictable resource usage and window management
+- Tmux provides unified, cross-platform solution
+- Cleaner separation of concerns
 
 **Benefits of Cleanup:**
-- Single source of truth (Team Leader)
-- Simpler codebase
-- Easier to maintain and extend
-- No conflicting execution paths
+- Single source of truth (Team Leader + Tmux)
+- Simpler, more maintainable codebase
+- Consistent behavior across all platforms (Linux, macOS, Windows/WSL)
+- Better resource management
+- Unified session tracking and inspection
 
 ---
 
@@ -385,10 +407,18 @@ Saved to .agent-workspace/runs/{run_id}.json
 ### Environment Variables
 ```
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1   (Enable experimental mode)
-spawn_actual_terminals=true               (Use real terminal spawning)
 CLAUDE_AGENT_COMMUNICATION_ENABLED=1      (Enable communication channel)
 INTERACTIVE_MODE_ENABLED=1                (Enable interactive execution)
 ```
+
+### Tmux Configuration
+Terminal execution now uses tmux split panes instead of subprocess spawning:
+- **Session Naming**: `agents-{run_id}` (automatic per execution)
+- **Window Naming**: `agent-{sequence_number}` (automatic for each agent)
+- **Session Dimensions**: 200x50 (default)
+- **Behavior**: Panes persist after completion for inspection and debugging
+
+See `TMUX_ARCHITECTURE.md` for detailed tmux-based execution architecture.
 
 ### Task Configuration
 Task patterns can be extended in `TeamLeaderAgent.TASK_PATTERNS`:
@@ -502,4 +532,4 @@ Coding Agent Workspace
 ---
 
 **Last Updated:** 2026-07-29
-**Version:** 0.2.0 (Cleaned & Refactored)
+**Version:** 0.3.0 (Tmux-based Terminal Management)

@@ -58,7 +58,8 @@ class TeamLeaderAgent:
 
         # Communication and terminal management
         self.channel = get_channel(self.run_id)
-        self.terminal_manager = ClaudeTerminalManager()
+        # Use run_id as tmux session name for easy identification and isolation
+        self.terminal_manager = ClaudeTerminalManager(session_name=f"agents-{self.run_id}")
         self.multi_terminal = True  # Multi-terminal is now DEFAULT
 
         self._init_tools()
