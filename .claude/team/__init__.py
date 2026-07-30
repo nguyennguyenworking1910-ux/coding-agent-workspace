@@ -22,6 +22,8 @@ from .mailbox_manager import MailboxManager
 from .session_manager import SessionManager
 from .steering_api import SteeringAPI
 from .worktree_manager import WorktreeManager
+from .merge_strategy import MergeStrategy, MergeBatch, MergeConflict
+from .change_validator import ChangeValidator, ValidationResult, ValidationError
 from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
@@ -55,6 +57,12 @@ __all__ = [
     "SessionManager",
     "SteeringAPI",
     "WorktreeManager",
+    "MergeStrategy",
+    "MergeBatch",
+    "MergeConflict",
+    "ChangeValidator",
+    "ValidationResult",
+    "ValidationError",
     "FakeWorker",
     "RealWorker",
     "ClaudeRunner",
