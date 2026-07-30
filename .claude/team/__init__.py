@@ -21,6 +21,7 @@ from .coordinator import Coordinator
 from .mailbox_manager import MailboxManager
 from .session_manager import SessionManager
 from .steering_api import SteeringAPI
+from .worktree_manager import WorktreeManager
 from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
@@ -53,6 +54,7 @@ __all__ = [
     "MailboxManager",
     "SessionManager",
     "SteeringAPI",
+    "WorktreeManager",
     "FakeWorker",
     "RealWorker",
     "ClaudeRunner",
