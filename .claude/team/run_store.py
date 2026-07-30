@@ -7,7 +7,14 @@ from datetime import datetime
 import tempfile
 import os
 
-from .schemas import RunContext, AgentPlan, AgentEvent, RunStatus, AgentMessage
+from .schemas import (
+    RunContext,
+    AgentPlan,
+    AgentEvent,
+    RunStatus,
+    AgentMessage,
+    CheckpointData,
+)
 
 
 class RunStore:
@@ -189,6 +196,36 @@ class RunStore:
                                 print(f"Warning: Failed to parse message: {e}")
 
         return sorted(messages, key=lambda m: m.created_at)
+
+    def save_checkpoint(self, run_id: str, checkpoint: CheckpointData) -> Path:
+        """Save checkpoint for run resume."""
+        run_dir = self.get_run_dir(run_id)
+        checkpoint_file = run_dir / "checkpoint.json"
+        self._atomic_write_json(checkpoint_file, checkpoint.model_dump(mode="json"))
+        return checkpoint_file
+
+    def load_checkpoint(self, run_id: str) -> Optional[CheckpointData]:
+        """Load checkpoint for run resume."""
+        checkpoint_file = self.get_run_dir(run_id) / "checkpoint.json"
+        if checkpoint_file.exists():
+            data = json.loads(checkpoint_file.read_text())
+            return CheckpointData(**data)
+        return None
+
+    def save_completed_tasks(self, run_id: str, task_ids: List[str]) -> Path:
+        """Save list of completed task IDs."""
+        run_dir = self.get_run_dir(run_id)
+        tasks_file = run_dir / "completed_tasks.json"
+        self._atomic_write_json(tasks_file, {"completed_task_ids": task_ids})
+        return tasks_file
+
+    def load_completed_tasks(self, run_id: str) -> List[str]:
+        """Load completed task IDs."""
+        tasks_file = self.get_run_dir(run_id) / "completed_tasks.json"
+        if tasks_file.exists():
+            data = json.loads(tasks_file.read_text())
+            return data.get("completed_task_ids", [])
+        return []
 
     def get_agent_messages(self, run_id: str, agent_id: str) -> List[AgentMessage]:
         """Load all messages for a specific agent."""

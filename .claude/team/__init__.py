@@ -10,6 +10,8 @@ from .schemas import (
     AgentEvent,
     AgentMessage,
     AgentMailbox,
+    CheckpointData,
+    RunStatusSnapshot,
 )
 from .run_store import RunStore
 from .event_bus import EventBus
@@ -17,6 +19,8 @@ from .planner import Planner
 from .claude_planner import ClaudePlanner
 from .coordinator import Coordinator
 from .mailbox_manager import MailboxManager
+from .session_manager import SessionManager
+from .steering_api import SteeringAPI
 from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
@@ -39,12 +43,16 @@ __all__ = [
     "AgentEvent",
     "AgentMessage",
     "AgentMailbox",
+    "CheckpointData",
+    "RunStatusSnapshot",
     "RunStore",
     "EventBus",
     "Planner",
     "ClaudePlanner",
     "Coordinator",
     "MailboxManager",
+    "SessionManager",
+    "SteeringAPI",
     "FakeWorker",
     "RealWorker",
     "ClaudeRunner",

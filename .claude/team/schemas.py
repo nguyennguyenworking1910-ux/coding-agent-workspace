@@ -10,6 +10,7 @@ class RunStatus(str, Enum):
     """Status of a run."""
     PLANNING = "planning"
     RUNNING = "running"
+    PAUSED = "paused"
     SYNTHESIZING = "synthesizing"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -206,3 +207,27 @@ class AgentMailbox(BaseModel):
         """Clear all messages from mailbox."""
         self.messages.clear()
         self.unread_count = 0
+
+
+class CheckpointData(BaseModel):
+    """Checkpoint for paused run resume."""
+    run_id: str
+    saved_at: datetime = Field(default_factory=datetime.utcnow)
+    status: RunStatus
+    completed_task_ids: List[str] = Field(default_factory=list)
+    pending_task_ids: List[str] = Field(default_factory=list)
+    worker_count: int = 0
+    plan_summary: str = ""
+
+
+class RunStatusSnapshot(BaseModel):
+    """Current snapshot of run status."""
+    run_id: str
+    current_status: RunStatus
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    pending_tasks: int = 0
+    running_tasks: int = 0
+    failed_tasks: int = 0
+    unread_messages: Dict[str, int] = Field(default_factory=dict)
+    uptime_seconds: float = 0.0
