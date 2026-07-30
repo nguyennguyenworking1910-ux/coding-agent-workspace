@@ -7,7 +7,7 @@ from datetime import datetime
 import tempfile
 import os
 
-from .schemas import RunContext, AgentPlan, AgentEvent, RunStatus
+from .schemas import RunContext, AgentPlan, AgentEvent, RunStatus, AgentMessage
 
 
 class RunStore:
@@ -154,6 +154,59 @@ class RunStore:
     def run_exists(self, run_id: str) -> bool:
         """Check if a run exists."""
         return self.get_run_dir(run_id).exists()
+
+    def append_agent_message(self, run_id: str, agent_id: str, message: AgentMessage) -> None:
+        """Append a message to agent's messages file."""
+        agent_dir = self.get_run_dir(run_id) / "agents" / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        messages_file = agent_dir / "messages.jsonl"
+        with open(messages_file, "a") as f:
+            f.write(json.dumps(message.model_dump(mode="json")) + "\n")
+
+    def load_agent_messages(self, run_id: str) -> List[AgentMessage]:
+        """Load all messages for a run across all agents."""
+        messages = []
+        run_dir = self.get_run_dir(run_id)
+        agents_dir = run_dir / "agents"
+
+        if not agents_dir.exists():
+            return messages
+
+        # Scan all agent directories
+        for agent_dir in agents_dir.iterdir():
+            if not agent_dir.is_dir():
+                continue
+
+            messages_file = agent_dir / "messages.jsonl"
+            if messages_file.exists():
+                with open(messages_file, "r") as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                data = json.loads(line)
+                                messages.append(AgentMessage(**data))
+                            except (json.JSONDecodeError, ValueError) as e:
+                                print(f"Warning: Failed to parse message: {e}")
+
+        return sorted(messages, key=lambda m: m.created_at)
+
+    def get_agent_messages(self, run_id: str, agent_id: str) -> List[AgentMessage]:
+        """Load all messages for a specific agent."""
+        agent_dir = self.get_run_dir(run_id) / "agents" / agent_id
+        messages = []
+
+        messages_file = agent_dir / "messages.jsonl"
+        if messages_file.exists():
+            with open(messages_file, "r") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            data = json.loads(line)
+                            messages.append(AgentMessage(**data))
+                        except (json.JSONDecodeError, ValueError) as e:
+                            print(f"Warning: Failed to parse message: {e}")
+
+        return messages
 
     def _atomic_write_json(self, target: Path, data: dict) -> None:
         """Write JSON atomically by writing to temp file and renaming."""

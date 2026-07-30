@@ -8,12 +8,15 @@ from .schemas import (
     AgentAssignment,
     AgentTask,
     AgentEvent,
+    AgentMessage,
+    AgentMailbox,
 )
 from .run_store import RunStore
 from .event_bus import EventBus
 from .planner import Planner
 from .claude_planner import ClaudePlanner
 from .coordinator import Coordinator
+from .mailbox_manager import MailboxManager
 from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
@@ -34,11 +37,14 @@ __all__ = [
     "AgentAssignment",
     "AgentTask",
     "AgentEvent",
+    "AgentMessage",
+    "AgentMailbox",
     "RunStore",
     "EventBus",
     "Planner",
     "ClaudePlanner",
     "Coordinator",
+    "MailboxManager",
     "FakeWorker",
     "RealWorker",
     "ClaudeRunner",

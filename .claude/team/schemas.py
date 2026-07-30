@@ -162,3 +162,47 @@ class RunContext(BaseModel):
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
     final_response: Optional[str] = None
+
+
+class AgentMessage(BaseModel):
+    """Message between agents."""
+    message_id: str
+    run_id: str
+    sender_agent_id: str
+    receiver_agent_id: str
+    subject: str
+    body: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    read_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentMailbox(BaseModel):
+    """Mailbox for an agent (contains messages)."""
+    agent_id: str
+    run_id: str
+    messages: List[AgentMessage] = Field(default_factory=list)
+    unread_count: int = 0
+
+    def add_message(self, message: AgentMessage) -> None:
+        """Add message to mailbox."""
+        self.messages.append(message)
+        self.unread_count += 1
+
+    def read_message(self, message_id: str) -> Optional[AgentMessage]:
+        """Mark message as read and return it."""
+        for msg in self.messages:
+            if msg.message_id == message_id and msg.read_at is None:
+                msg.read_at = datetime.utcnow()
+                self.unread_count = max(0, self.unread_count - 1)
+                return msg
+        return None
+
+    def get_unread_messages(self) -> List[AgentMessage]:
+        """Get all unread messages."""
+        return [m for m in self.messages if m.read_at is None]
+
+    def clear_messages(self) -> None:
+        """Clear all messages from mailbox."""
+        self.messages.clear()
+        self.unread_count = 0
