@@ -1,6 +1,6 @@
 """Planner for creating and validating execution plans."""
 
-from typing import Tuple, List, Dict, Set
+from typing import Tuple, List, Dict, Set, Optional
 from .schemas import (
     AgentPlan,
     AgentTask,
@@ -8,6 +8,7 @@ from .schemas import (
     TaskStatus,
     AgentRole,
 )
+from .claude_planner import ClaudePlanner
 
 
 class Planner:
@@ -15,6 +16,7 @@ class Planner:
 
     def __init__(self, max_workers: int = 4):
         self.max_workers = max_workers
+        self.claude_planner = ClaudePlanner(max_workers=max_workers)
 
     def create_plan(
         self, run_id: str, request: str, use_claude: bool = False
@@ -26,7 +28,19 @@ class Planner:
         If invalid, returns fallback lead-only plan with is_valid=False
         """
         try:
-            # Milestone 1: Heuristic rules (no Claude call)
+            if use_claude:
+                # Try Claude-powered planning (M4)
+                plan = self._claude_plan(run_id, request)
+                if plan is not None:
+                    validation_errors = plan.validate_plan()
+                    if not validation_errors:
+                        print(f"[PLANNER] Claude-based plan created: {plan.summary}")
+                        return plan, True
+                    else:
+                        print(f"[PLANNER] Claude plan validation failed: {validation_errors}")
+                # Fall through to heuristic if Claude fails
+
+            # Heuristic rules (M1) or fallback from Claude
             plan = self._heuristic_plan(run_id, request)
 
             # Validate
@@ -118,6 +132,10 @@ class Planner:
             agents=agents,
             tasks=tasks,
         )
+
+    def _claude_plan(self, run_id: str, request: str) -> Optional[AgentPlan]:
+        """Generate plan using Claude (M4)."""
+        return self.claude_planner.create_plan(run_id, request)
 
     def _fallback_lead_only_plan(self, run_id: str, request: str) -> AgentPlan:
         """Fallback: lead-only execution (no workers)."""

@@ -12,6 +12,7 @@ from .schemas import (
 from .run_store import RunStore
 from .event_bus import EventBus
 from .planner import Planner
+from .claude_planner import ClaudePlanner
 from .coordinator import Coordinator
 from .fake_worker import FakeWorker
 from .real_worker import RealWorker
@@ -36,6 +37,7 @@ __all__ = [
     "RunStore",
     "EventBus",
     "Planner",
+    "ClaudePlanner",
     "Coordinator",
     "FakeWorker",
     "RealWorker",
