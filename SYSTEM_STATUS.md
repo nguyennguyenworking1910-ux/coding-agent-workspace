@@ -1,18 +1,23 @@
 # Coding Agent Workspace - System Status Report
 
 **Date:** 2026-07-30  
-**Status:** ✓ Three Milestones Complete  
-**Version:** 0.4.0 (M1+M2+M3)
+**Status:** ✓ Four Milestones Complete  
+**Version:** 0.5.0 (M1+M2+M3+M4)
 
 ## Executive Summary
 
-The Claude Code agent orchestration system has successfully progressed through three milestones:
+The Claude Code agent orchestration system has successfully progressed through four milestones:
 
 - **M1:** Headless orchestration with fake workers ✓
 - **M2:** Real Claude subprocess execution ✓  
 - **M3:** Terminal multiplexer display ✓
+- **M4:** Claude-powered intelligent planning ✓
 
-The system is fully functional for multi-agent coordination with optional real-time visualization across Windows, Linux, macOS, and WSL.
+The system is fully functional for intelligent multi-agent coordination with:
+- Adaptive agent count selection based on request complexity
+- Role assignment and task planning by Claude
+- Automatic dependency inference
+- Real-time visualization across Windows, Linux, macOS, and WSL
 
 ## Architecture Overview
 
@@ -23,12 +28,13 @@ The system is fully functional for multi-agent coordination with optional real-t
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│                  Orchestration (M1)                         │
+│                  Orchestration (M1+M4)                      │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  Planner: Task graph creation & validation          │   │
-│  │  Coordinator: Run state machine & lifecycle mgmt    │   │
-│  │  RunStore: Persistent JSONL + atomic file ops      │   │
-│  │  EventBus: Publish/subscribe event system          │   │
+│  │  Planner: Heuristic (M1) or Claude (M4)            │   │
+│  │  ClaudePlanner: Intelligent planning               │   │
+│  │  Coordinator: Run state machine & lifecycle mgmt   │   │
+│  │  RunStore: Persistent JSONL + atomic file ops     │   │
+│  │  EventBus: Publish/subscribe event system         │   │
 │  └─────────────────────────────────────────────────────┘   │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -143,6 +149,30 @@ The system is fully functional for multi-agent coordination with optional real-t
 
 **Key Feature:** Completely optional, zero breaking changes
 
+### Milestone 4: Planner ✓
+
+**Goal:** Claude-powered intelligent planning
+
+**Delivered:**
+- ClaudePlanner class (uses ClaudeRunner)
+- Intelligent agent count selection (1-4)
+- Role assignment (researcher, implementer, reviewer, tester, custom)
+- Automatic task dependency inference
+- Robust JSON parsing from Claude responses
+- Multi-layer validation with graceful fallback
+
+**Tests:** 12/12 passing
+- Simple/complex request planning
+- JSON extraction and validation
+- Fallback behavior
+- Backward compatibility
+- Timeout handling
+- Max worker constraints
+
+**Lines of Code:** 250+ (claude_planner) + 20 (planner integration) + 370 (tests)
+
+**Key Feature:** 100% backward compatible, defaults to heuristics (M1)
+
 ## System Capabilities
 
 ### What Works Now
@@ -218,8 +248,9 @@ mux = await get_multiplexer("tmux")  # or "psmux", "headless"
 M1 (Orchestration):    3/3 ✓
 M2 (Claude Runner):    4/4 ✓
 M3 (Multiplexer):      7/7 ✓
+M4 (Claude Planner):  12/12 ✓
 
-Total:               14/14 ✓
+Total:               26/26 ✓
 ```
 
 ### Integration Tests
@@ -283,13 +314,7 @@ $ coding-agent-workspace team "Analyze code" --display tmux
 
 ## What's Next
 
-### Immediate (Milestone 4+)
-
-**Milestone 4: Planner-Controlled Teams**
-- Real Claude-powered planning
-- Agent count selection
-- Role assignment
-- Dependency inference
+### Immediate (Milestone 5+)
 
 **Milestone 5: Messages & Steering**
 - Inter-agent communication
@@ -381,12 +406,13 @@ python tests/test_milestone3_multiplexer.py  # M3
 
 ## Conclusion
 
-The Claude Code agent orchestration system is now **production-ready for testing and development** with:
+The Claude Code agent orchestration system is now **intelligent and production-ready** with:
 
 - ✓ Complete multi-agent orchestration (M1)
 - ✓ Real Claude execution (M2)
 - ✓ Terminal visualization (M3)
-- ✓ Comprehensive tests (14/14 passing)
+- ✓ Intelligent Claude-powered planning (M4)
+- ✓ Comprehensive tests (26/26 passing)
 - ✓ Full backward compatibility
 - ✓ Cross-platform support
 - ✓ Clean architecture
@@ -394,12 +420,13 @@ The Claude Code agent orchestration system is now **production-ready for testing
 **Ready to:**
 1. Run real analysis with Claude (M2)
 2. Display progress in terminal (M3)
-3. Extend to inter-agent messaging (M4-M5)
-4. Add worktree isolation (M6)
-5. Harden for production (M7)
+3. Use intelligent planning to decide agent count/roles (M4)
+4. Extend to inter-agent messaging (M5)
+5. Add worktree isolation (M6)
+6. Harden for production (M7)
 
 ---
 
-**Status:** System complete through M3. Ready for integration testing, M4+ development, or production use with fake workers.
+**Status:** System complete through M4. All milestones tested and integrated.
 
-**Next Move:** Integrate M2+M3 or proceed with M4 (real Claude planning).
+**Next Move:** Implement M5 (inter-agent messaging, session persistence), or deploy with M4 for intelligent multi-agent analysis.
