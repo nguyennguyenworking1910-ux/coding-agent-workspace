@@ -18,7 +18,7 @@ dependencies = [
 coding-agent-workspace = "workspace_cli.cli:main"
 
 [tool.setuptools]
-packages = ["workspace_cli", "claude", "claude.agents", "claude.agents.technical", "claude.agents.business", "claude.tools", "claude.team"]
+packages = ["workspace_cli", "claude", "claude.agents", "claude.tools", "claude.team"]
 package-dir = {"claude" = ".claude"}
 
 [tool.setuptools.package-data]

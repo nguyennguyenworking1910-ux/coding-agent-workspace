@@ -1,60 +1,11 @@
-"""Agent implementations - Organized by departments."""
+"""Agent system - terminal management only.
 
-from .base_agent import BaseAgent
+Legacy agents (TeamLeaderAgent, DiagnosticianAgent, BugFixerAgent, ReviewerAgent, etc.)
+have been superseded by the Milestone 1 team orchestration system in claude.team.
 
-# Import from departments
-from .technical import (
-    TeamLeaderAgent,
-    DiagnosticianAgent,
-    BugFixerAgent,
-    ReviewerAgent,
-    AgentArchitectAgent,
-    get_technical_agent,
-    list_technical_agents,
-)
+This module now only provides terminal management utilities.
+"""
 
-from .business import (
-    GroupSaleManagerAgent,
-    get_business_agent,
-    list_business_agents,
-)
+from .claude_terminal_manager import ClaudeTerminalManager
 
-__all__ = [
-    # Base
-    "BaseAgent",
-    # Technical agents
-    "TeamLeaderAgent",
-    "DiagnosticianAgent",
-    "BugFixerAgent",
-    "ReviewerAgent",
-    "AgentArchitectAgent",
-    # Business agents
-    "GroupSaleManagerAgent",
-    # Functions
-    "get_agent",
-    "list_agents",
-    "get_technical_agent",
-    "get_business_agent",
-    "list_technical_agents",
-    "list_business_agents",
-]
-
-# Combined agent registry (Technical + Business)
-AGENTS = {
-    # Technical Department
-    "team_leader": TeamLeaderAgent,
-    "diagnostician": DiagnosticianAgent,
-    "bug_fixer": BugFixerAgent,
-    "reviewer": ReviewerAgent,
-    "agent_architect": AgentArchitectAgent,
-    # Business Department
-    "group_sale_manager": GroupSaleManagerAgent,
-}
-
-def get_agent(name: str):
-    """Get agent by name from any department."""
-    return AGENTS.get(name)
-
-def list_agents():
-    """List all available agents from all departments."""
-    return list(AGENTS.keys())
+__all__ = ["ClaudeTerminalManager"]
