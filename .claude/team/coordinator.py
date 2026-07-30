@@ -203,6 +203,7 @@ class Coordinator:
                 cwd=None,  # Use current directory
                 timeout=300.0,  # 5 minute timeout
                 on_event=self.event_bus.publish,
+                store=self.store,  # Pass store for output persistence
             )
             worker.start()
             self.workers[task.owner_agent_id] = worker

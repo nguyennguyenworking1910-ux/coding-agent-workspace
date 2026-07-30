@@ -1,10 +1,13 @@
 """Real Claude worker using subprocess runner."""
 
 import threading
+import json
 from typing import Optional, Callable, Dict, Any
+from pathlib import Path
 
 from .schemas import AgentTask
 from .claude_runner import ClaudeRunner
+from .run_store import RunStore
 
 
 class RealWorker:
@@ -18,6 +21,7 @@ class RealWorker:
         cwd: Optional[str] = None,
         timeout: float = 300.0,
         on_event: Optional[Callable] = None,
+        store: Optional[RunStore] = None,
     ):
         """Initialize real worker.
 
@@ -28,6 +32,7 @@ class RealWorker:
             cwd: Working directory
             timeout: Timeout in seconds
             on_event: Event callback
+            store: Optional RunStore for persistence
         """
         self.agent_id = agent_id
         self.task = task
@@ -35,6 +40,7 @@ class RealWorker:
         self.cwd = cwd
         self.timeout = timeout
         self.on_event = on_event or (lambda e: None)
+        self.store = store
 
         self.runner = ClaudeRunner(
             agent_id=agent_id,
@@ -57,7 +63,8 @@ class RealWorker:
         """Execute the task."""
         # System prompt for the worker
         system_prompt = f"""You are a {self.agent_id.title()} agent in a multi-agent system.
-Your objective is: {next((a.objective for a in []), "Complete your assigned task")}
+Your objective is: {self.task.title}
+Task description: {self.task.instructions}
 You are read-only - do not modify files.
 Respond with clear findings and analysis."""
 
@@ -66,6 +73,32 @@ Respond with clear findings and analysis."""
             prompt=self.task.instructions,
             system_prompt=system_prompt,
         )
+
+        # Persist output if store available
+        if self.store:
+            try:
+                # Save each output line
+                for line in self.runner.output_lines:
+                    try:
+                        # Try to parse as JSON (structured output)
+                        data = json.loads(line)
+                        self.store.append_agent_output(self.run_id, self.agent_id, line)
+                    except json.JSONDecodeError:
+                        # Not JSON, save as plain output line
+                        output_entry = {"type": "text", "content": line}
+                        self.store.append_agent_output(
+                            self.run_id, self.agent_id, json.dumps(output_entry)
+                        )
+
+                # Save metadata
+                metadata = self.runner.get_metadata()
+                self.store.save_agent_status(
+                    self.run_id,
+                    self.agent_id,
+                    metadata,
+                )
+            except Exception as e:
+                print(f"Warning: Failed to persist output: {e}")
 
     def wait(self, timeout: Optional[float] = None) -> bool:
         """Wait for worker to complete.
