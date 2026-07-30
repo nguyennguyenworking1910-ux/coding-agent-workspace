@@ -17,6 +17,13 @@ from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
 from .worker_host import WorkerHost
+from .terminal_multiplexer import (
+    TerminalMultiplexer,
+    HeadlessAdapter,
+    TmuxAdapter,
+    PsmuxAdapter,
+    get_multiplexer,
+)
 
 __all__ = [
     "RunStatus",
@@ -34,4 +41,9 @@ __all__ = [
     "RealWorker",
     "ClaudeRunner",
     "WorkerHost",
+    "TerminalMultiplexer",
+    "HeadlessAdapter",
+    "TmuxAdapter",
+    "PsmuxAdapter",
+    "get_multiplexer",
 ]
