@@ -198,12 +198,20 @@ class TeamLeaderAgent:
             # Broadcast agent spawn message
             self._broadcast(f"Spawning {agent_name} agent", "decision")
 
-            # If multi-terminal mode, show terminal opening
-            if self.multi_terminal:
+            # If split panes enabled, execute in tmux pane
+            if self.multi_terminal and self.terminal_manager.split_panes_enabled:
                 terminal_id = self.terminal_manager.open_agent_terminal(agent_name, task, self.run_id)
                 if terminal_id:
-                    self._broadcast(f"Terminal opened: {terminal_id}", "info")
+                    self._broadcast(f"Agent {agent_name} running in pane {terminal_id}", "info")
+                    # Wait for pane execution and get results (900s = 15 min timeout for pane startup + execution)
+                    result = self.terminal_manager.wait_for_pane_completion(terminal_id, timeout=900)
+                    if result:
+                        self._broadcast(f"{agent_name} completed in pane", "info")
+                        return result
+                    # Fall back to inline execution if pane monitoring fails
+                    self._broadcast(f"Pane monitoring failed, executing inline for {agent_name}", "warning")
 
+            # Inline execution (fallback or when split panes disabled)
             agent = None
 
             # Instantiate the appropriate agent

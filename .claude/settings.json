@@ -9,7 +9,8 @@
   "preferences" : {
     "terminalManager": "tmux",
     "tmuxSessionPrefix": "agents-",
-    "tmuxAutoAttach": true
+    "tmuxAutoAttach": true,
+    "tmuxSplitPanes": true
   }
 }
 

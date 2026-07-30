@@ -4,18 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coding-agent-workspace"
-version = "0.3.0"
-description = "Claude Code agent orchestration system with tmux-based agent execution"
+version = "0.4.0"
+description = "Claude Code agent orchestration system with multi-agent coordination (Milestone 1)"
 requires-python = ">=3.9"
 authors = [
     {name = "Nguyen Le Dang Nguyen", email = "nguyen.nguyen30@momo.vn"}
+]
+dependencies = [
+    "pydantic>=2.0,<3.0",
 ]
 
 [project.scripts]
 coding-agent-workspace = "workspace_cli.cli:main"
 
 [tool.setuptools]
-packages = ["workspace_cli", "claude", "claude.agents", "claude.agents.technical", "claude.agents.business", "claude.tools"]
+packages = ["workspace_cli", "claude", "claude.agents", "claude.agents.technical", "claude.agents.business", "claude.tools", "claude.team"]
 package-dir = {"claude" = ".claude"}
 
 [tool.setuptools.package-data]

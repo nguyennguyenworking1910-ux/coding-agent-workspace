@@ -21,6 +21,7 @@ class ClaudeTerminalManager:
         self.temp_scripts = []
         self.session_name = session_name
         self.auto_attach = self._should_auto_attach()
+        self.split_panes_enabled = self._is_split_panes_enabled()
         self._ensure_tmux_session()
         if self.auto_attach:
             self._auto_attach_to_session()
@@ -35,6 +36,20 @@ class ClaudeTerminalManager:
                     config = json.load(f)
                     prefs = config.get("preferences", {})
                     return prefs.get("tmuxAutoAttach", False)
+        except Exception:
+            pass
+        return False
+
+    def _is_split_panes_enabled(self) -> bool:
+        """Check if split panes mode is enabled in config."""
+        try:
+            config_path = Path(__file__).parent.parent / "settings.json"
+            if config_path.exists():
+                import json
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    prefs = config.get("preferences", {})
+                    return prefs.get("tmuxSplitPanes", False)
         except Exception:
             pass
         return False
@@ -141,7 +156,13 @@ class ClaudeTerminalManager:
             target_pane = panes[-1] if panes else f"{self.session_name}.0"
 
             # Send command to execute agent script in the pane
-            cmd = f"cd {Path.cwd()} && python '{script_path}'"
+            # Use cmd /c for Windows PowerShell to ensure command execution
+            cmd = f"python '{script_path}'"
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target_pane, f"cd {Path.cwd()}", "Enter"],
+                capture_output=True,
+                check=False
+            )
             subprocess.run(
                 ["tmux", "send-keys", "-t", target_pane, cmd, "Enter"],
                 capture_output=True,
@@ -157,7 +178,8 @@ class ClaudeTerminalManager:
 
             print(f"  [OK] Split pane created in tmux session '{self.session_name}'")
             print(f"  [INFO] Pane ID: {target_pane}")
-            print(f"  [INFO] Command: {cmd}")
+            print(f"  [INFO] Script: {script_path}")
+            print(f"  [INFO] Working Dir: {Path.cwd()}")
             return True
 
         except Exception as e:
@@ -175,23 +197,26 @@ class ClaudeTerminalManager:
         Returns:
             Path to created script file
         """
+        terminal_id = f"{agent_name}_{run_id}_{self.terminal_count}"
+        workspace_root = Path.cwd().resolve()  # Capture actual workspace root
+        agent_path = workspace_root / ".claude"
+
         script_content = f'''#!/usr/bin/env python
 """Auto-generated script to run {agent_name} agent in tmux pane."""
 import sys
 import os
+import json
 from pathlib import Path
 
-# Setup path to workspace root
-script_dir = Path(__file__).parent
-workspace_root = script_dir
-for _ in range(5):
-    if (workspace_root / ".claude").exists():
-        break
-    workspace_root = workspace_root.parent
-
+# Setup path to workspace root (absolute path)
+workspace_root = Path(r"{workspace_root}").resolve()
 agent_path = workspace_root / ".claude"
+sys.path.insert(0, str(workspace_root))
 sys.path.insert(0, str(agent_path))
 os.chdir(workspace_root)
+
+result = None
+terminal_id = "{terminal_id}"
 
 try:
     from agents.technical.{agent_name} import {convert_to_class_name(agent_name)}
@@ -217,8 +242,20 @@ except Exception as e:
     print(f"[ERROR] Failed to execute agent: {{e}}")
     import traceback
     traceback.print_exc()
+    result = {{"success": False, "agent": "{agent_name}", "error": str(e), "status": "failed"}}
 
 finally:
+    # Write result to file for parent process to read
+    try:
+        result_dir = Path(__import__("tempfile").gettempdir()) / "claude_agent_results"
+        result_dir.mkdir(exist_ok=True)
+        result_file = result_dir / f"{{terminal_id}}.json"
+        if result:
+            with open(result_file, 'w') as f:
+                json.dump(result if isinstance(result, dict) else {{"result": str(result)}}, f)
+    except Exception as e:
+        print(f"[WARNING] Could not write result file: {{e}}")
+
     print("\\n[Agent pane will remain open for inspection - press Ctrl+D or type 'exit' to close]")
 '''
 
@@ -226,12 +263,77 @@ finally:
         temp_dir = Path(tempfile.gettempdir()) / "claude_agent_scripts"
         temp_dir.mkdir(exist_ok=True)
 
-        # Write script file
+        # Write script file with absolute path
         script_path = temp_dir / f"{agent_name}_{run_id}_{self.terminal_count}.py"
         script_path.write_text(script_content)
-        self.temp_scripts.append(script_path)
+        self.temp_scripts.append(str(script_path))
 
         return script_path
+
+    def wait_for_pane_completion(self, terminal_id: str, timeout: int = 900) -> Optional[dict]:
+        """Wait for a pane to complete execution and retrieve results.
+
+        Args:
+            terminal_id: Terminal/pane ID to monitor
+            timeout: Maximum seconds to wait (default 15 min)
+
+        Returns:
+            Execution results from the agent pane, or None if timeout
+        """
+        import time
+        import json
+
+        if terminal_id not in self.active_terminals:
+            return None
+
+        terminal_info = self.active_terminals[terminal_id]
+        result_file = None
+
+        try:
+            # Look for result file in temp directory
+            result_dir = Path(tempfile.gettempdir()) / "claude_agent_results"
+            result_dir.mkdir(exist_ok=True)
+            result_file = result_dir / f"{terminal_id}.json"
+
+            start_time = time.time()
+            last_status_time = start_time
+            check_count = 0
+
+            while time.time() - start_time < timeout:
+                check_count += 1
+
+                if result_file.exists():
+                    try:
+                        with open(result_file, 'r') as f:
+                            result = json.load(f)
+                            elapsed = time.time() - start_time
+                            terminal_info["status"] = "completed"
+                            terminal_info["wait_time_seconds"] = elapsed
+                            # Clean up result file
+                            result_file.unlink()
+                            print(f"[PANE_COMPLETE] {terminal_id} completed in {elapsed:.1f}s")
+                            return result
+                    except (json.JSONDecodeError, IOError):
+                        pass  # File still being written, retry
+
+                # Show progress every 30 seconds
+                current_time = time.time()
+                if current_time - last_status_time >= 30:
+                    elapsed = current_time - start_time
+                    remaining = timeout - elapsed
+                    print(f"[PANE_WAIT] {terminal_id}: {elapsed:.0f}s elapsed, {remaining:.0f}s remaining...")
+                    last_status_time = current_time
+
+                time.sleep(1)  # Check every second
+
+            # Timeout reached
+            terminal_info["status"] = "timeout"
+            print(f"[WARNING] Timeout waiting for {terminal_id} completion after {timeout}s")
+            return None
+
+        except Exception as e:
+            print(f"[WARNING] Error waiting for pane completion: {e}")
+            return None
 
     def get_terminal_status(self, terminal_id: str) -> Optional[dict]:
         """Get status of a terminal."""

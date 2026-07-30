@@ -1,274 +1,77 @@
-"""CLI interface for the Coding Agent Workspace.
+"""CLI interface for the Coding Agent Workspace - Milestone 1 Orchestration.
 
-Provides command-line interface for coordinating Claude Code agents,
-planning requests into DAG of worker steps, and managing execution.
+Provides command-line interface for multi-agent orchestration using structured
+planning, task graphs, and agent coordination.
 """
 
 import argparse
 import sys
-import json
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any
 
-from .claude_provider import run_claude, ClaudeError
-
-# Try to import team leader agent and config
-try:
-    agent_path = Path(__file__).parent.parent / ".claude"
-    if str(agent_path) not in sys.path:
-        sys.path.insert(0, str(agent_path))
-    from agents.technical import TeamLeaderAgent
-    from config import get_config, is_experimental_mode
-    TEAM_LEADER_AVAILABLE = True
-except ImportError:
-    TEAM_LEADER_AVAILABLE = False
-    def get_config():
-        class DummyConfig:
-            experimental_agent_teams_enabled = False
-        return DummyConfig()
-    def is_experimental_mode():
-        return False
-
-
-class AgentOrchestrator:
-    """Orchestrates execution of agent tasks."""
-
-    def __init__(self, workspace_dir: Optional[str] = None):
-        """Initialize orchestrator.
-
-        Args:
-            workspace_dir: Optional workspace directory for persisting missions
-        """
-        self.workspace_dir = Path(workspace_dir or ".agent-workspace")
-        self.workspace_dir.mkdir(exist_ok=True)
-        self.runs_dir = self.workspace_dir / "runs"
-        self.runs_dir.mkdir(exist_ok=True)
-
-    def create_run_id(self) -> str:
-        """Create unique run identifier."""
-        timestamp = datetime.now().isoformat().replace(":", "-")
-        return f"run-{timestamp}"
-
-    def save_mission(self, run_id: str, task: str, result: str) -> Path:
-        """Save mission execution details.
-
-        Args:
-            run_id: Unique run identifier
-            task: Original task description
-            result: Execution result
-
-        Returns:
-            Path to saved mission file
-        """
-        mission = {
-            "run_id": run_id,
-            "timestamp": datetime.now().isoformat(),
-            "task": task,
-            "result": result
-        }
-
-        mission_file = self.runs_dir / f"{run_id}.json"
-        mission_file.write_text(json.dumps(mission, indent=2))
-        return mission_file
-
-    def execute_solve(self, task: str, multi_terminal: bool = True) -> Dict[str, Any]:
-        """Execute task using team leader agent directly (no file creation).
-
-        Args:
-            task: Task description
-            multi_terminal: Whether to spawn agents in separate terminals
-
-        Returns:
-            Execution result
-        """
-        run_id = self.create_run_id()
-
-        if not TEAM_LEADER_AVAILABLE:
-            return {
-                "success": False,
-                "run_id": run_id,
-                "task": task,
-                "error": "Team leader agent not available",
-                "status": "failed"
-            }
-
-        try:
-            # Create team leader and execute with run_id and multi_terminal flag
-            team_leader = TeamLeaderAgent(run_id=run_id)
-            team_leader.multi_terminal = multi_terminal
-            result = team_leader.execute(task, run_id=run_id)
-
-            # Format output
-            output = f"""
-TEAM LEADER EXECUTION REPORT
-{'='*60}
-
-Task: {task}
-Classification: {result.get('task_type', 'general').upper()}
-Workflow: {result.get('workflow_type', 'General Workflow')}
-Status: {result.get('status', 'completed')}
-
-Spawned Agents:
-"""
-            for agent in result.get('spawned_agents', []):
-                output += f"  - {agent['agent'].upper()} ({agent['role']})\n"
-
-            output += f"\nWorkflow Steps:\n"
-            for step in result.get('workflow_steps', []):
-                output += f"  Step {step['step']}: {step['agent'].upper()}\n"
-                output += f"    Task: {step['task']}\n"
-
-            output += f"\n[RESULT] Task routed to appropriate agents\n"
-            output += f"Status: {result.get('status', 'completed')}\n"
-
-            self.save_mission(run_id, task, output)
-
-            return {
-                "success": True,
-                "run_id": run_id,
-                "task": task,
-                "result": output,
-                "status": "completed"
-            }
-
-        except Exception as error:
-            return {
-                "success": False,
-                "run_id": run_id,
-                "task": task,
-                "error": str(error),
-                "status": "failed"
-            }
-
-    def execute_task(self, task: str, use_team_leader: bool = True) -> Dict[str, Any]:
-        """Execute a task using Claude agents.
-
-        Args:
-            task: Task description
-            use_team_leader: Whether to use team leader for coordination
-
-        Returns:
-            Execution result
-        """
-        run_id = self.create_run_id()
-
-        if use_team_leader:
-            prompt = f"""You are the team_leader agent. Analyze this task and create a plan:
-
-Task: {task}
-
-Using the team_leader agent from .claude/agents/team_leader.py:
-1. Create an execution plan (DAG of steps)
-2. Identify which agents are needed (diagnostician, bug_fixer, reviewer)
-3. Show the coordination steps
-4. Provide analysis and recommendations
-
-Report your findings and next steps."""
-        else:
-            prompt = f"""Execute this task:
-
-{task}
-
-Provide:
-1. Analysis
-2. Findings
-3. Recommendations
-4. Next steps"""
-
-        try:
-            result = run_claude(
-                prompt=prompt,
-                tools=["read", "grep"],
-                permission_mode="default",
-                stream=True
-            )
-
-            self.save_mission(run_id, task, result)
-
-            return {
-                "success": True,
-                "run_id": run_id,
-                "task": task,
-                "result": result,
-                "status": "completed"
-            }
-
-        except ClaudeError as error:
-            return {
-                "success": False,
-                "run_id": run_id,
-                "task": task,
-                "error": str(error),
-                "status": "failed"
-            }
+from .orchestration_commands import OrchestrationCLI
 
 
 def create_parser() -> argparse.ArgumentParser:
     """Create CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description="Coding Agent Workspace - Claude Code CLI Integration",
+        description="Coding Agent Workspace - Multi-Agent Orchestration (Milestone 1)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-QUICK START (Claude Code Terminal):
-  coding-agent-workspace solve "Analyze the codebase"
-  coding-agent-workspace team "Find and fix bugs"
-  coding-agent-workspace analyze "Check for security issues"
+QUICK START:
+  coding-agent-workspace team "Analyze the codebase"
+  coding-agent-workspace runs
+  coding-agent-workspace show <run-id>
 
-AGENT MODES:
-  solve      - Team Leader coordinates full workflow
-  analyze    - Diagnostician only (fast analysis)
-  plan       - Create execution plan
-  review     - Reviewer validation only
-  fix        - Bug Fixer implementation
-  execute    - Full execution with multi-terminal
+COMMANDS:
+  team TASK              - Multi-agent orchestration
+  runs                   - List all runs
+  show RUN_ID            - Show run details
+  output RUN_ID AGT      - Show agent output
+  message RUN_ID AGT MSG - Send message to agent (Milestone 5)
+  stop RUN_ID            - Stop a run (Milestone 5)
 
 OPTIONS:
-  --multi-terminal  - Open each agent in separate Claude Code terminal
-  --no-team-leader  - Skip Team Leader coordination
-  --workspace DIR   - Custom workspace directory
+  --workspace DIR        - Custom workspace directory (default: .agent-workspace)
+  --max-agents N         - Maximum workers (default: 4)
+  --mux MODE             - Multiplexer: auto|tmux|psmux|headless (default: auto)
         """
     )
 
-    parser.add_argument(
-        "command",
-        choices=["analyze", "plan", "review", "fix", "execute", "solve"],
-        help="Command to execute"
-    )
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
-    parser.add_argument(
-        "task",
-        help="Task description"
-    )
+    # Orchestration subcommands
+    team_parser = subparsers.add_parser("team", help="Multi-agent orchestration")
+    team_parser.add_argument("request", help="Request description")
+    team_parser.add_argument("--max-agents", type=int, default=4)
+    team_parser.add_argument("--mux", default="auto", choices=["auto", "tmux", "psmux", "headless"])
 
-    parser.add_argument(
-        "--no-team-leader",
-        action="store_true",
-        help="Execute without team leader coordination"
-    )
+    runs_parser = subparsers.add_parser("runs", help="List all runs")
+
+    show_parser = subparsers.add_parser("show", help="Show run details")
+    show_parser.add_argument("run_id", help="Run ID to show")
+
+    message_parser = subparsers.add_parser("message", help="Send message to agent (Milestone 5)")
+    message_parser.add_argument("run_id")
+    message_parser.add_argument("agent_id")
+    message_parser.add_argument("text")
+
+    stop_parser = subparsers.add_parser("stop", help="Stop a run (Milestone 5)")
+    stop_parser.add_argument("run_id")
+
+    output_parser = subparsers.add_parser("output", help="Show agent output")
+    output_parser.add_argument("run_id")
+    output_parser.add_argument("agent_id")
 
     parser.add_argument(
         "--workspace",
         default=".agent-workspace",
-        help="Workspace directory for persisting missions (default: .agent-workspace)"
-    )
-
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress output streaming"
-    )
-
-    parser.add_argument(
-        "--single-terminal",
-        action="store_true",
-        help="Run all agents in single terminal (default is multi-terminal)"
+        help="Workspace directory (default: .agent-workspace)"
     )
 
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.3.0"
+        version="%(prog)s 0.4.0-m1"
     )
 
     return parser
@@ -283,72 +86,32 @@ def execute_command(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, 1 for failure)
     """
-    orchestrator = AgentOrchestrator(args.workspace)
-
-    command_task_map = {
-        "analyze": f"Analyze this task and identify issues: {args.task}",
-        "plan": f"Create an execution plan for: {args.task}",
-        "review": f"Review and validate: {args.task}",
-        "fix": f"Fix the following issue: {args.task}",
-        "execute": args.task,
-        "solve": args.task  # Direct team leader invocation
-    }
-
-    task_description = command_task_map.get(args.command, args.task)
-
     try:
-        # Show configuration if experimental mode enabled
-        config = get_config()
-        if is_experimental_mode():
-            print(f"\n{config.log_config()}\n")
+        orch_cli = OrchestrationCLI(args.workspace)
 
-        print(f"\n🚀 Team Leader Agent Executing: {args.command}")
-        print(f"📋 Task: {args.task}\n")
-        print("=" * 60)
-
-        # Multi-terminal is now DEFAULT (unless --single-terminal is used)
-        use_multi_terminal = not args.single_terminal
-
-        # For "solve" command, ALWAYS use Team Leader (it handles multi-terminal internally)
-        if args.command == "solve":
-            print("\n[MULTI-TERMINAL MODE - DEFAULT]")
-            print("    Team Leader will coordinate agent execution\n")
-            # Pass multi-terminal flag to orchestrator
-            result = orchestrator.execute_solve(task=args.task, multi_terminal=use_multi_terminal)
-
-            # Show tracing info if experimental mode
-            if is_experimental_mode() and result.get("success"):
-                print("\n" + "=" * 60)
-                print("EXECUTION TRACE")
-                print("=" * 60)
-                if "trace_id" in result.get("result", ""):
-                    print(f"Trace ID: {result['result'].get('trace_id', 'N/A')}")
-                    if "execution_log" in result["result"]:
-                        print("\nExecution Log:")
-                        for entry in result["result"]["execution_log"]:
-                            print(f"  {entry}")
+        if args.command == "team":
+            return orch_cli.team(args.request, max_agents=args.max_agents, mux=args.mux)
+        elif args.command == "runs":
+            return orch_cli.runs()
+        elif args.command == "show":
+            return orch_cli.show(args.run_id)
+        elif args.command == "message":
+            return orch_cli.message(args.run_id, args.agent_id, args.text)
+        elif args.command == "stop":
+            return orch_cli.stop(args.run_id)
+        elif args.command == "output":
+            return orch_cli.output(args.run_id, args.agent_id)
         else:
-            result = orchestrator.execute_task(
-                task=task_description,
-                use_team_leader=not args.no_team_leader
-            )
-
-        if result["success"]:
-            print("\n" + "=" * 60)
-            print(f"✅ Completed (Run ID: {result['run_id']})")
-            run_id = result['run_id']
-            mission_file = orchestrator.runs_dir / f'{run_id}.json'
-            print(f"📁 Saved to: {mission_file}")
-            return 0
-        else:
-            print(f"\n❌ Failed: {result.get('error', 'Unknown error')}")
-            return 1
+            print("Error: Unknown command. Use --help for usage.")
+            return 2
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user")
         return 130
     except Exception as error:
         print(f"\n❌ Error: {error}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return 1
 
 
