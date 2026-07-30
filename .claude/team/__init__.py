@@ -14,6 +14,8 @@ from .event_bus import EventBus
 from .planner import Planner
 from .coordinator import Coordinator
 from .fake_worker import FakeWorker
+from .real_worker import RealWorker
+from .claude_runner import ClaudeRunner
 from .worker_host import WorkerHost
 
 __all__ = [
@@ -29,5 +31,7 @@ __all__ = [
     "Planner",
     "Coordinator",
     "FakeWorker",
+    "RealWorker",
+    "ClaudeRunner",
     "WorkerHost",
 ]

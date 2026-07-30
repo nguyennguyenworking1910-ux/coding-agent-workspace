@@ -1,7 +1,7 @@
 """Coordinator for managing run lifecycle and task execution."""
 
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 from datetime import datetime
 
 from .schemas import (
@@ -15,6 +15,7 @@ from .state_machine import RunStateMachine
 from .run_store import RunStore
 from .event_bus import EventBus
 from .fake_worker import FakeWorker
+from .real_worker import RealWorker
 
 
 class Coordinator:
@@ -26,7 +27,7 @@ class Coordinator:
         self.event_bus = EventBus()
         self.state_machine = RunStateMachine()
         self.plan: Optional[AgentPlan] = None
-        self.workers: Dict[str, FakeWorker] = {}
+        self.workers: Dict[str, Union[FakeWorker, RealWorker]] = {}
         self.task_statuses: Dict[str, TaskStatus] = {}
         self.request: str = ""
 
@@ -189,5 +190,21 @@ class Coordinator:
         self.store.save_status(self.run_id, context)
 
     def _execute_with_real_workers(self) -> None:
-        """Placeholder for Milestone 2 real Claude workers."""
-        raise NotImplementedError("Real workers in Milestone 2")
+        """Start real Claude workers for all non-lead tasks."""
+        for task in self.plan.tasks:
+            if task.owner_agent_id == "lead":
+                continue  # Lead doesn't run as worker
+
+            # Create real worker
+            worker = RealWorker(
+                agent_id=task.owner_agent_id,
+                task=task,
+                run_id=self.run_id,
+                cwd=None,  # Use current directory
+                timeout=300.0,  # 5 minute timeout
+                on_event=self.event_bus.publish,
+            )
+            worker.start()
+            self.workers[task.owner_agent_id] = worker
+            self.task_statuses[task.task_id] = TaskStatus.RUNNING
+            print(f"[COORDINATOR] Started real worker: {task.owner_agent_id}")
