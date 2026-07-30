@@ -8,7 +8,8 @@ class RunStateMachine:
 
     TRANSITIONS = {
         RunStatus.PLANNING: [RunStatus.RUNNING, RunStatus.FAILED],
-        RunStatus.RUNNING: [RunStatus.SYNTHESIZING, RunStatus.FAILED, RunStatus.CANCELLED],
+        RunStatus.RUNNING: [RunStatus.PAUSED, RunStatus.SYNTHESIZING, RunStatus.FAILED, RunStatus.CANCELLED],
+        RunStatus.PAUSED: [RunStatus.RUNNING, RunStatus.CANCELLED],
         RunStatus.SYNTHESIZING: [RunStatus.COMPLETED, RunStatus.FAILED],
         RunStatus.COMPLETED: [],
         RunStatus.FAILED: [],
