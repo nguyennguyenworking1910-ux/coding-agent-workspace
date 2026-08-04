@@ -70,6 +70,7 @@ class ClaudeRunner:
             cmd = [
                 "claude",
                 "--print",
+                "--verbose",
                 "--output-format", "stream-json",
             ]
 
@@ -86,6 +87,8 @@ class ClaudeRunner:
                 stderr=subprocess.PIPE,
                 cwd=self.cwd,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 bufsize=1,  # Line buffering
             )
 

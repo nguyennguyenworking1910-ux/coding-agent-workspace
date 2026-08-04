@@ -124,18 +124,27 @@ class RunStore:
         agent_dir = self.get_run_dir(run_id) / "agents" / agent_id
         agent_dir.mkdir(parents=True, exist_ok=True)
         output_file = agent_dir / "output.jsonl"
-        with open(output_file, "a") as f:
-            f.write(output_line + "\n")
+        try:
+            with open(output_file, "a", encoding="utf-8") as f:
+                f.write(output_line + "\n")
+        except UnicodeEncodeError:
+            # If encoding fails, try with error handling
+            with open(output_file, "a", encoding="utf-8", errors="replace") as f:
+                f.write(output_line + "\n")
 
     def load_agent_output(self, run_id: str, agent_id: str) -> List[dict]:
         """Load all output lines for an agent."""
         output_file = self.get_run_dir(run_id) / "agents" / agent_id / "output.jsonl"
         output = []
         if output_file.exists():
-            with open(output_file, "r") as f:
+            with open(output_file, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
-                        output.append(json.loads(line))
+                        try:
+                            output.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            # Skip lines that aren't valid JSON
+                            pass
         return output
 
     def save_final_response(self, run_id: str, response: str) -> Path:

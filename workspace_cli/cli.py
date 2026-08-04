@@ -44,6 +44,7 @@ OPTIONS:
     team_parser.add_argument("request", help="Request description")
     team_parser.add_argument("--max-agents", type=int, default=4)
     team_parser.add_argument("--mux", default="auto", choices=["auto", "tmux", "psmux", "headless"])
+    team_parser.add_argument("--real-workers", action="store_true", help="Use real Claude agents instead of fake workers")
 
     runs_parser = subparsers.add_parser("runs", help="List all runs")
 
@@ -90,7 +91,7 @@ def execute_command(args: argparse.Namespace) -> int:
         orch_cli = OrchestrationCLI(args.workspace)
 
         if args.command == "team":
-            return orch_cli.team(args.request, max_agents=args.max_agents, mux=args.mux)
+            return orch_cli.team(args.request, max_agents=args.max_agents, mux=args.mux, use_real_workers=args.real_workers)
         elif args.command == "runs":
             return orch_cli.runs()
         elif args.command == "show":

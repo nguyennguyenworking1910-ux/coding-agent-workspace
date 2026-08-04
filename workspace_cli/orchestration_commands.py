@@ -22,7 +22,7 @@ class OrchestrationCLI:
         self.store = RunStore(workspace_dir)
         self.planner = Planner(max_workers=4)
 
-    def team(self, request: str, max_agents: int = 4, mux: str = "auto") -> int:
+    def team(self, request: str, max_agents: int = 4, mux: str = "auto", use_real_workers: bool = False) -> int:
         """Execute 'team' command: plan and execute multi-agent run."""
         run_id = f"run-{datetime.now().isoformat().replace(':', '-')}"
 
@@ -38,7 +38,10 @@ class OrchestrationCLI:
 
         # Execute
         coordinator = Coordinator(run_id, self.workspace_dir)
-        success = coordinator.execute_run(request, plan, use_fake_workers=True, timeout=30.0)
+        use_fake = not use_real_workers
+        # Use longer timeout for real workers (300s = 5 minutes)
+        timeout = 300.0 if use_real_workers else 30.0
+        success = coordinator.execute_run(request, plan, use_fake_workers=use_fake, timeout=timeout)
 
         if success:
             print(f"\n[OK] Run completed: {run_id}")
