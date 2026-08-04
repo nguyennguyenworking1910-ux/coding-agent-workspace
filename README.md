@@ -26,16 +26,19 @@ Coding Agent Workspace is an intelligent multi-agent system that analyzes and im
 ### Prerequisites
 
 - **Python 3.9+** with pip
-- **tmux** (required for agent execution)
-  - Linux: `sudo apt-get install tmux`
-  - macOS: `brew install tmux`
-  - Windows: Use WSL2 + `apt-get install tmux`
+- **Claude API key** (optional, for real agent execution)
+  - Get from https://console.anthropic.com
+  - Set: `export ANTHROPIC_API_KEY="your-key"`
 
 ### Setup
 
 ```bash
-# Clone or navigate to project directory
+# Navigate to project directory
 cd coding-agent-workspace
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Install in development mode
 pip install -e .
@@ -44,82 +47,159 @@ pip install -e .
 coding-agent-workspace --help
 ```
 
+## Documentation
+
+Start with these documents in order:
+
+1. **QUICK_START.md** (5 min) - Get running immediately
+2. **ARCHITECTURE.md** (10 min) - Understand system design
+3. **FILE_REFERENCE.md** (15 min) - Learn what each file does
+4. **CODEBASE_ANALYSIS.md** (20 min) - Deep dive into implementation
+
 ## Quick Start
+
+### Installation
+
+```bash
+cd coding-agent-workspace
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -e .
+```
 
 ### Run Your First Analysis
 
 ```bash
-# Analyze your codebase for issues
-coding-agent-workspace solve "analyze the codebase for security issues"
+# Analyze your codebase
+coding-agent-workspace team "Find security vulnerabilities in the codebase"
 
-# See the execution in tmux
-tmux list-sessions
-tmux attach-session -t agents-{run_id}
+# List all runs
+coding-agent-workspace runs
+
+# View run details
+coding-agent-workspace show <run-id>
+
+# View agent output
+coding-agent-workspace output <run-id> researcher
 ```
 
 ### Task Examples
 
 ```bash
-# Find bugs
-coding-agent-workspace solve "find bugs in the authentication module"
+# Security analysis
+coding-agent-workspace team "Find all security vulnerabilities"
 
-# Review code quality
-coding-agent-workspace solve "review code quality and suggest improvements"
+# Code quality review
+coding-agent-workspace team "Review code quality and suggest improvements"
+
+# Bug analysis
+coding-agent-workspace team "Find bugs in the authentication module"
 
 # Performance analysis
-coding-agent-workspace solve "optimize performance bottlenecks"
-
-# Security audit
-coding-agent-workspace solve "identify all security vulnerabilities"
+coding-agent-workspace team "Analyze performance bottlenecks and optimize"
 ```
 
 ## System Architecture
 
-### How It Works
+### Core Components
 
 ```
-User Task
+User Request
     ↓
-Team Leader Agent
-    ├─→ Task Classification (security, bug_analysis, quality, etc.)
-    ├─→ Agent Selection (which agents to use)
-    ├─→ Workflow Building (execution plan)
+Planner (analyzes request, creates AgentPlan)
+    ├─ Decides: single-agent vs multi-agent
+    ├─ Creates task graph with dependencies
+    └─ Validates for feasibility
     ↓
-Parallel Agent Execution (in tmux windows)
-    ├─→ Diagnostician (analyzes code, finds issues)
-    ├─→ BugFixer (plans fixes, implements changes)
-    └─→ Reviewer (validates findings, scores results)
+Coordinator (orchestrates execution)
+    ├─ Creates workers for each task
+    ├─ Runs in parallel (background threads)
+    ├─ Listens for events
+    └─ Respects task dependencies
     ↓
-Results Aggregation & Storage
+EventBus (pub/sub communication)
+    ├─ Routes events between components
+    ├─ Async event delivery
+    └─ Thread-safe
+    ↓
+RunStore (persistent storage)
+    ├─ Saves plan, events, results
+    ├─ JSON Lines format (streaming-friendly)
+    └─ Organized by run ID
+    ↓
+Results (.agent-workspace/runs/<run-id>/)
 ```
 
-### Agents
+### Available Agent Roles
 
-| Agent | Role | Output |
-|-------|------|--------|
-| **Diagnostician** | Code analysis & issue detection | List of findings with severity |
+| Role | Purpose | When Used |
+|------|---------|-----------|
+| **Researcher** | Code analysis & issue detection | When "analyze", "find", "check" in request |
+| **Implementer** | Implement fixes & improvements | When "fix", "improve", "implement" in request |
+| **Reviewer** | Validate findings & quality check | Always included for validation |
+| **Tester** | Test coverage & verification | When "test", "verify" in request |
 | **BugFixer** | Fix planning & implementation | Fix strategies and changes |
 | **Reviewer** | Validation & quality scoring | Score (0-100%) and approval status |
 
-## Tmux Execution
+## Project Structure
 
-All agents execute in a single tmux session with organized windows:
+```
+coding-agent-workspace/
+├── workspace_cli/                 # CLI entry point
+│   ├── cli.py                    # Command parser
+│   └── orchestration_commands.py # Command handlers
+│
+├── .claude/team/                  # Core orchestration (20 files)
+│   ├── schemas.py                # Data models (KEY FILE)
+│   ├── planner.py                # Plan creation
+│   ├── coordinator.py            # Execution orchestration
+│   ├── event_bus.py              # Event routing
+│   ├── real_worker.py            # Claude AI execution
+│   ├── run_store.py              # Persistent storage
+│   ├── state_machine.py          # State management
+│   ├── claude_runner.py          # Claude API interface
+│   ├── mailbox_manager.py        # Agent messaging
+│   ├── session_manager.py        # Pause/resume
+│   ├── worktree_manager.py       # Git isolation
+│   ├── merge_strategy.py         # Safe merging
+│   ├── change_validator.py       # Validation
+│   └── [others]
+│
+├── Documentation
+│   ├── README.md                 # This file
+│   ├── QUICK_START.md           # Getting started
+│   ├── ARCHITECTURE.md          # System design
+│   ├── FILE_REFERENCE.md        # Per-file docs
+│   └── CODEBASE_ANALYSIS.md     # Implementation
+│
+├── pyproject.toml                # Project config
+└── .agent-workspace/             # Output (created at runtime)
+    └── runs/
+        └── <run-id>/
+            ├── request.md
+            ├── plan.json
+            ├── events.jsonl
+            ├── final-response.md
+            └── agents/
+```
 
-```bash
-# Session structure
-Session: agents-{run_id}
-├── Window 0: agent-1 (Diagnostician)
-├── Window 1: agent-2 (BugFixer)
-└── Window 2: agent-3 (Reviewer)
+## Results Storage
 
-# Monitor execution
-tmux attach-session -t agents-{run_id}
+After each run, results are saved to `.agent-workspace/runs/<run-id>/`:
 
-# Navigate windows
-Ctrl+B n    # Next window
-Ctrl+B p    # Previous window
-Ctrl+B 0-9  # Jump to window
-Ctrl+B d    # Detach
+```
+<run-id>/
+├── request.md              # Original request (text)
+├── plan.json              # Execution plan (JSON)
+├── status.json            # Run status (JSON)
+├── events.jsonl           # Event log (JSON Lines)
+├── final-response.md      # Final synthesis (markdown)
+└── agents/
+    └── <agent-id>/
+        ├── task.json      # Task assignment
+        ├── prompt.md      # System prompt
+        ├── output.jsonl   # Agent output (text)
+        └── result.md      # Final result
 ```
 
 ## Commands
@@ -127,26 +207,45 @@ Ctrl+B d    # Detach
 ### Main Command
 
 ```bash
-coding-agent-workspace <command> "task description"
+coding-agent-workspace team "task description" [options]
 ```
 
 ### Available Commands
 
-- `solve` - Analyze and solve problems
-- `analyze` - Analyze code/files
-- `review` - Review code quality
-- `plan` - Plan improvements
-- `fix` - Implement fixes
-- `execute` - Execute custom tasks
+```
+team REQUEST              Multi-agent orchestration
+runs                      List all runs
+show RUN_ID              Show run details
+output RUN_ID AGENT_ID   Show agent output
+message RUN_ID AGT MSG   Send message to agent
+stop RUN_ID              Stop a run
+```
+
+### Options
+
+```
+--real-workers           Use real Claude agents (requires API key)
+--max-agents N           Maximum parallel agents (default: 4)
+--mux MODE              Terminal multiplexer: auto|tmux|psmux|headless
+--workspace DIR         Custom workspace directory
+```
 
 ### Examples
 
 ```bash
-# Solve a problem
-coding-agent-workspace solve "fix authentication issues"
+# Multi-agent analysis
+coding-agent-workspace team "Find security vulnerabilities"
 
-# Analyze code
-coding-agent-workspace analyze "check for performance issues"
+# With real Claude AI
+coding-agent-workspace team "Analyze code" --real-workers
+
+# Limit agents
+coding-agent-workspace team "Review code" --max-agents 2
+
+# View results
+coding-agent-workspace runs
+coding-agent-workspace show run-2026-08-03T10-30-45
+coding-agent-workspace output run-2026-08-03T10-30-45 researcher
 
 # Review quality
 coding-agent-workspace review "validate code standards"
