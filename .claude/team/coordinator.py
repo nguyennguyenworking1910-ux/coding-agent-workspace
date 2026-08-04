@@ -15,7 +15,6 @@ from .schemas import (
 from .state_machine import RunStateMachine
 from .run_store import RunStore
 from .event_bus import EventBus
-from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .mailbox_manager import MailboxManager
 from .session_manager import SessionManager
@@ -33,7 +32,7 @@ class Coordinator:
         self.event_bus = EventBus()
         self.state_machine = RunStateMachine()
         self.plan: Optional[AgentPlan] = None
-        self.workers: Dict[str, Union[FakeWorker, RealWorker]] = {}
+        self.workers: Dict[str, RealWorker] = {}
         self.task_statuses: Dict[str, TaskStatus] = {}
         self.request: str = ""
 
@@ -81,7 +80,6 @@ class Coordinator:
         self,
         request: str,
         plan: AgentPlan,
-        use_fake_workers: bool = True,
         use_worktrees: bool = False,
         merge_strategy: str = "auto",
         timeout: float = 30.0,
@@ -92,7 +90,6 @@ class Coordinator:
         Args:
             request: User request
             plan: Execution plan
-            use_fake_workers: Use fake workers for testing
             use_worktrees: Use git worktrees for isolated agent modifications
             merge_strategy: Merge strategy ("auto" | "manual" | "abort")
             timeout: Timeout for task execution
@@ -140,10 +137,7 @@ class Coordinator:
             print(f"[COORDINATOR] Tasks: {len(plan.tasks)}")
 
             # RUNNING phase: execute workers
-            if use_fake_workers:
-                self._execute_with_fake_workers()
-            else:
-                self._execute_with_real_workers()
+            self._execute_with_real_workers()
 
             # Wait for required dependencies
             if not self._wait_for_dependencies(timeout=timeout):
@@ -180,36 +174,6 @@ class Coordinator:
             self.state_machine.transition(RunStatus.FAILED, str(e))
             self._save_status()
             return False
-
-    def _execute_with_fake_workers(self) -> None:
-        """Start fake workers for all non-lead tasks."""
-        for task in self.plan.tasks:
-            # M5: Skip already-completed tasks
-            if task.task_id in self.skip_tasks:
-                print(f"[COORDINATOR] Skipping completed task: {task.task_id}")
-                continue
-
-            if task.owner_agent_id == "lead":
-                continue  # Lead doesn't run as worker in Milestone 1
-
-            # M5: Check if paused before starting worker
-            while self.paused:
-                time.sleep(0.1)
-
-            # Create fake worker with staggered delays to test out-of-order completion
-            delay = 0.3 + (len(self.workers) * 0.2)  # Stagger delays
-            worker = FakeWorker(
-                agent_id=task.owner_agent_id,
-                task=task,
-                run_id=self.run_id,
-                delay_seconds=delay,
-                fail=False,
-                on_event=self.event_bus.publish,
-            )
-            worker.start()
-            self.workers[task.owner_agent_id] = worker
-            self.task_statuses[task.task_id] = TaskStatus.RUNNING
-            print(f"[COORDINATOR] Started worker: {task.owner_agent_id} (delay: {delay}s)")
 
     def _wait_for_dependencies(self, timeout: float = 30.0) -> bool:
         """Block until all non-lead tasks complete or timeout."""

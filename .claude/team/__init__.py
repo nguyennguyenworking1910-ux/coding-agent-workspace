@@ -20,21 +20,11 @@ from .claude_planner import ClaudePlanner
 from .coordinator import Coordinator
 from .mailbox_manager import MailboxManager
 from .session_manager import SessionManager
-from .steering_api import SteeringAPI
 from .worktree_manager import WorktreeManager
 from .merge_strategy import MergeStrategy, MergeBatch, MergeConflict
 from .change_validator import ChangeValidator, ValidationResult, ValidationError
-from .fake_worker import FakeWorker
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
-from .worker_host import WorkerHost
-from .terminal_multiplexer import (
-    TerminalMultiplexer,
-    HeadlessAdapter,
-    TmuxAdapter,
-    PsmuxAdapter,
-    get_multiplexer,
-)
 
 __all__ = [
     "RunStatus",
@@ -55,7 +45,6 @@ __all__ = [
     "Coordinator",
     "MailboxManager",
     "SessionManager",
-    "SteeringAPI",
     "WorktreeManager",
     "MergeStrategy",
     "MergeBatch",
@@ -63,13 +52,6 @@ __all__ = [
     "ChangeValidator",
     "ValidationResult",
     "ValidationError",
-    "FakeWorker",
     "RealWorker",
     "ClaudeRunner",
-    "WorkerHost",
-    "TerminalMultiplexer",
-    "HeadlessAdapter",
-    "TmuxAdapter",
-    "PsmuxAdapter",
-    "get_multiplexer",
 ]

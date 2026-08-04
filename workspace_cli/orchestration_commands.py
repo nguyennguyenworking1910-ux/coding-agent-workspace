@@ -38,10 +38,9 @@ class OrchestrationCLI:
 
         # Execute
         coordinator = Coordinator(run_id, self.workspace_dir)
-        use_fake = not use_real_workers
         # Use longer timeout for real workers (300s = 5 minutes)
         timeout = 300.0 if use_real_workers else 30.0
-        success = coordinator.execute_run(request, plan, use_fake_workers=use_fake, timeout=timeout)
+        success = coordinator.execute_run(request, plan, timeout=timeout)
 
         if success:
             print(f"\n[OK] Run completed: {run_id}")
