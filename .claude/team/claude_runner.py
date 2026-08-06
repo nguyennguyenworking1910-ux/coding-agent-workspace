@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 import threading
 
-from .schemas import AgentEvent
+from ..system.schemas import AgentEvent
 
 
 class ClaudeRunner:

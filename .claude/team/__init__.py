@@ -1,6 +1,7 @@
 """Team orchestration module for multi-agent coordination."""
 
-from .schemas import (
+# Re-export from system package (backward compatibility)
+from ..system.schemas import (
     RunStatus,
     TaskStatus,
     AgentRole,
@@ -13,18 +14,21 @@ from .schemas import (
     CheckpointData,
     RunStatusSnapshot,
 )
-from .run_store import RunStore
-from .event_bus import EventBus
+from ..system.run_store import RunStore
+from ..system.event_bus import EventBus
+from ..system.mailbox_manager import MailboxManager
+from ..system.session_manager import SessionManager
+from ..system.worktree_manager import WorktreeManager
+
+# Local orchestration and execution modules
 from .planner import Planner
 from .claude_planner import ClaudePlanner
-from .coordinator import Coordinator
-from .mailbox_manager import MailboxManager
-from .session_manager import SessionManager
-from .worktree_manager import WorktreeManager
-from .merge_strategy import MergeStrategy, MergeBatch, MergeConflict
 from .change_validator import ChangeValidator, ValidationResult, ValidationError
 from .real_worker import RealWorker
 from .claude_runner import ClaudeRunner
+
+# Re-export from agents.orchestration (backward compatibility)
+from ..agents.orchestration import Coordinator, MergeStrategy, MergeBatch, MergeConflict
 
 __all__ = [
     "RunStatus",

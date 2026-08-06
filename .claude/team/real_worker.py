@@ -5,9 +5,9 @@ import json
 from typing import Optional, Callable, Dict, Any
 from pathlib import Path
 
-from .schemas import AgentTask
+from ..system.schemas import AgentTask
 from .claude_runner import ClaudeRunner
-from .run_store import RunStore
+from ..system.run_store import RunStore
 
 
 class RealWorker:

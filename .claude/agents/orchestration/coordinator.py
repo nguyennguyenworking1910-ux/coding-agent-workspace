@@ -5,22 +5,22 @@ from typing import Optional, Dict, Union
 from datetime import datetime
 from pathlib import Path
 
-from .schemas import (
+from ...system.schemas import (
     AgentPlan,
     RunStatus,
     RunContext,
     TaskStatus,
     AgentEvent,
 )
-from .state_machine import RunStateMachine
-from .run_store import RunStore
-from .event_bus import EventBus
-from .real_worker import RealWorker
-from .mailbox_manager import MailboxManager
-from .session_manager import SessionManager
-from .worktree_manager import WorktreeManager
+from ...system.state_machine import RunStateMachine
+from ...system.run_store import RunStore
+from ...system.event_bus import EventBus
+from ...team.real_worker import RealWorker
+from ...system.mailbox_manager import MailboxManager
+from ...system.session_manager import SessionManager
+from ...system.worktree_manager import WorktreeManager
 from .merge_strategy import MergeStrategy
-from .change_validator import ChangeValidator
+from ...team.change_validator import ChangeValidator
 
 
 class Coordinator:

@@ -4,7 +4,7 @@ import json
 import re
 from typing import Tuple, Optional, Dict, Any, List
 
-from .schemas import (
+from ..system.schemas import (
     AgentPlan,
     AgentTask,
     AgentAssignment,
