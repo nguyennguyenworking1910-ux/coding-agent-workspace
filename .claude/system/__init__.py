@@ -22,6 +22,8 @@ from .run_store import RunStore
 from .state_machine import RunStateMachine
 from .mailbox_manager import MailboxManager
 from .worktree_manager import WorktreeManager
+from .worker import Worker
+from .validator import Validator, ValidationResult, ValidationError
 
 __all__ = [
     "EventBus",
@@ -30,6 +32,10 @@ __all__ = [
     "RunStateMachine",
     "MailboxManager",
     "WorktreeManager",
+    "Worker",
+    "Validator",
+    "ValidationResult",
+    "ValidationError",
     "RunStatus",
     "TaskStatus",
     "AgentRole",

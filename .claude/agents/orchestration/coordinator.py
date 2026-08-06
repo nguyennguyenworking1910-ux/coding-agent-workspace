@@ -15,12 +15,12 @@ from ...system.schemas import (
 from ...system.state_machine import RunStateMachine
 from ...system.run_store import RunStore
 from ...system.event_bus import EventBus
-from ...team.real_worker import RealWorker
 from ...system.mailbox_manager import MailboxManager
 from ...system.session_manager import SessionManager
 from ...system.worktree_manager import WorktreeManager
+from ...system.worker import Worker
+from ...system.validator import Validator
 from .merge_strategy import MergeStrategy
-from ...team.change_validator import ChangeValidator
 
 
 class Coordinator:
@@ -32,7 +32,7 @@ class Coordinator:
         self.event_bus = EventBus()
         self.state_machine = RunStateMachine()
         self.plan: Optional[AgentPlan] = None
-        self.workers: Dict[str, RealWorker] = {}
+        self.workers: Dict[str, Worker] = {}
         self.task_statuses: Dict[str, TaskStatus] = {}
         self.request: str = ""
 
@@ -46,7 +46,7 @@ class Coordinator:
         # M6: Worktree isolation support
         self.worktree_mgr = WorktreeManager(repo_path=repo_path)
         self.merge_strategy = MergeStrategy(repo_path, self.worktree_mgr)
-        self.change_validator = ChangeValidator(repo_path)
+        self.validator = Validator(repo_path)
         self.worktree_paths: Dict[str, Path] = {}  # agent_id -> worktree_path
         self.use_worktrees = False  # Will be set by execute_run
 
@@ -410,17 +410,8 @@ class Coordinator:
             worktree_path = self.worktree_paths.get(task.owner_agent_id)
             cwd = str(worktree_path) if worktree_path else None
 
-            # Create real worker
-            worker = RealWorker(
-                agent_id=task.owner_agent_id,
-                task=enriched_task,
-                run_id=self.run_id,
-                cwd=cwd,  # Pass worktree path or current directory
-                timeout=300.0,  # 5 minute timeout
-                on_event=self.event_bus.publish,
-                store=self.store,  # Pass store for output persistence
-            )
-            worker.start()
+            # Create worker
+            worker = Worker(name=task.owner_agent_id)
             self.workers[task.owner_agent_id] = worker
             self.task_statuses[task.task_id] = TaskStatus.RUNNING
             print(f"[COORDINATOR] Started real worker: {task.owner_agent_id}")
