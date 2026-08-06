@@ -1,0 +1,7 @@
+# Scheduler Agent - Google Calendar Integration
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.108.0
+
+# Optional: for better date parsing
+python-dateutil==2.8.2
