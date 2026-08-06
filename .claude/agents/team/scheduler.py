@@ -7,7 +7,7 @@ import json
 
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
-from .scheduler_tools import SCHEDULER_TOOLS, get_calendar_client
+from ..tools.scheduler import SCHEDULER_TOOLS, get_calendar_client
 
 
 @dataclass

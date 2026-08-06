@@ -64,7 +64,7 @@ async def main():
     print("\n\n[Example 3] Using tools directly")
     print("-" * 70)
 
-    from scheduler_tools import SCHEDULER_TOOLS
+    from ..tools.scheduler import SCHEDULER_TOOLS
 
     today = SCHEDULER_TOOLS["get_today"]()
     print(f"Today: {today['date']} ({today['weekday']})")

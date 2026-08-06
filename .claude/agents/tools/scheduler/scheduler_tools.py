@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
-from .calendar_client import GoogleCalendarClient
+from ....clients import GoogleCalendarClient
 
 
 # Global calendar client instance
