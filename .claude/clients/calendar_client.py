@@ -1,4 +1,11 @@
-"""Google Calendar API client for the Scheduler Agent."""
+"""Google Calendar API client for the Scheduler Agent.
+
+Uses the same credential resolution order as workspace/schedule-management-agent:
+1. token.json (cached OAuth token - auto-refresh if expired)
+2. credentials.json (Desktop OAuth app - initiates consent flow)
+3. service_account.json (Service account with shared calendar)
+4. gcloud ADC (Application Default Credentials - if gcloud CLI configured)
+"""
 
 import os
 from datetime import datetime, timedelta
@@ -11,6 +18,7 @@ try:
     from google.oauth2.credentials import Credentials as OAuth2Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     import google.auth
+    from google.auth.exceptions import DefaultCredentialsError
     from googleapiclient.discovery import build
     GOOGLE_API_AVAILABLE = True
 except ImportError:
@@ -18,7 +26,14 @@ except ImportError:
 
 
 class GoogleCalendarClient:
-    """Client for Google Calendar API operations."""
+    """Client for Google Calendar API operations.
+
+    Smart credential resolution - tries multiple auth methods in order:
+    1. Cached token.json (OAuth Desktop app)
+    2. credentials.json (OAuth Desktop app consent flow)
+    3. service_account.json (Service account)
+    4. gcloud ADC (Application Default Credentials)
+    """
 
     SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -34,43 +49,92 @@ class GoogleCalendarClient:
         self.service = None
         self._authenticate()
 
-    def _authenticate(self) -> None:
-        """Authenticate with Google Calendar API."""
+    def _get_credentials(self):
+        """Get valid credentials using smart resolution order."""
         if not GOOGLE_API_AVAILABLE:
-            raise ImportError("Google API client libraries not installed. Run: pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client")
+            raise ImportError(
+                "Google API client libraries not installed.\n"
+                "Run: pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client"
+            )
 
-        try:
-            # Try service account first
-            if os.path.exists("service_account.json"):
-                credentials = Credentials.from_service_account_file(
-                    "service_account.json",
-                    scopes=self.SCOPES
-                )
-            # Try OAuth2 token cache
-            elif os.path.exists("token.json"):
+        # 1. Try cached OAuth token (fastest path)
+        if os.path.exists("token.json"):
+            try:
                 credentials = OAuth2Credentials.from_authorized_user_file(
                     "token.json",
                     scopes=self.SCOPES
                 )
-                # Refresh if expired
-                if credentials.expired and credentials.refresh_token:
+                if credentials and credentials.valid:
+                    return credentials
+                if credentials and credentials.expired and credentials.refresh_token:
                     credentials.refresh(Request())
-            # Try credentials.json (OAuth2 flow)
-            elif os.path.exists("credentials.json"):
+                    # Update cached token
+                    with open("token.json", "w") as token:
+                        token.write(credentials.to_json())
+                    return credentials
+            except Exception as e:
+                print(f"Warning: token.json is invalid: {e}")
+
+        # 2. Try Desktop OAuth app (credentials.json)
+        if os.path.exists("credentials.json"):
+            try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     "credentials.json",
                     scopes=self.SCOPES
                 )
                 credentials = flow.run_local_server(port=0)
-                # Save token for next run
+                # Cache token for next run
                 with open("token.json", "w") as token:
                     token.write(credentials.to_json())
-            else:
-                raise FileNotFoundError(
-                    "No credentials found. Place one of: service_account.json, "
-                    "credentials.json, or token.json in the project directory."
-                )
+                return credentials
+            except Exception as e:
+                print(f"Warning: credentials.json flow failed: {e}")
 
+        # 3. Try service account
+        if os.path.exists("service_account.json"):
+            try:
+                credentials = Credentials.from_service_account_file(
+                    "service_account.json",
+                    scopes=self.SCOPES
+                )
+                return credentials
+            except Exception as e:
+                print(f"Warning: service_account.json failed: {e}")
+
+        # 4. Try gcloud Application Default Credentials
+        try:
+            credentials, _ = google.auth.default(scopes=self.SCOPES)
+            return credentials
+        except DefaultCredentialsError:
+            pass
+
+        # No credentials found
+        raise FileNotFoundError(
+            "No Google Calendar credentials found.\n\n"
+            "Credential resolution order (tried in this order):\n"
+            "1. token.json - Cached OAuth token (auto-refresh)\n"
+            "2. credentials.json - Desktop OAuth app consent flow\n"
+            "3. service_account.json - Service account with shared calendar\n"
+            "4. gcloud ADC - gcloud auth application-default login\n\n"
+            "Options to set up:\n"
+            "A. OAuth Desktop App (Recommended):\n"
+            "   - Create in Google Cloud Console\n"
+            "   - Download credentials.json to .claude/clients/\n"
+            "   - First run will prompt for browser consent\n\n"
+            "B. Service Account (Automation):\n"
+            "   - Create service account in Google Cloud\n"
+            "   - Download JSON key to .claude/clients/service_account.json\n"
+            "   - Share calendar with service account email\n\n"
+            "C. gcloud CLI (System-wide):\n"
+            "   - Install gcloud: https://cloud.google.com/sdk/docs/install\n"
+            "   - Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/calendar\n\n"
+            "See .claude/clients/SETUP.md for detailed instructions."
+        )
+
+    def _authenticate(self) -> None:
+        """Authenticate with Google Calendar API."""
+        try:
+            credentials = self._get_credentials()
             self.service = build("calendar", "v3", credentials=credentials)
         except Exception as e:
             raise RuntimeError(f"Google Calendar authentication failed: {e}")
