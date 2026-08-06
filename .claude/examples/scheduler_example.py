@@ -1,7 +1,7 @@
 """Example: Using the Scheduler Agent with Google Calendar."""
 
 import asyncio
-from scheduler import SchedulerAgent, SchedulerConfig
+from ..agents.team.scheduler import SchedulerAgent, SchedulerConfig
 
 
 async def main():
@@ -64,7 +64,7 @@ async def main():
     print("\n\n[Example 3] Using tools directly")
     print("-" * 70)
 
-    from ..tools.scheduler import SCHEDULER_TOOLS
+    from ..agents.tools.scheduler import SCHEDULER_TOOLS
 
     today = SCHEDULER_TOOLS["get_today"]()
     print(f"Today: {today['date']} ({today['weekday']})")
