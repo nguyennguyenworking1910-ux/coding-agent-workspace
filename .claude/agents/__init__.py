@@ -8,6 +8,7 @@ from .team import (
     DiagnosticianAgent,
     CoderAgent,
     GroupSalesManagerAgent,
+    SchedulerAgent,
 )
 from .tools import (
     ToolRegistry,
@@ -31,6 +32,7 @@ def get_agent(agent_name: str):
         "diagnostician": DiagnosticianAgent,
         "coder": CoderAgent,
         "group_sales_manager": GroupSalesManagerAgent,
+        "scheduler": SchedulerAgent,
     }
     agent_class = agents.get(agent_name)
     return agent_class() if agent_class else None
@@ -46,6 +48,7 @@ def list_agents() -> list:
         "diagnostician",
         "coder",
         "group_sales_manager",
+        "scheduler",
     ]
 
 

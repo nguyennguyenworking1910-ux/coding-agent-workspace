@@ -6,6 +6,7 @@ from .bug_fixer import BugFixerAgent
 from .diagnostician import DiagnosticianAgent
 from .coder import CoderAgent
 from .group_sales_manager import GroupSalesManagerAgent
+from .scheduler import SchedulerAgent
 
 __all__ = [
     "ReviewerAgent",
@@ -14,4 +15,5 @@ __all__ = [
     "DiagnosticianAgent",
     "CoderAgent",
     "GroupSalesManagerAgent",
+    "SchedulerAgent",
 ]

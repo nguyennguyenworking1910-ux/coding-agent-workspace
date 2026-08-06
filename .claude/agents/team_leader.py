@@ -13,6 +13,7 @@ from .team import (
     DiagnosticianAgent,
     CoderAgent,
     GroupSalesManagerAgent,
+    SchedulerAgent,
 )
 
 
@@ -34,6 +35,7 @@ class TeamLeader:
     - diagnostician: System analysis and diagnostics
     - coder: Implementation and execution
     - group_sales_manager: Resource orchestration
+    - scheduler: Calendar and scheduling management
     """
 
     SYSTEM_PROMPT = """You are the Team Leader orchestrating a specialized team of agents. Your role is to:
@@ -49,7 +51,8 @@ Team Members:
 - Bug Fixer: Issue resolution
 - Diagnostician: System analysis
 - Coder: Implementation
-- Group Sales Manager: Resource allocation"""
+- Group Sales Manager: Resource allocation
+- Scheduler: Calendar and task scheduling"""
 
     def __init__(self, config: Optional[TeamLeaderConfig] = None):
         """Initialize Team Leader with team members."""
@@ -68,6 +71,7 @@ Team Members:
             "diagnostician": DiagnosticianAgent(),
             "coder": CoderAgent(),
             "group_sales_manager": GroupSalesManagerAgent(),
+            "scheduler": SchedulerAgent(),
         }
 
         # Running tasks
