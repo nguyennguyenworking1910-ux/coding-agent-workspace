@@ -398,6 +398,63 @@ Team Leader (Coordinator)
 5. **Call agents directly** — use Team Leader to spawn them
 6. **Import from agents/ into tools/** — maintain acyclic dependencies
 7. **Commit .env files** or `settings.local.json` to git
+8. **Store `.md` files outside `.claude/documents/`** — ALL markdown documentation must go in the documents folder
+
+### 📝 Documentation Rules (CRITICAL)
+
+**Every `.md` file created in this system MUST be stored in `.claude/documents/`**
+
+This is a **non-negotiable rule** for system organization.
+
+#### ✅ What Goes in `.claude/documents/`
+- ✅ All feature guides (`{FEATURE}_GUIDE.md`)
+- ✅ Setup and configuration docs (`SETUP.md`, `CONFIG_GUIDE.md`)
+- ✅ Architecture and design docs (`ARCHITECTURE.md`)
+- ✅ Integration guides (`{SERVICE}_INTEGRATION.md`)
+- ✅ User guides and tutorials (`USER_GUIDE.md`, `TUTORIAL.md`)
+- ✅ API documentation (`API_DOCS.md`)
+- ✅ Troubleshooting guides (`TROUBLESHOOTING.md`)
+
+#### ❌ What DOESN'T Go in `.claude/documents/`
+- ❌ Code files (`.py`) — go in `agents/`, `tools/`, or `clients/`
+- ❌ Configuration files (`.json`, `.yaml`) — stay in their respective folders
+- ❌ Environment files (`.env`) — stay in client/agent folders
+- ❌ Command definitions (in `commands/`) — stay in their folders
+- ❌ Example files (in `examples/`) — stay in their folders
+
+#### 📋 Documentation Checklist
+
+When creating **ANY** new markdown file:
+
+1. ✅ **Save to `.claude/documents/{filename}.md`**
+2. ✅ **Add entry to `.claude/documents/README.md`** with description
+3. ✅ **Use clear, descriptive filename** (e.g., `GITHUB_INTEGRATION.md`, not `guide.md`)
+4. ✅ **Add proper markdown headings** and organization
+5. ✅ **Include examples** where applicable
+6. ✅ **Cross-link** to related documentation
+7. ✅ **Update this ARCHITECTURE.md** if adding a new category
+8. ✅ **Commit with message** referencing the documentation addition
+
+#### Example: Adding New Documentation
+
+```bash
+# Create new doc
+echo "# GitHub Integration Guide" > .claude/documents/GITHUB_INTEGRATION.md
+# Add content...
+
+# Update index
+# Edit .claude/documents/README.md to add:
+# - **[GITHUB_INTEGRATION.md](./GITHUB_INTEGRATION.md)** — GitHub API integration guide
+
+# Commit
+git add .claude/documents/GITHUB_INTEGRATION.md .claude/documents/README.md
+git commit -m "docs: Add GitHub integration guide"
+```
+
+#### Enforcement
+- **Code review:** Reject PRs with `.md` files outside `.claude/documents/`
+- **Agents:** Will not process documentation requests without proper location
+- **System check:** Run `find .claude -name "*.md" -not -path "./.claude/documents/*"` to validate
 
 ---
 
@@ -464,16 +521,44 @@ Team Leader (Coordinator)
 
 ---
 
+## 🚨 CRITICAL: All `.md` Files Go in `.claude/documents/`
+
+**THIS IS A NON-NEGOTIABLE RULE**
+
+Every markdown file created in this system, without exception, must be stored in `.claude/documents/`.
+
+| What | Where | Example |
+|------|-------|---------|
+| **Feature docs** | `.claude/documents/` | `GITHUB_INTEGRATION.md` |
+| **Setup guides** | `.claude/documents/` | `DATABASE_SETUP.md` |
+| **Architecture docs** | `.claude/documents/` | `ARCHITECTURE.md` |
+| **User guides** | `.claude/documents/` | `USER_GUIDE.md` |
+| **Troubleshooting** | `.claude/documents/` | `TROUBLESHOOTING.md` |
+
+**NOT here:**
+- ❌ Project root (except this reference)
+- ❌ Agent folders
+- ❌ Tool folders
+- ❌ Client folders
+- ❌ System folders
+
+**When adding documentation:**
+1. Create file in `.claude/documents/{name}.md`
+2. Update `.claude/documents/README.md`
+3. Commit with: `git add .claude/documents/` && `git commit -m "docs: Add {description}"`
+
+---
+
 ## Before Building Anything
 
 **All agents and developers MUST:**
 
-1. ✅ Read this ARCHITECTURE.md
+1. ✅ Read this ARCHITECTURE.md (especially the Documentation Rules section)
 2. ✅ Check existing agents/tools for similar functionality
 3. ✅ Determine which folder the new code belongs in
 4. ✅ Follow naming conventions
 5. ✅ Update `agents.json` with proper registration
-6. ✅ Document with examples if complex
+6. ✅ Document with examples if complex (in `.claude/documents/`)
 7. ✅ Keep this file updated if architecture changes
 
 ---
@@ -486,8 +571,9 @@ Team Leader (Coordinator)
 - Is there already a similar agent/tool I can extend?
 - Does this need to be registered in `agents.json`?
 - Are my imports following the dependency direction?
-- Have I documented this for future developers?
+- Have I documented this for future developers (in `.claude/documents/`)?
 - Does this follow the system's naming conventions?
+- **If creating documentation: Is it in `.claude/documents/`?** (CRITICAL)
 
 ---
 
