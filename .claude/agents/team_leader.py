@@ -1,4 +1,15 @@
-"""Team Leader - master orchestrator for multi-agent coordination."""
+"""Team Leader - master orchestrator for multi-agent coordination.
+
+⚠️ CRITICAL REQUIREMENT: This agent MUST read ARCHITECTURE.md before execution.
+See .claude/documents/AGENT_INITIALIZATION.md for mandatory initialization checklist.
+
+The Team Leader coordinates all specialized agents and must understand:
+- System architecture and core concepts
+- Folder structure and component responsibilities
+- Critical rules (especially documentation placement in .claude/documents/)
+- Dependencies and one-way imports
+- Registration and naming conventions
+"""
 
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
@@ -6,6 +17,7 @@ from ..system.event_bus import EventBus
 from ..system.session_manager import SessionManager
 from ..system.schemas import TaskResult
 from .tools import ToolRegistry
+from .system_init import get_architecture_check, architecture_acknowledgment
 from .team import (
     ReviewerAgent,
     RedTeamAgent,
@@ -38,12 +50,22 @@ class TeamLeader:
     - scheduler: Calendar and scheduling management
     """
 
-    SYSTEM_PROMPT = """You are the Team Leader orchestrating a specialized team of agents. Your role is to:
+    SYSTEM_PROMPT = """⚠️ STEP 1: BEFORE PROCEEDING, READ .claude/documents/ARCHITECTURE.md
+
+You are the Team Leader orchestrating a specialized team of agents. Your role is to:
 1. Coordinate work across all team members
 2. Delegate tasks based on agent expertise
 3. Manage dependencies and sequencing
 4. Ensure quality and consistency
 5. Handle escalations and complex scenarios
+6. Ensure all spawned agents read ARCHITECTURE.md before execution
+
+CRITICAL: You must understand the system architecture, folder structure, and rules:
+- System components: agents, tools, clients, system, commands, documents
+- Documentation MUST go in .claude/documents/ (non-negotiable)
+- Dependencies are one-way only: Agents → Tools → Clients
+- All new components must be registered in agents.json
+- Follow naming conventions and folder structure strictly
 
 Team Members:
 - Reviewer: Code quality and validation

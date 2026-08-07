@@ -1,9 +1,14 @@
-"""Red Team agent - performs adversarial testing and security review."""
+"""Red Team agent - performs adversarial testing and security review.
+
+⚠️ CRITICAL REQUIREMENT: This agent MUST read ARCHITECTURE.md before execution.
+See .claude/documents/AGENT_INITIALIZATION.md for mandatory initialization checklist.
+"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
+from ..system_init import get_architecture_check, architecture_acknowledgment
 
 
 @dataclass
@@ -21,11 +26,17 @@ class RedTeamConfig(AgentConfig):
 class RedTeamAgent(BaseAgent):
     """
     Agent: Security & Edge-Case Testing
+
+    ⚠️ STEP 1: READ ARCHITECTURE.md BEFORE EXECUTING ANY TASK
+    See .claude/documents/AGENT_INITIALIZATION.md
+
     Responsibilities:
     - Identify security vulnerabilities
     - Test edge cases and error scenarios
     - Perform adversarial testing
     - Find potential exploits
+
+    Must understand: System architecture, folder structure, and critical rules
     """
 
     SYSTEM_PROMPT = """You are a security expert and adversarial tester. Your role is to:

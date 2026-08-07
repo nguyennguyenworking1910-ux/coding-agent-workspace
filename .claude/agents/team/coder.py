@@ -1,9 +1,14 @@
-"""Coder agent - implements features and refactoring."""
+"""Coder agent - implements features and refactoring.
+
+⚠️ CRITICAL REQUIREMENT: This agent MUST read ARCHITECTURE.md before execution.
+See .claude/documents/AGENT_INITIALIZATION.md for mandatory initialization checklist.
+"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
+from ..system_init import get_architecture_check, architecture_acknowledgment
 
 
 @dataclass
@@ -21,11 +26,18 @@ class CoderConfig(AgentConfig):
 class CoderAgent(BaseAgent):
     """
     Agent: Implementation & Execution
+
+    ⚠️ STEP 1: READ ARCHITECTURE.md BEFORE EXECUTING ANY TASK
+    See .claude/documents/AGENT_INITIALIZATION.md
+
     Responsibilities:
     - Implement features and changes
     - Perform refactoring
     - Execute tasks
     - Ensure test coverage
+    - Follow folder structure and naming conventions
+
+    Must understand: System architecture, folder structure, and critical rules
     """
 
     SYSTEM_PROMPT = """You are an expert software engineer and architect. Your role is to:

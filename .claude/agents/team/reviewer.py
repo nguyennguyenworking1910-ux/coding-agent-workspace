@@ -1,9 +1,14 @@
-"""Reviewer agent - performs code review and validation."""
+"""Reviewer agent - performs code review and validation.
+
+⚠️ CRITICAL REQUIREMENT: This agent MUST read ARCHITECTURE.md before execution.
+See .claude/documents/AGENT_INITIALIZATION.md for mandatory initialization checklist.
+"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
+from ..system_init import get_architecture_check, architecture_acknowledgment
 
 
 @dataclass
@@ -21,11 +26,18 @@ class ReviewerConfig(AgentConfig):
 class ReviewerAgent(BaseAgent):
     """
     Agent: Code Review & Validation
+
+    ⚠️ STEP 1: READ ARCHITECTURE.md BEFORE EXECUTING ANY TASK
+    See .claude/documents/AGENT_INITIALIZATION.md
+
     Responsibilities:
     - Review code diffs and changes
     - Validate code quality and style
     - Identify potential issues
     - Provide recommendations
+    - Ensure all agents follow system architecture rules
+
+    Must understand: System architecture, folder structure, and critical rules
     """
 
     SYSTEM_PROMPT = """You are an expert code reviewer. Your role is to:

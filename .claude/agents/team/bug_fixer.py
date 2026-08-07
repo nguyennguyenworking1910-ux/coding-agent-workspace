@@ -1,8 +1,13 @@
-"""Bug Fixer agent - identifies and fixes issues."""
+"""Bug Fixer agent - identifies and fixes issues.
+
+⚠️ CRITICAL REQUIREMENT: This agent MUST read ARCHITECTURE.md before execution.
+See .claude/documents/AGENT_INITIALIZATION.md for mandatory initialization checklist.
+"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from ..base_agent import BaseAgent, AgentConfig
+from ..system_init import get_architecture_check, architecture_acknowledgment
 from ...system.schemas import TaskResult
 
 
@@ -21,11 +26,18 @@ class BugFixerConfig(AgentConfig):
 class BugFixerAgent(BaseAgent):
     """
     Agent: Bug Identification & Fix
+
+    ⚠️ STEP 1: READ ARCHITECTURE.md BEFORE EXECUTING ANY TASK
+    See .claude/documents/AGENT_INITIALIZATION.md
+
     Responsibilities:
     - Analyze test failures and errors
     - Identify root causes
     - Propose and implement fixes
     - Verify fixes resolve issues
+
+    Must understand: System architecture, folder structure, and critical rules
+    especially documentation placement (.md files go in .claude/documents/)
     """
 
     SYSTEM_PROMPT = """You are an expert debugger and problem solver. Your role is to:
