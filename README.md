@@ -52,7 +52,7 @@ coding-agent-workspace --help
 Start with these documents in order:
 
 1. **QUICK_START.md** (5 min) - Get running immediately
-2. **ARCHITECTURE.md** (10 min) - Understand system design
+2. **[.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md)** (10 min) - Understand system design
 3. **FILE_REFERENCE.md** (15 min) - Learn what each file does
 4. **CODEBASE_ANALYSIS.md** (20 min) - Deep dive into implementation
 
@@ -165,12 +165,11 @@ coding-agent-workspace/
 │   ├── change_validator.py       # Validation
 │   └── [others]
 │
-├── Documentation
-│   ├── README.md                 # This file
-│   ├── QUICK_START.md           # Getting started
+├── .claude/documents/           # Documentation
+│   ├── README.md                 # Documentation index
 │   ├── ARCHITECTURE.md          # System design
-│   ├── FILE_REFERENCE.md        # Per-file docs
-│   └── CODEBASE_ANALYSIS.md     # Implementation
+│   ├── SETUP.md                 # Setup & configuration
+│   └── SCHEDULE_CLI.md          # Schedule agent guide
 │
 ├── pyproject.toml                # Project config
 └── .agent-workspace/             # Output (created at runtime)
@@ -502,7 +501,7 @@ Created by Nguyen Le Dang Nguyen (nguyen.nguyen30@momo.vn)
 
 ## Quick Links
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - System design and architecture
+- [.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md) - System design and architecture
 - [QUICKSTART.md](./QUICKSTART.md) - Detailed usage guide
 - [AGENTS.md](./AGENTS.md) - Agent descriptions and capabilities
 
@@ -510,7 +509,7 @@ Created by Nguyen Le Dang Nguyen (nguyen.nguyen30@momo.vn)
 
 For issues or questions:
 1. Check [QUICKSTART.md](./QUICKSTART.md) for common tasks
-2. Review [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details
+2. Review [.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md) for technical details
 3. Check agent output in tmux for error messages
 
 **Version:** 0.3.0 (Tmux-based, Modernized)  

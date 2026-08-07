@@ -20,7 +20,7 @@ This folder contains all system documentation, setup guides, and reference mater
   - Troubleshooting
 
 ### Architecture & Guidelines
-- **[../ARCHITECTURE.md](../ARCHITECTURE.md)** — System architecture and development guidelines (project root)
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — System architecture and development guidelines
   - System overview and components
   - Directory structure and folder responsibilities
   - Rules for building and adding files
@@ -36,14 +36,14 @@ This folder contains all system documentation, setup guides, and reference mater
 Start with **SCHEDULE_CLI.md** to understand how to use the schedule agent.
 
 ### For Developers Adding Features
-1. Read **[../ARCHITECTURE.md](../ARCHITECTURE.md)** first
+1. Read **[ARCHITECTURE.md](./ARCHITECTURE.md)** first
 2. Follow the appropriate checklist (adding agent/tool/client)
 3. Refer to **SETUP.md** if integrating external services
 4. Update documentation here as you add features
 
 ### For Agents
 The Team Leader and all specialized agents should read:
-1. **[../ARCHITECTURE.md](../ARCHITECTURE.md)** before spawning new agents or modifying the system
+1. **[ARCHITECTURE.md](./ARCHITECTURE.md)** before spawning new agents or modifying the system
 2. Relevant documentation (SETUP.md, SCHEDULE_CLI.md) for their domain
 
 ---
