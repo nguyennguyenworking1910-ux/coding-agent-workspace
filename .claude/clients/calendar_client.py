@@ -43,7 +43,7 @@ def _scope_help(auth_source: str) -> str:
     """Actionable guidance for a 403-insufficient-scopes failure.
 
     Kept to two lines: this can surface several times in one run, and the full
-    setup walkthrough lives in .claude/clients/SETUP.md.
+    setup walkthrough lives in .claude/documents/SETUP.md.
     """
     if auth_source == "adc":
         return (
@@ -174,7 +174,7 @@ class GoogleCalendarClient:
             "   - Create service account in Google Cloud\n"
             f"   - Download JSON key to {config.SERVICE_ACCOUNT_FILE}\n"
             "   - Share calendar with service account email\n\n"
-            "See .claude/clients/SETUP.md for detailed instructions."
+            "See .claude/documents/SETUP.md for detailed instructions."
         )
 
     def _authenticate(self) -> None:

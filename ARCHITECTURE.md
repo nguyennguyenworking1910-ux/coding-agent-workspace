@@ -29,8 +29,11 @@ Root configuration and orchestration for all agents and tools.
 ├── agents.json              [MASTER CONFIG] Defines all agents, tools, permissions
 ├── settings.json            [SETTINGS] Claude Code harness configuration
 ├── settings.local.json      [LOCAL SETTINGS] User-specific overrides
-├── ARCHITECTURE.md          [THIS FILE] System design & guidelines
-├── SCHEDULE_CLI.md          [DOCUMENTATION] Schedule agent usage guide
+│
+├── documents/               [DOCUMENTATION FOLDER]
+│   ├── README.md            Index of all documentation
+│   ├── SETUP.md             Credential setup & configuration guide
+│   └── SCHEDULE_CLI.md      Schedule agent usage guide
 │
 ├── agents/                  [AGENT IMPLEMENTATIONS]
 │   ├── __init__.py          Package initialization
@@ -152,6 +155,23 @@ class GoogleCalendarClient:
 - ✅ **Store** batch operations or migrations
 - ❌ **Don't store** agent logic or business tools (use `agents/` or `tools/`)
 - ❌ **Don't hardcode** agent-specific behavior
+
+---
+
+### `documents/` — Documentation & Guides
+**Contains:** All system documentation, setup guides, and reference materials.
+
+**Rules:**
+- ✅ **Store** all `.md` documentation files here
+- ✅ **One document = one file** (e.g., `SETUP.md`, `SCHEDULE_CLI.md`)
+- ✅ **Maintain a README.md** that indexes all documentation
+- ✅ **Keep updated** as features change
+- ❌ **Don't store** code or configuration (use appropriate folders)
+
+**Examples:**
+- `SETUP.md` — Credential setup and initialization guides
+- `SCHEDULE_CLI.md` — Feature-specific usage guides
+- `{FEATURE}_GUIDE.md` — Documentation for new features
 
 ---
 
