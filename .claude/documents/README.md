@@ -4,7 +4,24 @@ This folder contains all system documentation, setup guides, and reference mater
 
 ## 📚 Documentation Index
 
+### ⚠️ MANDATORY FOR ALL AGENTS
+- **[AGENT_INITIALIZATION.md](./AGENT_INITIALIZATION.md)** — **REQUIRED reading before any agent executes a task**
+  - Mandatory initialization checklist
+  - What all agents must understand
+  - Step-by-step initialization flow
+  - Critical rules quick reference
+  - Acknowledgment template
+
 ### Core System Documentation
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — System architecture and development guidelines
+  - System overview and components
+  - Directory structure and folder responsibilities
+  - Critical documentation storage rules
+  - Rules for building and adding files
+  - Building checklists for new agents/tools/clients
+  - System orchestration and team hierarchy
+  - Best practices and naming conventions
+
 - **[SETUP.md](./SETUP.md)** — Credential setup and configuration guide for Google Calendar integration
   - OAuth Desktop App setup
   - Service Account configuration
@@ -19,15 +36,6 @@ This folder contains all system documentation, setup guides, and reference mater
   - Architecture overview
   - Troubleshooting
 
-### Architecture & Guidelines
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — System architecture and development guidelines
-  - System overview and components
-  - Directory structure and folder responsibilities
-  - Rules for building and adding files
-  - Building checklists for new agents/tools/clients
-  - System orchestration and team hierarchy
-  - Best practices and naming conventions
-
 ---
 
 ## 📖 How to Use This Documentation
@@ -41,10 +49,21 @@ Start with **SCHEDULE_CLI.md** to understand how to use the schedule agent.
 3. Refer to **SETUP.md** if integrating external services
 4. Update documentation here as you add features
 
-### For Agents
-The Team Leader and all specialized agents should read:
-1. **[ARCHITECTURE.md](./ARCHITECTURE.md)** before spawning new agents or modifying the system
-2. Relevant documentation (SETUP.md, SCHEDULE_CLI.md) for their domain
+### For Agents (MANDATORY)
+**⚠️ IMPORTANT: All agents MUST follow this sequence BEFORE executing any task:**
+
+1. **[AGENT_INITIALIZATION.md](./AGENT_INITIALIZATION.md)** — Read this FIRST (initialization checklist)
+2. **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Understand system design and critical rules
+3. **Acknowledge** completion of initialization checklist
+4. Execute assigned task
+
+**Agents that must do this:**
+- Team Leader (before orchestrating)
+- Scheduler agent (before scheduling)
+- All specialized agents (before executing)
+- Any new agents (before first execution)
+
+See **AGENT_INITIALIZATION.md** for the complete initialization flow and acknowledgment template.
 
 ---
 

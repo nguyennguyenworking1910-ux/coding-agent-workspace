@@ -1,4 +1,8 @@
-"""Scheduler agent - LLM-powered Google Calendar management."""
+"""Scheduler agent - LLM-powered Google Calendar management.
+
+⚠️ IMPORTANT: This agent enforces reading ARCHITECTURE.md before execution.
+All agents must understand system architecture, folder structure, and rules.
+"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
@@ -8,6 +12,7 @@ import json
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
 from ..tools.scheduler import SCHEDULER_TOOLS, get_calendar_client
+from ..system_init import get_architecture_check, architecture_acknowledgment
 
 
 @dataclass
@@ -76,6 +81,10 @@ including: event name, date, time, and duration."""
     async def execute(self, task: Dict[str, Any]) -> TaskResult:
         """
         Execute scheduling task with Google Calendar integration.
+
+        ⚠️ REQUIRED STEP 1: Read ARCHITECTURE.md
+        Before proceeding, all agents must read and understand the system architecture,
+        including folder structure, component responsibilities, and critical rules.
 
         Input schema:
         {
