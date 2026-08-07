@@ -62,8 +62,12 @@ including: event name, date, time, and duration."""
         self.reasoning_steps: List[str] = []
         self.calendar_client = None
 
-    def _init_calendar(self, calendar_id: str = "primary", timezone: str = "Asia/Ho_Chi_Minh") -> None:
-        """Initialize calendar client."""
+    def _init_calendar(
+        self,
+        calendar_id: Optional[str] = None,
+        timezone: Optional[str] = None,
+    ) -> None:
+        """Initialize calendar client (None defers to config/env defaults)."""
         try:
             self.calendar_client = get_calendar_client(calendar_id, timezone)
         except Exception as e:
@@ -101,8 +105,9 @@ including: event name, date, time, and duration."""
         """
         try:
             request = task.get("request", "")
-            timezone = task.get("timezone", "Asia/Ho_Chi_Minh")
-            calendar_id = task.get("calendar_id", "primary")
+            # None -> client falls back to CALENDAR_TIMEZONE / GOOGLE_CALENDAR_ID.
+            timezone = task.get("timezone")
+            calendar_id = task.get("calendar_id")
 
             if not request:
                 return TaskResult(
@@ -123,7 +128,7 @@ including: event name, date, time, and duration."""
                 output={}
             )
 
-    async def _process_request(self, request: str, timezone: str) -> TaskResult:
+    async def _process_request(self, request: str, timezone: Optional[str] = None) -> TaskResult:
         """Process a scheduling request step by step."""
         result = {
             "request": request,
@@ -192,8 +197,16 @@ including: event name, date, time, and duration."""
                 self.reasoning_steps.append("Event created successfully!")
             else:
                 result["conflicts"] = event_result.get("conflicts", [])
-                result["message"] = event_result.get("message", "Failed to create event")
-                self.reasoning_steps.append(f"Event creation failed: {result['message']}")
+                # Conflicts set "message"; API failures set "error" - surface either,
+                # otherwise the real cause (e.g. insufficient scopes) is lost.
+                result["message"] = (
+                    event_result.get("message")
+                    or event_result.get("error")
+                    or "Failed to create event"
+                )
+                # First line only - the full guidance is already in result["message"].
+                summary_line = result["message"].splitlines()[0].rstrip(" :")
+                self.reasoning_steps.append(f"Event creation failed: {summary_line}")
 
             result["reasoning"] = self.reasoning_steps
             return TaskResult(status="success", output=result)

@@ -10,10 +10,13 @@ _calendar_client: Optional[GoogleCalendarClient] = None
 
 
 def get_calendar_client(
-    calendar_id: str = "primary",
-    timezone: str = "Asia/Ho_Chi_Minh"
+    calendar_id: Optional[str] = None,
+    timezone: Optional[str] = None,
 ) -> GoogleCalendarClient:
-    """Get or create the global calendar client."""
+    """Get or create the global calendar client.
+
+    Passing None defers to the client's config/env defaults.
+    """
     global _calendar_client
     if _calendar_client is None:
         _calendar_client = GoogleCalendarClient(calendar_id=calendar_id, timezone=timezone)

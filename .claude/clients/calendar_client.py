@@ -5,6 +5,12 @@ Uses the same credential resolution order as workspace/schedule-management-agent
 2. credentials.json (Desktop OAuth app - initiates consent flow)
 3. service_account.json (Service account with shared calendar)
 4. gcloud ADC (Application Default Credentials - if gcloud CLI configured)
+
+Step 4 is what lets the agent run with no credential files at all. Note that plain
+`gcloud auth application-default login` does NOT grant the Calendar scope; see
+`config.ADC_LOGIN_COMMAND`. Credentials come back fine in that case and only fail
+later with an opaque 403, so scope failures are translated into an actionable
+message rather than surfacing raw.
 """
 
 import os
@@ -12,9 +18,11 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import json
 
+from . import config
+
 try:
     from google.auth.transport.requests import Request
-    from google.oauth2.service_account import Credentials
+    from google.oauth2.service_account import Credentials as ServiceAccountCredentials
     from google.oauth2.credentials import Credentials as OAuth2Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     import google.auth
@@ -23,6 +31,29 @@ try:
     GOOGLE_API_AVAILABLE = True
 except ImportError:
     GOOGLE_API_AVAILABLE = False
+
+
+def _is_scope_error(exc: Exception) -> bool:
+    """True if `exc` looks like Google rejecting the token's granted scopes."""
+    text = str(exc).lower()
+    return "insufficient" in text and ("scope" in text or "permission" in text)
+
+
+def _scope_help(auth_source: str) -> str:
+    """Actionable guidance for a 403-insufficient-scopes failure.
+
+    Kept to two lines: this can surface several times in one run, and the full
+    setup walkthrough lives in .claude/clients/SETUP.md.
+    """
+    if auth_source == "adc":
+        return (
+            "gcloud ADC lacks the Google Calendar scope (403). Re-authorize with:\n"
+            f"  {config.ADC_LOGIN_COMMAND}"
+        )
+    return (
+        "The credentials in use were not granted the Google Calendar scope "
+        f"({config.SCOPES[0]}). Re-authorize with that scope included."
+    )
 
 
 class GoogleCalendarClient:
@@ -35,18 +66,28 @@ class GoogleCalendarClient:
     4. gcloud ADC (Application Default Credentials)
     """
 
-    SCOPES = ["https://www.googleapis.com/auth/calendar"]
+    SCOPES = config.SCOPES
 
-    def __init__(self, calendar_id: str = "primary", timezone: str = "Asia/Ho_Chi_Minh"):
+    def __init__(
+        self,
+        calendar_id: Optional[str] = None,
+        timezone: Optional[str] = None,
+    ):
         """Initialize Google Calendar client.
 
         Args:
-            calendar_id: Calendar ID (default: primary/personal calendar)
-            timezone: Timezone for calendar operations
+            calendar_id: Calendar ID (defaults to config.CALENDAR_ID / env)
+            timezone: Timezone for calendar operations (defaults to config.TIMEZONE / env)
         """
-        self.calendar_id = calendar_id
-        self.timezone = timezone
+        self.calendar_id = calendar_id or config.CALENDAR_ID
+        self.timezone = timezone or config.TIMEZONE
         self.service = None
+        # Which of the four sources actually produced credentials; used to tailor
+        # the guidance when the API later rejects the token's scopes.
+        self.auth_source: Optional[str] = None
+        # A single scheduling run hits the API several times; without this the same
+        # multi-line guidance would be printed once per call.
+        self._warned: set = set()
         self._authenticate()
 
     def _get_credentials(self):
@@ -58,52 +99,58 @@ class GoogleCalendarClient:
             )
 
         # 1. Try cached OAuth token (fastest path)
-        if os.path.exists("token.json"):
+        if config.TOKEN_FILE.exists():
             try:
                 credentials = OAuth2Credentials.from_authorized_user_file(
-                    "token.json",
+                    str(config.TOKEN_FILE),
                     scopes=self.SCOPES
                 )
                 if credentials and credentials.valid:
+                    self.auth_source = "token"
                     return credentials
                 if credentials and credentials.expired and credentials.refresh_token:
                     credentials.refresh(Request())
                     # Update cached token
-                    with open("token.json", "w") as token:
-                        token.write(credentials.to_json())
+                    config.TOKEN_FILE.write_text(credentials.to_json(), encoding="utf-8")
+                    self.auth_source = "token"
                     return credentials
             except Exception as e:
-                print(f"Warning: token.json is invalid: {e}")
+                print(f"Warning: {config.TOKEN_FILE.name} is invalid: {e}")
 
         # 2. Try Desktop OAuth app (credentials.json)
-        if os.path.exists("credentials.json"):
+        if config.CREDENTIALS_FILE.exists():
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    "credentials.json",
+                    str(config.CREDENTIALS_FILE),
                     scopes=self.SCOPES
                 )
+                # port=0 lets the OS pick a free port for the local consent redirect.
                 credentials = flow.run_local_server(port=0)
                 # Cache token for next run
-                with open("token.json", "w") as token:
-                    token.write(credentials.to_json())
+                config.TOKEN_FILE.write_text(credentials.to_json(), encoding="utf-8")
+                self.auth_source = "credentials"
                 return credentials
             except Exception as e:
-                print(f"Warning: credentials.json flow failed: {e}")
+                print(f"Warning: {config.CREDENTIALS_FILE.name} flow failed: {e}")
 
         # 3. Try service account
-        if os.path.exists("service_account.json"):
+        if config.SERVICE_ACCOUNT_FILE.exists():
             try:
-                credentials = Credentials.from_service_account_file(
-                    "service_account.json",
+                credentials = ServiceAccountCredentials.from_service_account_file(
+                    str(config.SERVICE_ACCOUNT_FILE),
                     scopes=self.SCOPES
                 )
+                self.auth_source = "service_account"
                 return credentials
             except Exception as e:
-                print(f"Warning: service_account.json failed: {e}")
+                print(f"Warning: {config.SERVICE_ACCOUNT_FILE.name} failed: {e}")
 
-        # 4. Try gcloud Application Default Credentials
+        # 4. Try gcloud Application Default Credentials.
+        # This is the "no credential files needed" path. It succeeds whenever gcloud
+        # is logged in - the Calendar scope is only checked server-side, on first call.
         try:
             credentials, _ = google.auth.default(scopes=self.SCOPES)
+            self.auth_source = "adc"
             return credentials
         except DefaultCredentialsError:
             pass
@@ -112,22 +159,21 @@ class GoogleCalendarClient:
         raise FileNotFoundError(
             "No Google Calendar credentials found.\n\n"
             "Credential resolution order (tried in this order):\n"
-            "1. token.json - Cached OAuth token (auto-refresh)\n"
-            "2. credentials.json - Desktop OAuth app consent flow\n"
-            "3. service_account.json - Service account with shared calendar\n"
-            "4. gcloud ADC - gcloud auth application-default login\n\n"
+            f"1. {config.TOKEN_FILE} - Cached OAuth token (auto-refresh)\n"
+            f"2. {config.CREDENTIALS_FILE} - Desktop OAuth app consent flow\n"
+            f"3. {config.SERVICE_ACCOUNT_FILE} - Service account with shared calendar\n"
+            "4. gcloud ADC - Application Default Credentials\n\n"
             "Options to set up:\n"
-            "A. OAuth Desktop App (Recommended):\n"
+            "A. gcloud CLI (no credential files needed):\n"
+            f"   {config.ADC_LOGIN_COMMAND}\n\n"
+            "B. OAuth Desktop App:\n"
             "   - Create in Google Cloud Console\n"
-            "   - Download credentials.json to .claude/clients/\n"
+            f"   - Download credentials.json to {config.BASE_DIR}\n"
             "   - First run will prompt for browser consent\n\n"
-            "B. Service Account (Automation):\n"
+            "C. Service Account (Automation):\n"
             "   - Create service account in Google Cloud\n"
-            "   - Download JSON key to .claude/clients/service_account.json\n"
+            f"   - Download JSON key to {config.SERVICE_ACCOUNT_FILE}\n"
             "   - Share calendar with service account email\n\n"
-            "C. gcloud CLI (System-wide):\n"
-            "   - Install gcloud: https://cloud.google.com/sdk/docs/install\n"
-            "   - Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/calendar\n\n"
             "See .claude/clients/SETUP.md for detailed instructions."
         )
 
@@ -138,6 +184,40 @@ class GoogleCalendarClient:
             self.service = build("calendar", "v3", credentials=credentials)
         except Exception as e:
             raise RuntimeError(f"Google Calendar authentication failed: {e}")
+
+    def _describe_error(self, exc: Exception) -> str:
+        """Render an API error, expanding scope rejections into a fix."""
+        if _is_scope_error(exc):
+            return _scope_help(self.auth_source or "unknown")
+        return str(exc)
+
+    def _warn(self, prefix: str, exc: Exception) -> None:
+        """Print an API warning, printing any given explanation only once."""
+        message = self._describe_error(exc)
+        if message in self._warned:
+            first_line = message.splitlines()[0]
+            print(f"{prefix}: {first_line} (see above)")
+            return
+        self._warned.add(message)
+        print(f"{prefix}: {message}")
+
+    def verify_access(self) -> Dict[str, Any]:
+        """Cheaply confirm the resolved credentials can actually reach Calendar.
+
+        Returns a dict with `ok`, the `auth_source` that was used, and on failure a
+        human-readable `error` (with the gcloud fix when scopes are the problem).
+        """
+        result: Dict[str, Any] = {"ok": False, "auth_source": self.auth_source}
+        if not self.service:
+            result["error"] = "Calendar client not initialized"
+            return result
+        try:
+            self.service.calendarList().list(maxResults=1).execute()
+            result["ok"] = True
+            return result
+        except Exception as e:
+            result["error"] = self._describe_error(e)
+            return result
 
     def get_today(self) -> Dict[str, Any]:
         """Get today's date and day of week.
@@ -198,7 +278,7 @@ class GoogleCalendarClient:
                 for event in events
             ]
         except Exception as e:
-            print(f"Error fetching events: {e}")
+            self._warn("Error fetching events", e)
             return []
 
     def find_free_slots(
@@ -341,7 +421,7 @@ class GoogleCalendarClient:
             return {
                 "created": False,
                 "reason": "error",
-                "error": str(e),
+                "error": self._describe_error(e),
             }
 
     def list_calendars(self) -> List[Dict[str, Any]]:
@@ -365,5 +445,5 @@ class GoogleCalendarClient:
                 for cal in calendars
             ]
         except Exception as e:
-            print(f"Error listing calendars: {e}")
+            self._warn("Error listing calendars", e)
             return []

@@ -6,7 +6,43 @@ The SchedulerAgent manages your Google Calendar using plain English requests.
 
 ### 1. Set Up Google Calendar API
 
-#### Option A: OAuth2 Desktop App (Recommended)
+Credentials are resolved in this order, and the first one that works wins:
+
+| # | Source | Location |
+|---|--------|----------|
+| 1 | Cached OAuth token | `.claude/clients/token.json` |
+| 2 | Desktop OAuth app | `.claude/clients/credentials.json` |
+| 3 | Service account | `.claude/clients/service_account.json` |
+| 4 | gcloud ADC | `~/AppData/Roaming/gcloud/application_default_credentials.json` |
+
+All paths are anchored at `.claude/clients/`, so they resolve identically no matter
+which directory you launch the agent from. Override any of them via `.env`
+(see `.env.example`).
+
+#### Option A: gcloud ADC — no credential files needed (Recommended)
+
+If you already use the gcloud CLI, the agent needs no JSON files at all. But the
+Calendar scope must be granted explicitly — a plain
+`gcloud auth application-default login` only carries cloud-platform scopes and the
+Calendar API will reject it with **403 insufficient authentication scopes**.
+
+```bash
+gcloud auth application-default login \
+  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/calendar
+```
+
+Verify it worked:
+
+```python
+from claude.clients import GoogleCalendarClient
+print(GoogleCalendarClient().verify_access())
+# {'ok': True, 'auth_source': 'adc'}
+```
+
+> On Windows, `gcloud` may not be on `PATH`. It ships at
+> `%LOCALAPPDATA%\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd`.
+
+#### Option B: OAuth2 Desktop App
 
 1. **Create a Google Cloud Project**
    ```
@@ -22,25 +58,25 @@ The SchedulerAgent manages your Google Calendar using plain English requests.
    - Go to APIs & Services → Credentials
    - Click "Create Credentials" → "OAuth 2.0 Desktop Application"
    - Download the JSON file
-   - Rename to `credentials.json` in `.claude/agents/team/`
+   - Rename to `credentials.json` in `.claude/clients/`
 
 4. **First-time Authentication**
    ```python
-   from claude.agents.team.calendar_client import GoogleCalendarClient
-   
+   from claude.clients import GoogleCalendarClient
+
    # This will open a browser for OAuth consent
    client = GoogleCalendarClient()
-   
-   # Token is cached in token.json for future runs
+
+   # Token is cached in .claude/clients/token.json for future runs
    ```
 
-#### Option B: Service Account (For Automation)
+#### Option C: Service Account (For Automation)
 
 1. **Create Service Account**
    - Go to APIs & Services → Credentials
    - Click "Create Credentials" → "Service Account"
    - Create a key (JSON format)
-   - Rename to `service_account.json` in `.claude/agents/team/`
+   - Rename to `service_account.json` in `.claude/clients/`
 
 2. **Share Calendar with Service Account**
    - Copy the service account email
@@ -50,22 +86,29 @@ The SchedulerAgent manages your Google Calendar using plain English requests.
 ### 2. Install Dependencies
 
 ```bash
-pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client
+pip install -r .claude/agents/requirements.txt
 ```
 
-### 3. Configure Environment
+### 3. Configure Environment (optional)
 
-Copy `.env.example` to `.env`:
+Every setting has a working default; you only need `.env` to override one.
 
 ```bash
-cp .claude/agents/team/.env.example .claude/agents/team/.env
+cp .claude/clients/.env.example .claude/clients/.env
 ```
 
-Edit `.env` if needed:
 ```env
 GOOGLE_CALENDAR_ID=primary
 CALENDAR_TIMEZONE=Asia/Ho_Chi_Minh
+
+# Point at credential files elsewhere (relative paths resolve against .claude/clients/)
+# GOOGLE_CALENDAR_CREDENTIALS=credentials.json
+# GOOGLE_CALENDAR_TOKEN=token.json
+# GOOGLE_CALENDAR_SERVICE_ACCOUNT=service_account.json
 ```
+
+Loading `.env` requires `python-dotenv`; without it the defaults and real environment
+variables still apply.
 
 ## Usage
 
@@ -162,10 +205,28 @@ Creates a calendar event.
 
 ## Troubleshooting
 
+### "Insufficient authentication scopes" / 403 Error
+
+The most common failure when running on gcloud ADC. You are authenticated, but the
+token was never granted the Calendar scope. Fix:
+
+```bash
+gcloud auth application-default login \
+  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/calendar
+```
+
+`verify_access()` reports this explicitly rather than letting the raw 403 surface:
+
+```python
+from claude.clients import GoogleCalendarClient
+GoogleCalendarClient().verify_access()
+```
+
 ### "No credentials found" Error
 
-Ensure one of these files exists in `.claude/agents/team/`:
-- `credentials.json` (OAuth2)
+All four sources came up empty. Either run the gcloud command above, or place one of
+these in `.claude/clients/`:
+- `credentials.json` (OAuth2 Desktop app)
 - `service_account.json` (Service Account)
 - `token.json` (Cached OAuth token)
 
@@ -180,11 +241,15 @@ The agent checks a 30-minute buffer. Adjust the time or use `force=true`.
 ## Architecture
 
 ```
-SchedulerAgent
-├── scheduler.py          # Main agent logic
-├── calendar_client.py    # Google Calendar API wrapper
-├── scheduler_tools.py    # Tool implementations
-└── credentials.json      # OAuth2 credentials
+.claude/
+├── agents/
+│   ├── team/scheduler.py                 # Main agent logic
+│   └── tools/scheduler/scheduler_tools.py # Tool implementations
+└── clients/
+    ├── config.py            # Credential paths + calendar settings (env-driven)
+    ├── calendar_client.py   # Google Calendar API wrapper
+    ├── .env                 # Optional overrides (gitignored)
+    └── credentials.json     # Optional — ADC works without it (gitignored)
 ```
 
 ## Team Integration
