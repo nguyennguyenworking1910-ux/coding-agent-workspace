@@ -7,7 +7,7 @@
       "enabled": true,
       "type": "coordinator",
       "tools": ["thought"],
-      "canSpawn": ["diagnostician", "bug_fixer", "reviewer", "group_sale_manager"],
+      "canSpawn": ["diagnostician", "bug_fixer", "reviewer", "group_sale_manager", "scheduler"],
       "permissions": "read-only"
     },
     {
@@ -56,6 +56,27 @@
         "get_sales_summary",
         "identify_top_groups",
         "evaluate_group_performance"
+      ]
+    },
+    {
+      "id": "scheduler",
+      "name": "Scheduler",
+      "description": "Schedules tasks and meetings on Google Calendar with natural language understanding",
+      "enabled": true,
+      "type": "calendar_manager",
+      "tools": ["thought", "google_calendar"],
+      "permissions": "write",
+      "calendar_access": {
+        "enabled": true,
+        "timezone": "Asia/Ho_Chi_Minh",
+        "operations": ["list_events", "create_event", "update_event", "delete_event", "search_events", "suggest_time"]
+      },
+      "capabilities": [
+        "schedule_tasks",
+        "book_meetings",
+        "find_available_slots",
+        "detect_conflicts",
+        "parse_natural_language_requests"
       ]
     }
   ],
@@ -256,6 +277,41 @@
         {
           "name": "get_statistics",
           "description": "Calculate statistics from results"
+        }
+      ]
+    },
+    {
+      "id": "google_calendar",
+      "name": "Google Calendar Tool",
+      "description": "Create, list, update, and manage Google Calendar events via Claude AI MCP",
+      "type": "calendar_access",
+      "enabled": true,
+      "mcp": true,
+      "provider": "claude_ai",
+      "methods": [
+        {
+          "name": "list_events",
+          "description": "List events on a calendar with optional time filters"
+        },
+        {
+          "name": "create_event",
+          "description": "Create a new event on the calendar"
+        },
+        {
+          "name": "update_event",
+          "description": "Update an existing event"
+        },
+        {
+          "name": "delete_event",
+          "description": "Delete an event from the calendar"
+        },
+        {
+          "name": "search_events",
+          "description": "Search for events matching criteria"
+        },
+        {
+          "name": "suggest_time",
+          "description": "Find available time slots for meetings"
         }
       ]
     }
