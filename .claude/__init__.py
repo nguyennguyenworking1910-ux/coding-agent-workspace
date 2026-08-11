@@ -1,13 +1,6 @@
 """Claude agent and tool system."""
 
 from .agents import (
-    TeamLeaderAgent,
-    ReviewerAgent,
-    RedTeamAgent,
-    BugFixerAgent,
-    DiagnosticianAgent,
-    CoderAgent,
-    GroupSalesManagerAgent,
     SchedulerAgent,
     get_agent,
     list_agents,
@@ -15,13 +8,6 @@ from .agents import (
 )
 
 __all__ = [
-    "TeamLeaderAgent",
-    "ReviewerAgent",
-    "RedTeamAgent",
-    "BugFixerAgent",
-    "DiagnosticianAgent",
-    "CoderAgent",
-    "GroupSalesManagerAgent",
     "SchedulerAgent",
     "get_agent",
     "list_agents",

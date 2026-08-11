@@ -1,15 +1,15 @@
-"""Multi-agent orchestration system."""
+"""Agent implementations.
 
-from .team_leader import TeamLeader
-from .team import (
-    ReviewerAgent,
-    RedTeamAgent,
-    BugFixerAgent,
-    DiagnosticianAgent,
-    CoderAgent,
-    GroupSalesManagerAgent,
-    SchedulerAgent,
-)
+The specialist personas — reviewer, red-team, bug-fixer, diagnostician, coder,
+group-sales-manager, scheduler — are defined as Claude Code subagents in
+``.claude/agents/*.md``. That is what the harness discovers and dispatches.
+
+The Python below is only for what has to run outside a Claude Code session:
+currently the Scheduler, which ``.claude/schedule.py`` drives directly against
+the Google Calendar API.
+"""
+
+from .team import SchedulerAgent
 from .tools import (
     ToolRegistry,
     get_registry,
@@ -18,20 +18,10 @@ from .tools import (
     list_tools,
 )
 
-# Alias for compatibility
-TeamLeaderAgent = TeamLeader
-
 
 def get_agent(agent_name: str):
-    """Get an agent by name from the team."""
+    """Get a Python agent by name, or None if there isn't one."""
     agents = {
-        "team_leader": TeamLeader,
-        "reviewer": ReviewerAgent,
-        "red_team": RedTeamAgent,
-        "bug_fixer": BugFixerAgent,
-        "diagnostician": DiagnosticianAgent,
-        "coder": CoderAgent,
-        "group_sales_manager": GroupSalesManagerAgent,
         "scheduler": SchedulerAgent,
     }
     agent_class = agents.get(agent_name)
@@ -39,28 +29,12 @@ def get_agent(agent_name: str):
 
 
 def list_agents() -> list:
-    """List all available agents."""
-    return [
-        "team_leader",
-        "reviewer",
-        "red_team",
-        "bug_fixer",
-        "diagnostician",
-        "coder",
-        "group_sales_manager",
-        "scheduler",
-    ]
+    """List the Python agents. The subagents live in ``.claude/agents/*.md``."""
+    return ["scheduler"]
 
 
 __all__ = [
-    "TeamLeader",
-    "TeamLeaderAgent",
-    "ReviewerAgent",
-    "RedTeamAgent",
-    "BugFixerAgent",
-    "DiagnosticianAgent",
-    "CoderAgent",
-    "GroupSalesManagerAgent",
+    "SchedulerAgent",
     "ToolRegistry",
     "get_agent",
     "list_agents",

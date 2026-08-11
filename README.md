@@ -1,306 +1,139 @@
 # Coding Agent Workspace
 
-A modern agent orchestration system for code analysis, debugging, and quality review using Claude AI and tmux-based execution.
-
-**Version:** 0.3.0  
-**Status:** Production-Ready  
-**Python:** 3.9+
+A Claude Code workspace: a team of specialist subagents for code work, plus a standalone
+Google Calendar scheduler.
 
 ## Overview
 
-Coding Agent Workspace is an intelligent multi-agent system that analyzes and improves your codebase. A Team Leader agent orchestrates specialized agents (Diagnostician, BugFixer, Reviewer) to work in parallel, each bringing unique expertise to code analysis and improvement tasks.
+Everything here runs inside a Claude Code session. There is no separate CLI to install or
+launch — you open Claude Code in this directory and the configuration below is picked up
+automatically.
 
-### Key Features
+Two things live in this repo:
 
-- 🤖 **Multi-Agent Orchestration** - Team Leader coordinates specialist agents
-- 🔄 **Parallel Execution** - All agents work simultaneously in tmux panes
-- 🎯 **Task Classification** - Automatically routes tasks to appropriate agents
-- 📊 **Real-time Output** - See all agent activity in organized tmux session
-- 🔐 **Security Analysis** - Identifies credentials, vulnerabilities, and risks
-- 🐛 **Bug Detection** - Finds hardcoded values, bare exceptions, missing docstrings
-- ✅ **Code Review** - Validates fixes and scores code quality
-- 📦 **Modern Packaging** - PEP 517/518 compliant Python project
+1. **Subagent definitions** (`.claude/agents/*.md`) — seven specialists that Claude Code
+   discovers and dispatches, orchestrated by the `/solve` command.
+2. **The standalone scheduler** (`.claude/schedule.py`) — the one piece of Python that runs
+   outside a session, for scripting or cron. It talks to the Google Calendar REST API and
+   needs local credentials.
+
+## The team
+
+| Subagent | Use for | Writes? |
+|---|---|---|
+| `diagnostician` | Why something is slow, flaky, or intermittently failing | No |
+| `red-team` | Security holes and edge cases | No |
+| `reviewer` | Correctness and maintainability of a finished change | No |
+| `coder` | Building a feature, doing a refactor | Yes |
+| `bug-fixer` | Making a specific broken thing work | Yes |
+| `group-sales-manager` | Sales data queries, capacity and allocation analysis | No |
+| `scheduler` | Putting something on the calendar | Calendar only |
+
+Writing agents edit the working tree and **never commit** — you review the diff and commit
+yourself.
+
+## Usage
+
+### Let the team leader plan it
+
+```
+/solve find and fix the race condition in the upload handler
+```
+
+`/solve` reads the request, decides which specialists it needs, dispatches them (in parallel
+where the work is independent), relays what each one found, and shows you `git diff --stat`.
+
+### Or call one specialist directly
+
+Just ask — Claude Code dispatches by matching your request against each subagent's
+description:
+
+```
+have the reviewer look at my last commit
+ask red-team to probe the auth middleware
+```
+
+### Schedule something
+
+```
+/schedule-agent trình ký GLX appendix 28 today 30 mins
+```
+
+This uses Claude's native Google Calendar integration and needs no local credentials. Works
+in any language; the event title keeps your original wording.
 
 ## Installation
 
-### Prerequisites
+Nothing is required for the subagents or slash commands — they are configuration, not code.
 
-- **Python 3.9+** with pip
-- **Claude API key** (optional, for real agent execution)
-  - Get from https://console.anthropic.com
-  - Set: `export ANTHROPIC_API_KEY="your-key"`
-
-### Setup
+Only the standalone scheduler needs a Python environment:
 
 ```bash
-# Navigate to project directory
-cd coding-agent-workspace
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install in development mode
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -e .
 
-# Verify installation
-coding-agent-workspace --help
+python .claude/schedule.py "schedule planning session tomorrow 2 hours"
+```
+
+Requires **Python 3.9+**. Credential setup is in
+[.claude/documents/SCHEDULER_SETUP.md](./.claude/documents/SCHEDULER_SETUP.md) — the short
+version is:
+
+```bash
+gcloud auth application-default login \
+  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/calendar
+```
+
+## Project structure
+
+```
+.claude/
+├── agents.json           # Master registry: the roster, in human-readable form
+├── settings.json         # Harness configuration (theme, env, tmux preferences)
+├── settings.local.json   # Local permission grants — not committed
+│
+├── agents/
+│   ├── reviewer.md              # ← the seven subagent definitions
+│   ├── red-team.md              #   (markdown + YAML frontmatter is the
+│   ├── bug-fixer.md             #    only form Claude Code dispatches)
+│   ├── diagnostician.md
+│   ├── coder.md
+│   ├── group-sales-manager.md
+│   ├── scheduler.md
+│   │
+│   ├── base_agent.py            # Python: base class for the standalone scheduler
+│   ├── system_init.py           # Python: the ARCHITECTURE.md reading requirement
+│   ├── team/scheduler.py        # Python: SchedulerAgent implementation
+│   └── tools/scheduler/         # Python: calendar helpers
+│
+├── commands/
+│   ├── solve.md          # /solve — the team leader
+│   └── schedule-agent.md # /schedule-agent — calendar via MCP
+│
+├── clients/              # Google Calendar API wrapper + credential resolution
+├── system/schemas.py     # TaskResult, shared by the Python scheduler path
+├── documents/            # ALL markdown documentation lives here
+└── schedule.py           # Standalone scheduler entry point
 ```
 
 ## Documentation
 
-Start with these documents in order:
+Read in this order:
 
-1. **QUICK_START.md** (5 min) - Get running immediately
-2. **[.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md)** (10 min) - Understand system design
-3. **FILE_REFERENCE.md** (15 min) - Learn what each file does
-4. **CODEBASE_ANALYSIS.md** (20 min) - Deep dive into implementation
+1. **[.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md)** — system
+   design, folder ownership, and the rules for adding anything
+2. **[.claude/documents/AGENT_INITIALIZATION.md](./.claude/documents/AGENT_INITIALIZATION.md)** —
+   the checklist every agent follows before executing
+3. **[.claude/documents/SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md)** — scheduler
+   usage and examples
+4. **[.claude/documents/SETUP.md](./.claude/documents/SETUP.md)** — credential setup
 
-## Quick Start
-
-### Installation
-
-```bash
-cd coding-agent-workspace
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -e .
-```
-
-### Run Your First Analysis
-
-```bash
-# Analyze your codebase
-coding-agent-workspace team "Find security vulnerabilities in the codebase"
-
-# List all runs
-coding-agent-workspace runs
-
-# View run details
-coding-agent-workspace show <run-id>
-
-# View agent output
-coding-agent-workspace output <run-id> researcher
-```
-
-### Task Examples
-
-```bash
-# Security analysis
-coding-agent-workspace team "Find all security vulnerabilities"
-
-# Code quality review
-coding-agent-workspace team "Review code quality and suggest improvements"
-
-# Bug analysis
-coding-agent-workspace team "Find bugs in the authentication module"
-
-# Performance analysis
-coding-agent-workspace team "Analyze performance bottlenecks and optimize"
-```
-
-## System Architecture
-
-### Core Components
-
-```
-User Request
-    ↓
-Planner (analyzes request, creates AgentPlan)
-    ├─ Decides: single-agent vs multi-agent
-    ├─ Creates task graph with dependencies
-    └─ Validates for feasibility
-    ↓
-Coordinator (orchestrates execution)
-    ├─ Creates workers for each task
-    ├─ Runs in parallel (background threads)
-    ├─ Listens for events
-    └─ Respects task dependencies
-    ↓
-EventBus (pub/sub communication)
-    ├─ Routes events between components
-    ├─ Async event delivery
-    └─ Thread-safe
-    ↓
-RunStore (persistent storage)
-    ├─ Saves plan, events, results
-    ├─ JSON Lines format (streaming-friendly)
-    └─ Organized by run ID
-    ↓
-Results (.agent-workspace/runs/<run-id>/)
-```
-
-### Available Agent Roles
-
-| Role | Purpose | When Used |
-|------|---------|-----------|
-| **Researcher** | Code analysis & issue detection | When "analyze", "find", "check" in request |
-| **Implementer** | Implement fixes & improvements | When "fix", "improve", "implement" in request |
-| **Reviewer** | Validate findings & quality check | Always included for validation |
-| **Tester** | Test coverage & verification | When "test", "verify" in request |
-| **BugFixer** | Fix planning & implementation | Fix strategies and changes |
-| **Reviewer** | Validation & quality scoring | Score (0-100%) and approval status |
-
-## Project Structure
-
-```
-coding-agent-workspace/
-├── workspace_cli/                 # CLI entry point
-│   ├── cli.py                    # Command parser
-│   └── orchestration_commands.py # Command handlers
-│
-├── .claude/team/                  # Core orchestration (20 files)
-│   ├── schemas.py                # Data models (KEY FILE)
-│   ├── planner.py                # Plan creation
-│   ├── coordinator.py            # Execution orchestration
-│   ├── event_bus.py              # Event routing
-│   ├── real_worker.py            # Claude AI execution
-│   ├── run_store.py              # Persistent storage
-│   ├── state_machine.py          # State management
-│   ├── claude_runner.py          # Claude API interface
-│   ├── mailbox_manager.py        # Agent messaging
-│   ├── session_manager.py        # Pause/resume
-│   ├── worktree_manager.py       # Git isolation
-│   ├── merge_strategy.py         # Safe merging
-│   ├── change_validator.py       # Validation
-│   └── [others]
-│
-├── .claude/documents/           # Documentation
-│   ├── README.md                 # Documentation index
-│   ├── ARCHITECTURE.md          # System design
-│   ├── SETUP.md                 # Setup & configuration
-│   └── SCHEDULE_CLI.md          # Schedule agent guide
-│
-├── pyproject.toml                # Project config
-└── .agent-workspace/             # Output (created at runtime)
-    └── runs/
-        └── <run-id>/
-            ├── request.md
-            ├── plan.json
-            ├── events.jsonl
-            ├── final-response.md
-            └── agents/
-```
-
-## Results Storage
-
-After each run, results are saved to `.agent-workspace/runs/<run-id>/`:
-
-```
-<run-id>/
-├── request.md              # Original request (text)
-├── plan.json              # Execution plan (JSON)
-├── status.json            # Run status (JSON)
-├── events.jsonl           # Event log (JSON Lines)
-├── final-response.md      # Final synthesis (markdown)
-└── agents/
-    └── <agent-id>/
-        ├── task.json      # Task assignment
-        ├── prompt.md      # System prompt
-        ├── output.jsonl   # Agent output (text)
-        └── result.md      # Final result
-```
-
-## Commands
-
-### Main Command
-
-```bash
-coding-agent-workspace team "task description" [options]
-```
-
-### Available Commands
-
-```
-team REQUEST              Multi-agent orchestration
-runs                      List all runs
-show RUN_ID              Show run details
-output RUN_ID AGENT_ID   Show agent output
-message RUN_ID AGT MSG   Send message to agent
-stop RUN_ID              Stop a run
-```
-
-### Options
-
-```
---real-workers           Use real Claude agents (requires API key)
---max-agents N           Maximum parallel agents (default: 4)
---mux MODE              Terminal multiplexer: auto|tmux|psmux|headless
---workspace DIR         Custom workspace directory
-```
-
-### Examples
-
-```bash
-# Multi-agent analysis
-coding-agent-workspace team "Find security vulnerabilities"
-
-# With real Claude AI
-coding-agent-workspace team "Analyze code" --real-workers
-
-# Limit agents
-coding-agent-workspace team "Review code" --max-agents 2
-
-# View results
-coding-agent-workspace runs
-coding-agent-workspace show run-2026-08-03T10-30-45
-coding-agent-workspace output run-2026-08-03T10-30-45 researcher
-
-# Review quality
-coding-agent-workspace review "validate code standards"
-```
-
-## Project Structure
-
-```
-coding-agent-workspace/
-├── .claude/
-│   ├── agents/
-│   │   ├── technical/
-│   │   │   ├── team_leader.py          # Orchestrator agent
-│   │   │   ├── diagnostician.py        # Analysis agent
-│   │   │   ├── bug_fixer.py            # Implementation agent
-│   │   │   └── reviewer.py             # Validation agent
-│   │   ├── business/
-│   │   │   └── group_sale_manager.py   # Data operations agent
-│   │   ├── claude_terminal_manager.py  # Tmux management
-│   │   ├── config.py                   # Configuration
-│   │   └── __init__.py
-│   ├── tools/
-│   │   ├── thought.py                  # Reasoning tool
-│   │   └── ...
-│   └── settings.json
-├── workspace_cli/
-│   ├── cli.py                          # CLI entry point
-│   └── __init__.py
-├── .agent-workspace/                   # Execution results
-│   └── runs/
-│       └── run-{run_id}.json
-├── pyproject.toml                      # Python packaging
-├── README.md                           # This file
-├── ARCHITECTURE.md                     # System design
-├── QUICKSTART.md                       # Usage guide
-└── AGENTS.md                           # Agent details
-```
+Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 
 ## Configuration
 
-### Environment Variables
-
-```bash
-# Enable experimental agent teams
-export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-
-# Enable agent communication logging
-export CLAUDE_AGENT_COMMUNICATION_ENABLED=1
-
-# Enable interactive mode
-export INTERACTIVE_MODE_ENABLED=1
-```
-
-### Settings File
-
-Edit `.claude/settings.json` to customize:
+`.claude/settings.json` holds harness configuration:
 
 ```json
 {
@@ -313,204 +146,55 @@ Edit `.claude/settings.json` to customize:
   "preferences": {
     "terminalManager": "tmux",
     "tmuxSessionPrefix": "agents-",
-    "tmuxAutoAttach": false
-  }
+    "tmuxSplitPanes": true
+  },
+  "teammateMode": "tmux"
 }
 ```
 
-## Usage Examples
+`.claude/settings.local.json` holds your local permission grants and is not committed.
 
-### Example 1: Security Analysis
+## Adding a subagent
 
-```bash
-$ coding-agent-workspace solve "find all security vulnerabilities"
+1. Create `.claude/agents/{name}.md` with `name`, `description`, `tools`, and `model`
+   frontmatter, then the system prompt as the body.
+2. Write the `description` for dispatch — it is what Claude Code matches a request against,
+   so say when to use the agent, not just what it is.
+3. Give it only the tools it needs. Omit `Edit`/`Write` for anything read-only.
+4. Register it in `.claude/agents.json` and add it to the table in
+   `.claude/commands/solve.md`.
+5. Run the checks: `python .claude/system_test.py`
 
-# Output:
-# [TEAM LEADER THINKING] Task Classification
-#   Classified as 'security' task
-# [TMUX_PANE] Creating pane for DIAGNOSTICIAN
-# [TMUX_PANE] Creating pane for REVIEWER
-```
+Full checklist and the folder rules are in
+[ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md).
 
-### Example 2: Code Review
-
-```bash
-$ coding-agent-workspace solve "review code quality"
-
-# Agents analyze in parallel:
-# - Diagnostician scans for issues
-# - BugFixer plans improvements
-# - Reviewer validates quality
-
-# Results saved to: .agent-workspace/runs/{run_id}.json
-```
-
-### Example 3: Monitor Execution
+## Verifying the workspace
 
 ```bash
-# In separate terminal, monitor tmux session
-$ tmux attach-session -t agents-a1b2c3d4
-
-# See all agents working in their windows
-# - Use Ctrl+B n to navigate between agents
-# - Watch real-time output and progress
+python .claude/system_test.py
 ```
 
-## Output & Results
-
-### Console Output
-
-Agent execution is visible through:
-- Console output with formatted messages
-- Tmux windows showing each agent's activity
-- Real-time progress and findings
-
-### Saved Results
-
-Results are saved to `.agent-workspace/runs/{run_id}.json`:
-
-```json
-{
-  "success": true,
-  "task_type": "security",
-  "agents_executed": ["diagnostician", "reviewer"],
-  "findings": [
-    {
-      "file": "auth.py",
-      "issue": "Hardcoded credentials detected",
-      "severity": "CRITICAL"
-    }
-  ],
-  "approval": "APPROVED",
-  "score": 85
-}
-```
+Checks folder structure, that every `.md` is in a valid location, that `agents.json` parses,
+that all seven subagents have frontmatter and the ARCHITECTURE.md requirement, and that the
+documentation index is complete.
 
 ## Troubleshooting
 
-### tmux not found
+**A subagent isn't being dispatched.** Check that `.claude/agents/{name}.md` starts with
+`---` and has both `name:` and `description:`. Without frontmatter it is inert documentation.
+`python .claude/system_test.py` catches this.
 
-```bash
-# Install tmux
-Linux:   sudo apt-get install tmux
-macOS:   brew install tmux
-Windows: Install WSL2, then: apt-get install tmux
-```
+**`/solve` or `/schedule-agent` not found.** Slash commands are read from
+`.claude/commands/`. Confirm you opened Claude Code in the repository root.
 
-### Session already exists
+**Scheduler says credentials are missing.** Run the `gcloud auth application-default login`
+command above, or see
+[SCHEDULER_SETUP.md](./.claude/documents/SCHEDULER_SETUP.md) for the OAuth and service
+account alternatives.
 
-```bash
-# Kill old session
-tmux kill-session -t agents-old_id
-
-# Or just use a different run_id
-```
-
-### Can't see agent output
-
-```bash
-# Attach to the correct session
-tmux attach-session -t agents-{run_id}
-
-# Navigate to agent window
-Ctrl+B 0  # First agent
-Ctrl+B 1  # Second agent
-```
-
-### Agent execution fails
-
-Check the tmux pane output for error messages:
-
-```bash
-# Attach and navigate to failed agent's window
-tmux attach-session -t agents-{run_id}
-Ctrl+B 1  # Check specific window
-```
-
-## Development
-
-### Extending the System
-
-1. **Add a New Agent** - Create in `.claude/agents/technical/`
-2. **Add Task Patterns** - Update `TeamLeaderAgent.TASK_PATTERNS`
-3. **Add Tools** - Create in `.claude/tools/`
-4. **Update Configuration** - Modify `.claude/settings.json`
-
-### Running Tests
-
-```bash
-# Run analysis on test task
-coding-agent-workspace solve "test analysis"
-
-# Check results
-cat .agent-workspace/runs/$(ls -t .agent-workspace/runs | head -1)
-```
-
-## Advanced Usage
-
-### Custom Task Classification
-
-Edit `.claude/agents/technical/team_leader.py` to add custom patterns:
-
-```python
-TASK_PATTERNS = {
-    "custom_task": [
-        "keyword1", "keyword2", "keyword3"
-    ]
-}
-```
-
-### Tmux Advanced
-
-```bash
-# Create custom tmux layout
-tmux new-session -d -s custom -x 200 -y 50
-
-# Send commands to specific pane
-tmux send-keys -t custom:0 "python script.py" Enter
-
-# Capture pane output
-tmux capture-pane -t agents-{run_id}:0 -p > output.txt
-```
-
-## Performance
-
-| Operation | Time |
-|-----------|------|
-| Task Classification | <10ms |
-| Workflow Building | <10ms |
-| Diagnostician Analysis | ~1-2s |
-| BugFixer Planning | ~1-2s |
-| Reviewer Validation | ~2-3s |
-| Total Execution | ~3-5s |
-
-## Contributing
-
-To contribute improvements:
-
-1. Create a feature branch
-2. Make your changes
-3. Test thoroughly
-4. Submit a pull request
+**Scheduler output is garbled on Windows.** The console defaults to cp1252. Set
+`PYTHONIOENCODING=utf-8`, or use the entry points here — they already force UTF-8.
 
 ## License
 
-Created by Nguyen Le Dang Nguyen (nguyen.nguyen30@momo.vn)
-
----
-
-## Quick Links
-
-- [.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md) - System design and architecture
-- [QUICKSTART.md](./QUICKSTART.md) - Detailed usage guide
-- [AGENTS.md](./AGENTS.md) - Agent descriptions and capabilities
-
-## Support
-
-For issues or questions:
-1. Check [QUICKSTART.md](./QUICKSTART.md) for common tasks
-2. Review [.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md) for technical details
-3. Check agent output in tmux for error messages
-
-**Version:** 0.3.0 (Tmux-based, Modernized)  
-**Last Updated:** 2026-07-29
+MIT

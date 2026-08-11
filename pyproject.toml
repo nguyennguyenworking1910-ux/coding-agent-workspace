@@ -4,23 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coding-agent-workspace"
-version = "0.4.0"
-description = "Claude Code agent orchestration system with multi-agent coordination (Milestone 1)"
+version = "0.5.0"
+description = "Claude Code agent workspace: subagent definitions plus the standalone Google Calendar scheduler"
 requires-python = ">=3.9"
 authors = [
     {name = "Nguyen Le Dang Nguyen", email = "nguyen.nguyen30@momo.vn"}
 ]
+# Only the scheduler needs runtime dependencies; everything else in this repo is
+# Claude Code configuration (subagents, commands, settings) with no Python deps.
 dependencies = [
-    "pydantic>=2.0,<3.0",
+    "google-auth-oauthlib>=1.2,<2.0",
+    "google-auth-httplib2>=0.2,<0.3",
+    "google-api-python-client>=2.108,<3.0",
 ]
 
-[project.scripts]
-coding-agent-workspace = "workspace_cli.cli:main"
+[project.optional-dependencies]
+scheduler-extras = [
+    "python-dateutil>=2.8,<3.0",
+    "python-dotenv>=1.0,<2.0",
+]
 
 [tool.setuptools]
-packages = ["workspace_cli", "claude", "claude.agents", "claude.tools", "claude.team"]
+# The source directory is `.claude`, whose leading dot is not a valid module
+# name, so it is remapped to the importable package `claude`.
+packages = [
+    "claude",
+    "claude.agents",
+    "claude.agents.team",
+    "claude.agents.tools",
+    "claude.agents.tools.scheduler",
+    "claude.clients",
+    "claude.system",
+]
 package-dir = {"claude" = ".claude"}
 
 [tool.setuptools.package-data]
 claude = ["**/*.py"]
-workspace_cli = ["**/*.py"]

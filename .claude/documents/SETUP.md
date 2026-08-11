@@ -254,20 +254,30 @@ The agent checks a 30-minute buffer. Adjust the time or use `force=true`.
 
 ## Team Integration
 
-The SchedulerAgent is part of the multi-agent team:
+Inside a Claude Code session the Scheduler is one of seven subagents, defined in
+`.claude/agents/scheduler.md`. It uses the native Google Calendar MCP integration, so it needs
+none of the credentials on this page. Dispatch it by asking, or through `/solve`; or use the
+`/schedule-agent` command directly.
 
-```python
-from claude.agents import TeamLeaderAgent
+The credentials described here are only for the standalone path, which runs outside a session:
 
-leader = TeamLeaderAgent()
-scheduler = leader.teammates["scheduler"]
+```bash
+python .claude/schedule.py "schedule planning session tomorrow 2 hours"
 ```
 
-Available agents:
+```python
+# Or from your own script
+from claude.agents import get_agent
+
+scheduler = get_agent("scheduler")
+result = await scheduler.execute({"request": "book 30 mins today", "timezone": "Asia/Ho_Chi_Minh"})
+```
+
+The full subagent roster:
 - reviewer (code review)
-- red_team (security testing)
-- bug_fixer (issue resolution)
+- red-team (security testing)
+- bug-fixer (issue resolution)
 - diagnostician (system analysis)
 - coder (implementation)
-- group_sales_manager (resource allocation)
+- group-sales-manager (sales data, resource allocation)
 - **scheduler** (calendar management)

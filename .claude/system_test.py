@@ -74,13 +74,20 @@ class SystemTest:
         valid_locations = []
 
         for md_file in md_files:
-            if '.claude/documents/' in str(md_file):
-                valid_locations.append(md_file.relative_to(self.base_path))
-            elif '.claude/commands/' in str(md_file):
-                # Commands are allowed
-                valid_locations.append(md_file.relative_to(self.base_path))
+            relative = md_file.relative_to(self.base_path)
+            # as_posix() so the separator check works on Windows too.
+            location = relative.as_posix()
+
+            if location.startswith('.claude/documents/'):
+                valid_locations.append(relative)
+            elif location.startswith('.claude/commands/'):
+                # Slash command definitions; the harness only looks here.
+                valid_locations.append(relative)
+            elif location.startswith('.claude/agents/'):
+                # Subagent definitions; the harness only looks here.
+                valid_locations.append(relative)
             else:
-                invalid_locations.append(md_file.relative_to(self.base_path))
+                invalid_locations.append(relative)
 
         if valid_locations:
             print_success(f"Found {len(valid_locations)} .md files in correct locations:")
@@ -109,7 +116,7 @@ class SystemTest:
             return
 
         try:
-            with open(agents_json_path, 'r') as f:
+            with open(agents_json_path, 'r', encoding='utf-8') as f:
                 agents_config = json.load(f)
             print_success("agents.json is valid JSON")
             self.tests_passed += 1
@@ -137,43 +144,45 @@ class SystemTest:
             print_warning("Scheduler agent not found in agents.json")
 
     def test_agent_files(self):
-        """Test 4: Verify all agent files exist and have ARCHITECTURE.md requirement."""
-        print_header("TEST 4: AGENT FILES")
+        """Test 4: Verify every subagent is defined and enforces ARCHITECTURE.md."""
+        print_header("TEST 4: SUBAGENT DEFINITIONS")
 
+        # Subagents are markdown files with YAML frontmatter; that is the only
+        # form Claude Code discovers and dispatches.
         required_agents = [
-            '.claude/agents/team_leader.py',
-            '.claude/agents/team/scheduler.py',
-            '.claude/agents/team/bug_fixer.py',
-            '.claude/agents/team/reviewer.py',
-            '.claude/agents/team/diagnostician.py',
-            '.claude/agents/team/coder.py',
-            '.claude/agents/team/red_team.py',
-            '.claude/agents/team/group_sales_manager.py',
+            '.claude/agents/reviewer.md',
+            '.claude/agents/red-team.md',
+            '.claude/agents/bug-fixer.md',
+            '.claude/agents/diagnostician.md',
+            '.claude/agents/coder.md',
+            '.claude/agents/group-sales-manager.md',
+            '.claude/agents/scheduler.md',
         ]
 
         for agent_file in required_agents:
             path = self.base_path / agent_file
             if not path.exists():
-                print_error(f"Agent file missing: {agent_file}")
+                print_error(f"Subagent definition missing: {agent_file}")
                 self.tests_failed += 1
                 continue
 
-            # Check if file contains ARCHITECTURE.md requirement
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            if 'ARCHITECTURE.md' in content:
-                print_success(f"Agent has ARCHITECTURE.md requirement: {agent_file}")
+            # Without frontmatter the file is inert documentation, not a subagent.
+            if content.startswith('---') and '\nname:' in content and '\ndescription:' in content:
+                print_success(f"Subagent has valid frontmatter: {agent_file}")
                 self.tests_passed += 1
             else:
-                print_error(f"Agent missing ARCHITECTURE.md requirement: {agent_file}")
+                print_error(f"Subagent missing name/description frontmatter: {agent_file}")
                 self.tests_failed += 1
 
-            if 'system_init' in content:
-                print_success(f"Agent imports system_init: {agent_file}")
+            if 'ARCHITECTURE.md' in content:
+                print_success(f"Subagent has ARCHITECTURE.md requirement: {agent_file}")
                 self.tests_passed += 1
             else:
-                print_warning(f"Agent doesn't import system_init: {agent_file}")
+                print_error(f"Subagent missing ARCHITECTURE.md requirement: {agent_file}")
+                self.tests_failed += 1
 
     def test_documentation_index(self):
         """Test 5: Verify documentation README exists and is complete."""
@@ -186,7 +195,7 @@ class SystemTest:
             self.tests_failed += 1
             return
 
-        with open(readme_path, 'r') as f:
+        with open(readme_path, 'r', encoding='utf-8') as f:
             readme_content = f.read()
 
         print_success("Documentation README.md exists")
@@ -241,7 +250,7 @@ class SystemTest:
             self.tests_failed += 1
             return
 
-        with open(system_init_path, 'r') as f:
+        with open(system_init_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         print_success("system_init.py exists")
@@ -274,7 +283,7 @@ class SystemTest:
             self.tests_failed += 1
             return
 
-        with open(scheduler_path, 'r') as f:
+        with open(scheduler_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         if 'class SchedulerAgent' in content:
@@ -405,7 +414,18 @@ class SystemTest:
             print(f"{Colors.RED}Please review the failures above.{Colors.END}\n")
             return 1
 
+def _force_utf8_stdout():
+    """Windows consoles default to cp1252, which cannot encode the box-drawing
+    characters and status glyphs used throughout this report."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:  # pragma: no cover - non-reconfigurable stream
+            pass
+
+
 if __name__ == '__main__':
+    _force_utf8_stdout()
     tester = SystemTest()
     exit_code = tester.run_all_tests()
     sys.exit(exit_code)

@@ -1,8 +1,7 @@
-"""Scheduler agent - LLM-powered Google Calendar management.
+### Scheduler agent - LLM-powered Google Calendar management.
+### IMPORTANT: This agent enforces reading ARCHITECTURE.md before execution.
+### All agents must understand system architecture, folder structure, and rules.
 
-⚠️ IMPORTANT: This agent enforces reading ARCHITECTURE.md before execution.
-All agents must understand system architecture, folder structure, and rules.
-"""
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
@@ -28,17 +27,6 @@ class SchedulerConfig(AgentConfig):
 
 
 class SchedulerAgent(BaseAgent):
-    """
-    Agent: Schedule Management & Calendar
-    Responsibilities:
-    - Understand scheduling requests in plain English
-    - Reason about available time slots
-    - Check calendar availability
-    - Create calendar events
-    - Manage task deadlines and duration
-
-    Integrates with Google Calendar for real scheduling.
-    """
 
     SYSTEM_PROMPT = """You are a scheduling assistant that manages Google Calendar.
 

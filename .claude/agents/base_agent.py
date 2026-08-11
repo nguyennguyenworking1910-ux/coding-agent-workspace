@@ -1,4 +1,4 @@
-"""Abstract base class for all agents."""
+### Abstract base class for all agents.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field

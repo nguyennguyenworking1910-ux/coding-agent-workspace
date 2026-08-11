@@ -1,75 +1,85 @@
 {
+  "_comment": "Master registry. Every agent below is a Claude Code subagent defined in .claude/agents/<id>.md; that markdown file is what the harness actually dispatches, and this file is the human-readable index of the roster. The team-leader role is not a subagent - it is the /solve command (.claude/commands/solve.md), which plans a request and dispatches these.",
   "agents": [
-    {
-      "id": "team_leader",
-      "name": "Team Leader",
-      "description": "Orchestrates agent team for code analysis and quality assurance",
-      "enabled": true,
-      "type": "coordinator",
-      "tools": ["thought"],
-      "canSpawn": ["diagnostician", "bug_fixer", "reviewer", "group_sale_manager", "scheduler"],
-      "permissions": "read-only"
-    },
     {
       "id": "diagnostician",
       "name": "Diagnostician",
-      "description": "Analyzes code and finds bugs",
+      "description": "Analyzes logs, metrics, and traces to find root causes and performance bottlenecks",
       "enabled": true,
       "type": "analyzer",
-      "tools": ["thought"],
+      "definition": ".claude/agents/diagnostician.md",
+      "tools": ["Read", "Grep", "Glob", "Bash"],
       "permissions": "read-only"
     },
     {
-      "id": "bug_fixer",
+      "id": "bug-fixer",
       "name": "Bug Fixer",
-      "description": "Fixes bugs in code with write access",
+      "description": "Diagnoses a failing test or error and implements the fix",
       "enabled": true,
       "type": "implementer",
-      "tools": ["thought"],
+      "definition": ".claude/agents/bug-fixer.md",
+      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+      "permissions": "write"
+    },
+    {
+      "id": "coder",
+      "name": "Coder",
+      "description": "Implements features and performs refactors from a specification",
+      "enabled": true,
+      "type": "implementer",
+      "definition": ".claude/agents/coder.md",
+      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
       "permissions": "write"
     },
     {
       "id": "reviewer",
       "name": "Reviewer",
-      "description": "Reviews and validates code changes",
+      "description": "Reviews code changes for correctness, security, and maintainability",
       "enabled": true,
       "type": "validator",
-      "tools": ["thought"],
+      "definition": ".claude/agents/reviewer.md",
+      "tools": ["Read", "Grep", "Glob", "Bash"],
       "permissions": "read-only"
     },
     {
-      "id": "group_sale_manager",
-      "name": "Group Sale Manager",
-      "description": "Manages group sales operations with BigQuery data access",
+      "id": "red-team",
+      "name": "Red Team",
+      "description": "Adversarial security and edge-case testing of this codebase",
+      "enabled": true,
+      "type": "security",
+      "definition": ".claude/agents/red-team.md",
+      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "permissions": "read-only"
+    },
+    {
+      "id": "group-sales-manager",
+      "name": "Group Sales Manager",
+      "description": "Queries group sales data and plans resource/workload allocation",
       "enabled": true,
       "type": "sales_manager",
-      "mode": "read-write",
-      "tools": ["thought", "schema_reader", "query_builder", "query_executor", "data_fetcher"],
-      "permissions": ["read", "write"],
+      "definition": ".claude/agents/group-sales-manager.md",
+      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "permissions": "read-only",
       "bigquery_access": {
         "enabled": true,
         "datasets": ["group_sales", "sales_metrics"],
-        "operations": ["query", "insert", "update", "aggregate"]
-      },
-      "capabilities": [
-        "query_sales",
-        "get_sales_summary",
-        "identify_top_groups",
-        "evaluate_group_performance"
-      ]
+        "operations": ["query"],
+        "note": "Reached through the `bq` CLI via Bash. There is no BigQuery client module in this repo; writes require explicit user approval."
+      }
     },
     {
       "id": "scheduler",
       "name": "Scheduler",
-      "description": "Schedules tasks and meetings on Google Calendar with natural language understanding",
+      "description": "Schedules tasks and meetings on Google Calendar from natural language, in any language",
       "enabled": true,
       "type": "calendar_manager",
-      "tools": ["thought", "google_calendar"],
+      "definition": ".claude/agents/scheduler.md",
+      "tools": ["google_calendar", "Read"],
       "permissions": "write",
       "calendar_access": {
         "enabled": true,
         "timezone": "Asia/Ho_Chi_Minh",
-        "operations": ["list_events", "create_event", "update_event", "delete_event", "search_events", "suggest_time"]
+        "operations": ["list_calendars", "list_events", "search_events", "suggest_time", "get_event", "create_event", "update_event"]
       },
       "capabilities": [
         "schedule_tasks",
@@ -77,242 +87,71 @@
         "find_available_slots",
         "detect_conflicts",
         "parse_natural_language_requests"
+      ],
+      "python_fallback": {
+        "module": "claude.agents.team.scheduler",
+        "class": "SchedulerAgent",
+        "entry_point": ".claude/schedule.py",
+        "note": "Standalone path for running the scheduler outside a Claude Code session. Uses the Google Calendar REST API and needs local credentials - see .claude/documents/SCHEDULER_SETUP.md."
+      }
+    }
+  ],
+  "commands": [
+    {
+      "id": "solve",
+      "name": "Team Leader",
+      "description": "Plans a request across the specialist subagents, dispatches them, and reports back",
+      "definition": ".claude/commands/solve.md",
+      "dispatches": [
+        "diagnostician",
+        "bug-fixer",
+        "coder",
+        "reviewer",
+        "red-team",
+        "group-sales-manager",
+        "scheduler"
       ]
+    },
+    {
+      "id": "schedule-agent",
+      "name": "Schedule Agent",
+      "description": "Schedules a request on Google Calendar via the native MCP integration",
+      "definition": ".claude/commands/schedule-agent.md"
     }
   ],
   "tools": [
     {
-      "id": "thought",
-      "name": "Thought Tool",
-      "description": "Reasoning and thinking capability for agents",
-      "type": "reasoning",
-      "enabled": true,
-      "module": ".claude.tools.thought",
-      "class": "ThoughtTool",
-      "methods": [
-        {
-          "name": "execute",
-          "description": "Execute a thought/reasoning step"
-        },
-        {
-          "name": "analyze",
-          "description": "Analyze a task through reasoning"
-        },
-        {
-          "name": "plan",
-          "description": "Create a plan through reasoning"
-        },
-        {
-          "name": "evaluate",
-          "description": "Evaluate something through reasoning"
-        }
-      ]
-    },
-    {
-      "id": "bigquery",
-      "name": "BigQuery Tool (Legacy)",
-      "description": "Query and manage BigQuery datasets - use specialized tools instead",
-      "type": "data_access",
-      "enabled": true,
-      "module": ".claude.tools.bigquery",
-      "class": "BigQueryTool",
-      "deprecated": true,
-      "methods": [
-        {
-          "name": "query",
-          "description": "Execute a BigQuery query"
-        },
-        {
-          "name": "list_tables",
-          "description": "List tables in a dataset"
-        },
-        {
-          "name": "get_table_schema",
-          "description": "Get table schema"
-        },
-        {
-          "name": "insert_rows",
-          "description": "Insert rows into table"
-        },
-        {
-          "name": "get_group_sales_data",
-          "description": "Get group sales data"
-        },
-        {
-          "name": "aggregate_sales",
-          "description": "Aggregate sales data"
-        }
-      ]
-    },
-    {
-      "id": "schema_reader",
-      "name": "Schema Reader Tool",
-      "description": "Read and parse BigQuery table schemas from markdown files",
-      "type": "schema_access",
-      "enabled": true,
-      "module": ".claude.tools.schema_reader",
-      "class": "SchemaReaderTool",
-      "methods": [
-        {
-          "name": "read_schema_from_file",
-          "description": "Read table schema from a markdown file"
-        },
-        {
-          "name": "get_table_columns",
-          "description": "Get columns for a specific table"
-        },
-        {
-          "name": "list_available_schemas",
-          "description": "List all available schema files"
-        },
-        {
-          "name": "validate_schema_compatibility",
-          "description": "Validate schema contains required columns"
-        }
-      ]
-    },
-    {
-      "id": "query_builder",
-      "name": "Query Builder Tool",
-      "description": "Build SQL queries for BigQuery operations",
-      "type": "query_builder",
-      "enabled": true,
-      "module": ".claude.tools.query_builder",
-      "class": "QueryBuilderTool",
-      "methods": [
-        {
-          "name": "build_select_query",
-          "description": "Build a SELECT query"
-        },
-        {
-          "name": "build_aggregate_query",
-          "description": "Build an aggregate query (SUM, COUNT, AVG, etc)"
-        },
-        {
-          "name": "build_insert_query",
-          "description": "Build an INSERT query"
-        },
-        {
-          "name": "build_join_query",
-          "description": "Build a JOIN query"
-        }
-      ]
-    },
-    {
-      "id": "query_executor",
-      "name": "Query Executor Tool",
-      "description": "Execute SQL queries in BigQuery",
-      "type": "query_executor",
-      "enabled": true,
-      "module": ".claude.tools.query_executor",
-      "class": "QueryExecutorTool",
-      "methods": [
-        {
-          "name": "execute_query",
-          "description": "Execute a BigQuery query"
-        },
-        {
-          "name": "execute_and_fetch",
-          "description": "Execute query and fetch all results"
-        },
-        {
-          "name": "validate_query",
-          "description": "Validate a query without executing it"
-        },
-        {
-          "name": "cancel_query",
-          "description": "Cancel a running BigQuery job"
-        },
-        {
-          "name": "get_job_status",
-          "description": "Get the status of a BigQuery job"
-        },
-        {
-          "name": "batch_execute_queries",
-          "description": "Execute multiple queries in batch"
-        },
-        {
-          "name": "setup_connection",
-          "description": "Setup BigQuery connection"
-        }
-      ]
-    },
-    {
-      "id": "data_fetcher",
-      "name": "Data Fetcher Tool",
-      "description": "Fetch and process BigQuery query results",
-      "type": "data_access",
-      "enabled": true,
-      "module": ".claude.tools.data_fetcher",
-      "class": "DataFetcherTool",
-      "methods": [
-        {
-          "name": "fetch_results",
-          "description": "Fetch results from a completed BigQuery job"
-        },
-        {
-          "name": "fetch_all_results",
-          "description": "Fetch all results from a BigQuery job"
-        },
-        {
-          "name": "convert_to_dataframe",
-          "description": "Convert BigQuery results to pandas DataFrame format"
-        },
-        {
-          "name": "export_results",
-          "description": "Export query results to a file"
-        },
-        {
-          "name": "get_result_schema",
-          "description": "Get the schema of query results"
-        },
-        {
-          "name": "filter_results",
-          "description": "Filter results in memory based on conditions"
-        },
-        {
-          "name": "aggregate_results",
-          "description": "Aggregate results in memory"
-        },
-        {
-          "name": "get_statistics",
-          "description": "Calculate statistics from results"
-        }
-      ]
-    },
-    {
       "id": "google_calendar",
       "name": "Google Calendar Tool",
-      "description": "Create, list, update, and manage Google Calendar events via Claude AI MCP",
+      "description": "Create, list, update, and search Google Calendar events via Claude AI MCP",
       "type": "calendar_access",
       "enabled": true,
       "mcp": true,
       "provider": "claude_ai",
+      "note": "No local credentials required.",
       "methods": [
-        {
-          "name": "list_events",
-          "description": "List events on a calendar with optional time filters"
-        },
-        {
-          "name": "create_event",
-          "description": "Create a new event on the calendar"
-        },
-        {
-          "name": "update_event",
-          "description": "Update an existing event"
-        },
-        {
-          "name": "delete_event",
-          "description": "Delete an event from the calendar"
-        },
-        {
-          "name": "search_events",
-          "description": "Search for events matching criteria"
-        },
-        {
-          "name": "suggest_time",
-          "description": "Find available time slots for meetings"
-        }
+        {"name": "list_calendars", "description": "List the user's calendars"},
+        {"name": "list_events", "description": "List events on a calendar with optional time filters"},
+        {"name": "search_events", "description": "Search for events matching criteria"},
+        {"name": "suggest_time", "description": "Find available time slots for meetings"},
+        {"name": "get_event", "description": "Get a single event by id"},
+        {"name": "create_event", "description": "Create a new event on the calendar"},
+        {"name": "update_event", "description": "Update an existing event"}
+      ]
+    },
+    {
+      "id": "scheduler_tools",
+      "name": "Scheduler Tools",
+      "description": "Python calendar helpers used only by the standalone .claude/schedule.py path",
+      "type": "calendar_access",
+      "enabled": true,
+      "module": "claude.agents.tools.scheduler",
+      "methods": [
+        {"name": "think", "description": "Reason about the scheduling task and plan"},
+        {"name": "build_task", "description": "Structure the scheduling request"},
+        {"name": "get_today", "description": "Get today's date and time"},
+        {"name": "check_availability", "description": "Check calendar availability for a date range"},
+        {"name": "create_event", "description": "Create a calendar event"}
       ]
     }
   ]

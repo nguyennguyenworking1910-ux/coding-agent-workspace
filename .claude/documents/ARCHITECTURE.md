@@ -1,6 +1,6 @@
 # System Architecture & Development Guide
 
-**Last Updated:** August 7, 2026  
+**Last Updated:** August 11, 2026  
 **Status:** Active System  
 **Target Audience:** Team Leader, All Agent Members, Future Developers
 
@@ -8,12 +8,18 @@
 
 ## Overview
 
-This is a **multi-agent orchestration system** where:
-- The **Team Leader** (coordinator agent) manages task allocation and spawns specialized agents
-- **Specialized agents** handle specific domains (code analysis, bug fixing, scheduling, etc.)
-- **Tools** provide capabilities to agents (thought, calendar access, database queries, etc.)
+This is a **multi-agent workspace built on Claude Code** where:
+- The **Team Leader** is the `/solve` command — it plans task allocation and dispatches
+  specialized subagents from the main session
+- **Specialized subagents** (`.claude/agents/*.md`) handle specific domains (code review,
+  security, bug fixing, implementation, diagnostics, sales data, scheduling)
+- **Tools** provide capabilities to agents — either harness tools (`Read`, `Bash`, MCP
+  integrations) or Python tools under `agents/tools/` for the standalone path
 - **Clients** handle external integrations (Google Calendar, BigQuery, etc.)
-- **System** defines how everything connects and operates
+- **System** holds the schemas shared across the Python layer
+
+Everything runs inside a Claude Code session, with one deliberate exception: the Scheduler
+also has a Python implementation so it can run from a plain shell or cron.
 
 The system prioritizes **clean separation of concerns**, **clear ownership**, and **scalable agent addition**.
 
@@ -26,25 +32,39 @@ Root configuration and orchestration for all agents and tools.
 
 ```
 .claude/
-├── agents.json              [MASTER CONFIG] Defines all agents, tools, permissions
+├── agents.json              [MASTER CONFIG] Human-readable index of the roster
 ├── settings.json            [SETTINGS] Claude Code harness configuration
-├── settings.local.json      [LOCAL SETTINGS] User-specific overrides
+├── settings.local.json      [LOCAL SETTINGS] User-specific overrides, not committed
+├── schedule.py              [ENTRY POINT] Standalone scheduler (runs outside a session)
+├── system_test.py           [CHECKS] Structure and convention validation
 │
 ├── documents/               [DOCUMENTATION FOLDER]
 │   ├── README.md            Index of all documentation
+│   ├── ARCHITECTURE.md      This file
+│   ├── AGENT_INITIALIZATION.md  Mandatory pre-execution checklist
 │   ├── SETUP.md             Credential setup & configuration guide
-│   └── SCHEDULE_CLI.md      Schedule agent usage guide
+│   ├── SCHEDULE_CLI.md      Schedule agent usage guide
+│   └── SCHEDULER_SETUP.md   Scheduler credential setup
 │
-├── agents/                  [AGENT IMPLEMENTATIONS]
-│   ├── __init__.py          Package initialization
-│   ├── requirements.txt     Python dependencies for all agents
-│   ├── team/                Team member agents (coordinators, specialists)
-│   │   ├── scheduler.py     Scheduler agent: calendar & task management
+├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
+│   ├── reviewer.md          ┐
+│   ├── red-team.md          │ SUBAGENT DEFINITIONS. Markdown + YAML
+│   ├── bug-fixer.md         │ frontmatter is the ONLY form Claude Code
+│   ├── diagnostician.md     │ discovers and dispatches. These files are
+│   ├── coder.md             │ the agents — there is no Python behind them.
+│   ├── group-sales-manager.md │
+│   ├── scheduler.md         ┘
+│   │
+│   ├── base_agent.py        Base class for the standalone Python scheduler
+│   ├── system_init.py       Enforces the ARCHITECTURE.md reading requirement
+│   ├── requirements.txt     Python dependencies
+│   ├── team/
+│   │   ├── scheduler.py     SchedulerAgent: Google Calendar REST implementation
 │   │   └── .env.example     Environment variables template
 │   │
-│   └── tools/               Tool implementations for agents
-│       ├── thought/         Base reasoning tool (for all agents)
-│       └── scheduler/       Scheduler-specific tools (calendar parsing, conflict detection)
+│   └── tools/               Tool implementations for the Python scheduler
+│       ├── base_tool.py     Tool base class and registry
+│       └── scheduler/       Calendar helpers (availability, event creation)
 │
 ├── clients/                 [EXTERNAL INTEGRATIONS]
 │   ├── __init__.py          Package initialization
@@ -54,10 +74,11 @@ Root configuration and orchestration for all agents and tools.
 │   └── .env.example         Environment variables template
 │
 ├── commands/                [SLASH COMMANDS FOR USERS]
-│   └── schedule-agent.md    /schedule-agent command definition
+│   ├── solve.md             /solve — team leader: plans and dispatches subagents
+│   └── schedule-agent.md    /schedule-agent — calendar via native MCP
 │
-├── system/                  [SYSTEM OPERATIONS & UTILITIES]
-│   └── (reserved for system-level tools, monitoring, logging)
+├── system/                  [SHARED SCHEMAS]
+│   └── schemas.py           TaskResult, used by the Python scheduler path
 │
 ├── examples/                [USAGE EXAMPLES & TEMPLATES]
 │   └── (reference implementations for new agents/tools)
@@ -65,35 +86,67 @@ Root configuration and orchestration for all agents and tools.
 └── worktrees/               [GIT WORKTREES] Isolated branches for parallel work
 ```
 
+### Two kinds of agent — know which you are adding
+
+| | Subagent (`.md`) | Python agent (`.py`) |
+|---|---|---|
+| **Lives in** | `.claude/agents/{name}.md` | `.claude/agents/team/{name}.py` |
+| **Runs** | Inside a Claude Code session | As a standalone process |
+| **Dispatched by** | The harness, via `/solve` or by description match | A script you write |
+| **Use when** | Always, by default | Only when it must run with no session (cron, CI) |
+
+**Default to a subagent.** The only Python agent in this repo is the Scheduler, and it exists
+solely because `.claude/schedule.py` needs to schedule from a plain shell. Python classes are
+invisible to Claude Code — it does not load them, and it will never dispatch them.
+
 ---
 
 ## Folder Purposes (Detailed)
 
-### `agents/` — Agent Implementations
-**Contains:** Agent logic, not client logic or system utilities.
+### `agents/` — Agent Definitions & Implementations
+**Contains:** Subagent definitions (`*.md`) and the Python implementations that must run
+outside a session. Not client logic, not shared schemas.
 
 **Rules:**
-- ✅ **Only store** `*.py` agent implementations and their direct dependencies
-- ✅ **Each agent** gets its own file or subdirectory (e.g., `scheduler.py`, `diagnostician.py`)
+- ✅ **Store subagent definitions** as `{name}.md` directly in `agents/` — the harness only
+  looks here, and only at markdown with frontmatter
+- ✅ **Each agent** gets its own file
+- ✅ **Give each subagent only the tools it needs** — omit `Edit`/`Write` for read-only roles
 - ✅ **Import from** `tools/` for tool definitions, `clients/` for external APIs
-- ❌ **Don't store** credentials, configuration (use `clients/config.py`), or system utilities
+- ❌ **Don't store** credentials, configuration (use `clients/config.py`), or shared schemas
 - ❌ **Don't hardcode** API keys, URLs, or environment-specific paths
+- ❌ **Don't write a Python agent class** expecting Claude Code to dispatch it — it won't
 
-**Example agent structure:**
+**Subagent definition structure:**
+```markdown
+---
+name: reviewer
+description: Reviews code changes for correctness and maintainability. Use after a
+  change is written and before it is committed. Read-only.
+tools: Read, Grep, Glob, Bash
+model: opus
+---
+
+Before doing anything else, read `.claude/documents/ARCHITECTURE.md`.
+
+You are an expert code reviewer. Your role is to:
+1. ...
+```
+
+The `description` is what the harness matches a request against, so write it as *when to use
+this agent*, not just what it is.
+
+**Python agent structure** (only for standalone execution):
 ```python
 # agents/team/scheduler.py
-from claude.tools import ThoughtTool, GoogleCalendarTool
-from claude.clients import GoogleCalendarClient
+from ..base_agent import BaseAgent, AgentConfig
+from ...system.schemas import TaskResult
+from ..tools.scheduler import SCHEDULER_TOOLS
 
-class SchedulerAgent:
-    def __init__(self):
-        self.thought = ThoughtTool()
-        self.calendar = GoogleCalendarTool()
-        self.client = GoogleCalendarClient()
-    
-    async def execute(self, request):
+class SchedulerAgent(BaseAgent):
+    async def execute(self, task) -> TaskResult:
         # Agent logic here
-        pass
+        ...
 ```
 
 ---
@@ -146,13 +199,14 @@ class GoogleCalendarClient:
 
 ---
 
-### `system/` — System Utilities & Infrastructure
-**Contains:** Logging, monitoring, metrics, system-level tools (not agent-specific).
+### `system/` — Shared Schemas & Infrastructure
+**Contains:** Data structures shared across the Python layer. Currently just `TaskResult`.
 
 **Rules:**
-- ✅ **Store** system utilities, middleware, hooks
-- ✅ **Store** monitoring/debugging tools
-- ✅ **Store** batch operations or migrations
+- ✅ **Store** shared schemas, system utilities, middleware, hooks
+- ✅ **Keep it dependency-free** — this is imported by everything, so it must not import
+  from `agents/`, `tools/`, or `clients/`
+- ✅ **Prefer stdlib** (`dataclasses`) over adding a dependency for a data holder
 - ❌ **Don't store** agent logic or business tools (use `agents/` or `tools/`)
 - ❌ **Don't hardcode** agent-specific behavior
 
@@ -217,36 +271,48 @@ allowed-tools: Tool1(*), Tool2(*), Skill(skill-name)
 
 **Checklist:**
 
-1. **Create agent file**
+1. **Create the subagent definition**
    ```
-   .claude/agents/team/{agent_name}.py
+   .claude/agents/{agent-name}.md
    ```
-   - Define agent class with `__init__` and `execute()` method
-   - Import tools from `claude.tools`
-   - Import clients from `claude.clients`
+   - Use `kebab-case` for the filename and the `name:` field, and keep them identical
+   - Required frontmatter: `name`, `description`, `tools`, `model`
+   - Write `description` as *when to use this agent* — that is what dispatch matches on
+   - Grant only the tools the role needs; omit `Edit`/`Write` for read-only agents
+   - Open the body with the ARCHITECTURE.md reading requirement
 
 2. **Register in `agents.json`**
    ```json
    {
-     "id": "unique_id",
+     "id": "agent-name",
      "name": "Human Name",
      "description": "What it does",
      "enabled": true,
      "type": "category",
-     "tools": ["tool1", "tool2"],
-     "permissions": "read-only" or "write",
-     "capabilities": ["cap1", "cap2"]
+     "definition": ".claude/agents/agent-name.md",
+     "tools": ["Read", "Grep", "Glob", "Bash"],
+     "permissions": "read-only"
    }
    ```
+   Keep `id` identical to the filename stem and the `name:` in frontmatter.
 
-3. **Update Team Leader (if spawnable)**
-   ```json
-   "canSpawn": ["existing_agents", "your_new_agent"]
+3. **Add it to the team leader**
+
+   Add a row to the team members table in `.claude/commands/solve.md` and to the
+   `dispatches` list under `commands` in `agents.json`. `/solve` cannot delegate to an
+   agent it does not know about.
+
+4. **Update `requirements.txt`** only if you also added Python that needs a dependency
+
+5. **Verify**
+   ```bash
+   python .claude/system_test.py
    ```
+   This checks the file exists, has valid frontmatter, and carries the ARCHITECTURE.md
+   requirement.
 
-4. **Update `requirements.txt`** if new dependencies needed
-
-5. **Write documentation** in `.claude/examples/` if complex
+6. **Write documentation** in `.claude/documents/` if the agent needs more explanation than
+   its definition carries
 
 ---
 
@@ -256,7 +322,7 @@ allowed-tools: Tool1(*), Tool2(*), Skill(skill-name)
 
 1. **Create tool directory**
    ```
-   .claude/tools/{tool_name}/
+   .claude/agents/tools/{tool_name}/
    ├── __init__.py
    ├── core.py         (main tool class)
    └── helpers.py      (utilities)
@@ -326,34 +392,52 @@ User Input
     ↓
 Claude Code Harness
     ↓
-[Command Definition (.md file)]
+[/solve command definition]  ← .claude/commands/solve.md
     ↓
-[Invoke Agent or Tool]
+Team leader plans the request
     ↓
-Agent.execute(request)
-    ├─ Use Thought tool (reasoning)
-    ├─ Call specialized tools
-    │   └─ Tools use Clients to access external APIs
-    ├─ Spawn child agents (if Team Leader)
-    └─ Return result
+Dispatch subagents (Task tool)  ← .claude/agents/*.md
+    ├─ independent work runs concurrently
+    ├─ each subagent uses only its granted tools
+    └─ writing agents edit the tree; they never commit
     ↓
-Report to User
+Team leader synthesises and relays results
+    ↓
+Report to User + git diff --stat
+```
+
+Standalone path, for when there is no session:
+
+```
+Shell / cron
+    ↓
+python .claude/schedule.py "<request>"
+    ↓
+SchedulerAgent.execute()  ← .claude/agents/team/scheduler.py
+    ├─ Calls tools in .claude/agents/tools/scheduler/
+    │   └─ Tools use clients/calendar_client.py to reach the Calendar API
+    └─ Returns TaskResult  ← .claude/system/schemas.py
 ```
 
 ### Team Hierarchy
 
 ```
-Team Leader (Coordinator)
-├── Diagnostician (Code analysis)
-├── Bug Fixer (Code fixes)
-├── Reviewer (Code validation)
-├── Group Sale Manager (BigQuery operations)
-└── Scheduler (Calendar & task management)
+Team Leader (/solve command — not an agent)
+├── Diagnostician         (root cause from logs, metrics, traces)  read-only
+├── Red Team              (security and edge cases)                read-only
+├── Reviewer              (code validation)                        read-only
+├── Coder                 (features and refactors)                 writes
+├── Bug Fixer             (issue resolution)                       writes
+├── Group Sales Manager   (sales data, allocation analysis)        read-only
+└── Scheduler             (calendar & task management)             calendar only
 ```
 
-- **Team Leader** can spawn any member
-- **Members** execute their specialized tasks
-- **All members** have access to Thought tool (reasoning)
+- **The team leader is the `/solve` command**, not a subagent — the orchestrating role belongs
+  to the main session, which is the only thing that can dispatch others
+- **Members** execute their specialized tasks and report back
+- **Subagent reports are not shown to the user** — the leader must relay what matters
+- **Never run two writing agents on overlapping paths concurrently**; give them disjoint file
+  sets or sequence them
 - **Specific members** have domain-specific tools (calendar, database, etc.)
 
 ---
@@ -419,8 +503,15 @@ This is a **non-negotiable rule** for system organization.
 - ❌ Code files (`.py`) — go in `agents/`, `tools/`, or `clients/`
 - ❌ Configuration files (`.json`, `.yaml`) — stay in their respective folders
 - ❌ Environment files (`.env`) — stay in client/agent folders
+- ❌ **Subagent definitions** (`.claude/agents/*.md`) — stay in `agents/`
 - ❌ Command definitions (in `commands/`) — stay in their folders
 - ❌ Example files (in `examples/`) — stay in their folders
+
+**The two `.md` exceptions are load-bearing, not preferences.** Subagent definitions and
+slash commands are markdown, but they are *code the harness executes*, not documentation.
+Claude Code discovers them only at `.claude/agents/` and `.claude/commands/` respectively —
+move one into `documents/` and the agent or command silently stops existing. `system_test.py`
+treats all three locations as valid.
 
 #### 📋 Documentation Checklist
 
@@ -452,9 +543,11 @@ git commit -m "docs: Add GitHub integration guide"
 ```
 
 #### Enforcement
-- **Code review:** Reject PRs with `.md` files outside `.claude/documents/`
+- **Code review:** Reject PRs with `.md` files outside `.claude/documents/`, `.claude/agents/`,
+  or `.claude/commands/`
 - **Agents:** Will not process documentation requests without proper location
-- **System check:** Run `find .claude -name "*.md" -not -path "./.claude/documents/*"` to validate
+- **System check:** Run `python .claude/system_test.py` — Test 2 reports every `.md` file and
+  flags any in an invalid location
 
 ---
 
@@ -469,16 +562,16 @@ git commit -m "docs: Add GitHub integration guide"
 
 **Step 2: Create the tool**
 ```
-.claude/tools/github/
+.claude/agents/tools/github/
 ├── __init__.py
 ├── reviewer.py   (PR review logic)
 └── fetcher.py    (Fetch PR details)
 ```
 
-**Step 3: Create/Update agent**
+**Step 3: Create/Update the subagent**
 ```
-.claude/agents/team/code_reviewer.py
-(or update existing reviewer with new tool)
+.claude/agents/code-reviewer.md
+(or grant the new tool to the existing reviewer.md)
 ```
 
 **Step 4: Register in agents.json**
@@ -486,20 +579,20 @@ git commit -m "docs: Add GitHub integration guide"
 {
   "id": "github",
   "name": "GitHub Tool",
-  "tools": [
+  "methods": [
     {"name": "review_pr", "description": "Review a GitHub PR"}
   ]
 }
 ```
 
-**Step 5: Update Team Leader**
-```json
-"canSpawn": [..., "code_reviewer"]
-```
+**Step 5: Update the team leader**
 
-**Step 6: Document in examples/**
+Add the subagent to the team members table in `.claude/commands/solve.md` and to the
+`dispatches` list in `agents.json`.
+
+**Step 6: Document in documents/**
 ```
-.claude/examples/github_agent_example.py
+.claude/documents/GITHUB_INTEGRATION.md
 ```
 
 **Step 7: Add setup guide**
@@ -536,11 +629,15 @@ Every markdown file created in this system, without exception, must be stored in
 | **Troubleshooting** | `.claude/documents/` | `TROUBLESHOOTING.md` |
 
 **NOT here:**
-- ❌ Project root (except this reference)
-- ❌ Agent folders
+- ❌ Project root (except `README.md`)
+- ❌ Agent folders — **except** subagent definitions, which MUST be `.claude/agents/*.md`
+- ❌ Command folders — **except** slash commands, which MUST be `.claude/commands/*.md`
 - ❌ Tool folders
 - ❌ Client folders
 - ❌ System folders
+
+The two exceptions are the only ones. They exist because the harness loads those paths as
+executable configuration; a subagent or command placed anywhere else does not run.
 
 **When adding documentation:**
 1. Create file in `.claude/documents/{name}.md`
@@ -578,5 +675,5 @@ Every markdown file created in this system, without exception, must be stored in
 ---
 
 **System Maintainer:** Team Leader Agent  
-**Last Reviewed:** August 7, 2026  
+**Last Reviewed:** August 11, 2026  
 **Next Review:** As needed when new agent/tool added
