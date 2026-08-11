@@ -39,6 +39,14 @@ This folder contains all system documentation, setup guides, and reference mater
 
 - **[SCHEDULER_SETUP.md](./SCHEDULER_SETUP.md)** — Scheduler credential setup, in depth
 
+- **[BIGQUERY_INTEGRATION.md](./BIGQUERY_INTEGRATION.md)** — BigQuery data access guide
+  - gcloud ADC setup and project selection
+  - Environment variables
+  - How to add a `.sql` query template (file drop, no code change)
+  - Running templates from `python .claude/bq_query.py`
+  - How an agent uses the `bigquery_tools` module
+  - Safety caps (max bytes billed, row cap) and troubleshooting
+
 - **[EXAMPLES_GUIDE.md](./EXAMPLES_GUIDE.md)** — Reference implementations and usage patterns
 
 ---

@@ -64,7 +64,7 @@
         "enabled": true,
         "datasets": ["group_sales", "sales_metrics"],
         "operations": ["query"],
-        "note": "Reached through the `bq` CLI via Bash. There is no BigQuery client module in this repo; writes require explicit user approval."
+        "note": "Reached through the bigquery_tools module (claude.agents.tools.bigquery) on top of .claude/clients/bigquery_client.py, which authenticates with gcloud ADC. Queries are `.sql` templates in .claude/agents/tools/bigquery/templates/ bound with named parameters; run them with `python .claude/bq_query.py <template> --param key=value`. The `bq` CLI via Bash remains available for ad-hoc inspection. Writes require explicit user approval. See .claude/documents/BIGQUERY_INTEGRATION.md."
       }
     },
     {
@@ -152,6 +152,26 @@
         {"name": "get_today", "description": "Get today's date and time"},
         {"name": "check_availability", "description": "Check calendar availability for a date range"},
         {"name": "create_event", "description": "Create a calendar event"}
+      ]
+    },
+    {
+      "id": "bigquery_tools",
+      "name": "BigQuery Tools",
+      "description": "Run parameterized `.sql` query templates and ad-hoc SQL against BigQuery, and inspect datasets/tables. Queries live as `.sql` files in .claude/agents/tools/bigquery/templates/ - adding one needs no code change.",
+      "type": "data_access",
+      "enabled": true,
+      "module": "claude.agents.tools.bigquery",
+      "entry_point": ".claude/bq_query.py",
+      "auth": "gcloud Application Default Credentials",
+      "note": "Values are bound as BigQuery named query parameters (@name), never interpolated into SQL. Capped by BIGQUERY_MAX_BYTES_BILLED (10 GiB default) and BIGQUERY_MAX_ROWS (1000 default). See .claude/documents/BIGQUERY_INTEGRATION.md.",
+      "methods": [
+        {"name": "list_templates", "description": "List available .sql templates with their descriptions and required @params"},
+        {"name": "describe_template", "description": "Describe one template: description, required @params, and SQL"},
+        {"name": "run_template", "description": "Run a named .sql template with a dict of named parameters"},
+        {"name": "run_sql", "description": "Run ad-hoc SQL with named parameters (supports dry_run for a cost estimate)"},
+        {"name": "list_datasets", "description": "List the datasets visible in the configured project"},
+        {"name": "list_tables", "description": "List the tables and views in a dataset"},
+        {"name": "get_table_schema", "description": "Describe the columns of a table or view"}
       ]
     }
   ]

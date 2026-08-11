@@ -3,6 +3,9 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.108.0
 
+# BigQuery Integration - .claude/clients/bigquery_client.py, .claude/bq_query.py
+google-cloud-bigquery==3.25.0
+
 # Optional: for better date parsing
 python-dateutil==2.8.2
 
