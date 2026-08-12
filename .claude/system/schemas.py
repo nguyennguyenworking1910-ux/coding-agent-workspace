@@ -1,8 +1,44 @@
 """Data schemas shared by the agent system."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from enum import Enum
+from typing import Any, Dict, Optional, List
 
+class TaskClass(str, Enum):
+    SMALL = "small_task"
+    MEDIUM = "medium_task"
+    COMPLEX = "complex_task"
+
+class RiskLevel(str, Enum):
+    READ_ONLY = "read_only"
+    WRITE = "write"
+    EXTERNAL_WRITE = "external_write"
+    DESTRUCTIVE = "destructive"
+
+@dataclass(frozen=True)
+class ExecutionLimits:
+    max_members: int
+    max_tool_rounds: int
+    max_total_tool_calls: int
+    max_run_budget_usd: float
+
+
+@dataclass
+class IntentEnvelope:
+    request_id: str
+    raw_request: str
+    task_class: TaskClass
+    risk_level: RiskLevel
+    confidence: float
+    complexity_score: int
+    score_breakdown: dict[str, int]
+    domains: list[str] = field(default_factory=list)
+    operations: list[str] = field(default_factory=list)
+    candidate_agents: list[str] = field(default_factory=list)
+    selected_agents: list[str] = field(default_factory=list)
+    limits: ExecutionLimits | None = None
+    reasons: list[str] = field(default_factory=list)
+    requires_confirmation: bool = False
 
 @dataclass
 class TaskResult:

@@ -4,6 +4,15 @@
     {
       "id": "diagnostician",
       "name": "Diagnostician",
+      "runtime": {
+        "model": "sonnet",
+        "max_turns": 8,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Analyzes logs, metrics, and traces to find root causes and performance bottlenecks",
       "enabled": true,
       "type": "analyzer",
@@ -14,6 +23,15 @@
     {
       "id": "bug-fixer",
       "name": "Bug Fixer",
+      "runtime": {
+        "model": "opus",
+        "max_turns": 12,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Diagnoses a failing test or error and implements the fix",
       "enabled": true,
       "type": "implementer",
@@ -24,6 +42,15 @@
     {
       "id": "coder",
       "name": "Coder",
+      "runtime": {
+        "model": "opus",
+        "max_turns": 16,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Implements features and performs refactors from a specification",
       "enabled": true,
       "type": "implementer",
@@ -34,6 +61,15 @@
     {
       "id": "reviewer",
       "name": "Reviewer",
+      "runtime": {
+        "model": "sonnet",
+        "max_turns": 8,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Reviews code changes for correctness, security, and maintainability",
       "enabled": true,
       "type": "validator",
@@ -44,6 +80,15 @@
     {
       "id": "red-team",
       "name": "Red Team",
+      "runtime": {
+        "model": "opus",
+        "max_turns": 10,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Adversarial security and edge-case testing of this codebase",
       "enabled": true,
       "type": "security",
@@ -54,6 +99,15 @@
     {
       "id": "group-sales-manager",
       "name": "Group Sales Manager",
+      "runtime": {
+        "model": "sonnet",
+        "max_turns": 8,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Queries group sales data and plans resource/workload allocation",
       "enabled": true,
       "type": "sales_manager",
@@ -70,6 +124,15 @@
     {
       "id": "scheduler",
       "name": "Scheduler",
+      "runtime": {
+        "model": "sonnet",
+        "max_turns": 6,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complexity_task": 4.0
+        }
+      },
       "description": "Schedules tasks and meetings on Google Calendar from natural language, in any language",
       "enabled": true,
       "type": "calendar_manager",
@@ -174,5 +237,53 @@
         {"name": "get_table_schema", "description": "Describe the columns of a table or view"}
       ]
     }
-  ]
+  ],
+  "orchestration": {
+    "version": 1,
+    "default_task_class": "medium_task",
+    "minimum_confidence": 0.7,
+
+    "task_class_aliases": {
+      "complexity_task": "complex_task"
+    },
+
+    "intent_parser": {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "max_output_tokens": 1200,
+      "failure_policy": "fail_closed"
+    },
+
+    "task_classes": {
+      "small_task": {
+        "max_members": 1,
+        "max_tool_rounds": 1,
+        "max_total_tool_calls": 6,
+        "max_run_budget_usd": 1.0
+      },
+      "medium_task": {
+        "max_members": 3,
+        "max_tool_rounds": 3,
+        "max_total_tool_calls": 24,
+        "max_run_budget_usd": 4.0
+      },
+      "complex_task": {
+        "max_members": 5,
+        "max_tool_rounds": 5,
+        "max_total_tool_calls": 60,
+        "max_run_budget_usd": 10.0
+      }
+    },
+
+    "execution_policy": {
+      "team_leader_counted_as_member": false,
+      "max_parallel_writers": 1,
+      "max_write_attempts": 1,
+      "max_external_mutation_attempts": 1,
+      "unknown_intent_fallback": "medium_task",
+      "low_confidence_requires_confirmation": true,
+      "external_write_requires_confirmation": true
+    }
+  }
 }

@@ -4,6 +4,7 @@
 
 # Credentials / secrets (never commit)
 .env
+.env.*
 !.env.example
 credentials.json
 token.json
@@ -53,3 +54,5 @@ htmlcov/
 *.log
 test_output.txt
 workflow_test.txt
+
+
