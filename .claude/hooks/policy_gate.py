@@ -48,6 +48,12 @@ EXTERNAL_MUTATION_VERBS = ("create", "update", "delete", "send", "publish", "upl
 # Harness-local tools whose names collide with those verbs but which mutate only
 # session-local bookkeeping. Without this, a read-only run could not track its own
 # task list.
+#
+# `SendMessage` belongs here for the same reason and matters more: "send" reads as
+# an external verb, but it only writes to a teammate mailbox inside this session.
+# It is also the single path by which a teammate's report reaches the lead, so
+# denying it does not make a run safer — it silently discards the run's output
+# while every pane still looks like it succeeded.
 LOCAL_MUTATION_EXEMPT = frozenset(
     {
         "TaskCreate",
@@ -57,6 +63,7 @@ LOCAL_MUTATION_EXEMPT = frozenset(
         "TaskOutput",
         "TaskStop",
         "TodoWrite",
+        "SendMessage",
     }
 )
 

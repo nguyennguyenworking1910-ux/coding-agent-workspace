@@ -326,6 +326,8 @@ failure. Do not claim the event exists and do not retry automatically.
 - Write an agent's `description` as when the role should be used.
 - Grant only the tools required by the role.
 - Omit `Edit` and `Write` from read-only roles.
+- Grant `SendMessage` and `TaskUpdate` to every teammate, read-only roles included — it is the
+  only path a teammate's report reaches the lead.
 - Give writing roles explicit path ownership.
 - Register new agents in `.claude/agents.json`.
 - Add new agents to the team table in `.claude/commands/solve.md`.

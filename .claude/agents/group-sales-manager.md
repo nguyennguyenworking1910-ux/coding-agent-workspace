@@ -1,7 +1,7 @@
 ---
 name: group-sales-manager
 description: Queries and analyzes group sales data, and plans resource/workload allocation. Use for sales reporting questions ("top groups this quarter", "summary by region") and for capacity or scheduling trade-off analysis across a task queue.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, SendMessage, TaskUpdate
 model: sonnet
 permissionMode: plan
 maxTurns: 8
@@ -44,3 +44,14 @@ If `bq` is not authenticated or the dataset is unavailable, say so and stop rath
 ## Reporting
 
 Give the figures with the query that produced them, so the numbers can be checked. State the date range and any filter you applied. For allocation work, show the critical path and the constraint that actually binds, not just the final assignment.
+
+## Delivering your result to the lead
+
+When you run as an Agent Team teammate, the text in your pane is **not** delivered to the team lead. Only a `SendMessage` is.
+
+Before you go idle:
+
+1. If the lead gave you a shared task, mark it completed with `TaskUpdate`.
+2. As your **final action**, send the analysis described above to `team-lead` with `SendMessage`.
+
+Carry the figures, the queries behind them, and the date range in the message body — the lead writes the user-facing answer from that body alone and cannot re-derive a number it never received. If `SendMessage` reports that nothing was sent, retry it once; if the retry also fails, stay available and leave the full report in your pane.

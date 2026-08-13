@@ -17,7 +17,7 @@
       "enabled": true,
       "type": "analyzer",
       "definition": ".claude/agents/diagnostician.md",
-      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "read-only"
     },
     {
@@ -36,7 +36,7 @@
       "enabled": true,
       "type": "implementer",
       "definition": ".claude/agents/bug-fixer.md",
-      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "write"
     },
     {
@@ -55,7 +55,7 @@
       "enabled": true,
       "type": "implementer",
       "definition": ".claude/agents/coder.md",
-      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "write"
     },
     {
@@ -74,7 +74,7 @@
       "enabled": true,
       "type": "validator",
       "definition": ".claude/agents/reviewer.md",
-      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "read-only"
     },
     {
@@ -93,7 +93,7 @@
       "enabled": true,
       "type": "security",
       "definition": ".claude/agents/red-team.md",
-      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "read-only"
     },
     {
@@ -112,7 +112,7 @@
       "enabled": true,
       "type": "sales_manager",
       "definition": ".claude/agents/group-sales-manager.md",
-      "tools": ["Read", "Grep", "Glob", "Bash"],
+      "tools": ["Read", "Grep", "Glob", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "read-only",
       "bigquery_access": {
         "enabled": true,
@@ -137,7 +137,7 @@
       "enabled": true,
       "type": "calendar_manager",
       "definition": ".claude/agents/scheduler.md",
-      "tools": ["Read", "Bash"],
+      "tools": ["Read", "Bash", "SendMessage", "TaskUpdate"],
       "permissions": "write",
       "calendar_access": {
         "enabled": true,

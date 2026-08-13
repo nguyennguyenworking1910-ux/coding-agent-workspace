@@ -148,16 +148,13 @@ Then stop. Never fall back to an in-process agent.
 ## 5. Hard dispatch contract
 
 Create exactly one session-scoped Agent Team for this run through the runtime's **team-aware
-`Agent` path**. In this Claude Code runtime, `Agent` has two distinct uses:
+`Agent` path**. In Claude Code v2.1.178 and later, the first named teammate forms the
+session-scoped team automatically. The runtime derives the team identity from the session;
+`team_name` is accepted but ignored, and separate `TeamCreate` and `TeamDelete` tools no longer
+exist.
 
-- with a teammate `name` and shared `team_name`/team context, it creates an Agent Team teammate;
-- without team context, it creates an ordinary subagent.
-
-Only the first form is allowed by `/solve`. Do not preflight by requiring or searching for a
-separate `TeamCreate` tool.
-
-Choose one stable, unique `team_name` for the run. Every selected teammate must use that same
-team context.
+Do not invent or depend on a custom `team_name`. Use the current session's automatically managed
+team and distinguish teammates by their stable `name` values.
 
 For every id in `selected_agents`:
 
@@ -165,21 +162,21 @@ For every id in `selected_agents`:
 2. Set `subagent_type` to the exact selected agent id.
 3. Set a stable unique teammate `name`, normally the agent id; add a deterministic suffix only
    when required for uniqueness.
-4. Supply the shared `team_name` or equivalent team-context field exposed by the runtime.
-5. Supply a complete bounded assignment as the teammate prompt.
-6. Ensure the result is an independent Agent Team teammate in its own visible tmux/psmux pane.
-7. Give it one bounded task through the shared team task list when task tools are exposed.
+4. Supply a complete bounded assignment as the teammate prompt, including the mandatory
+   result-delivery contract in section 8.
+5. Ensure the result is an independent Agent Team teammate in its own visible tmux/psmux pane.
+6. Give it one bounded task through the shared team task list when task tools are exposed.
 
 The direct semantic instruction is:
 
-> Create an Agent Team with one named teammate for each `selected_agents` entry. Use the
-> team-aware `Agent` path with the corresponding project agent type, teammate name, and shared
-> team context. Every teammate must run in a separate tmux pane. Do not use an ordinary
-> subagent.
+> Spawn one named Agent Team teammate for each `selected_agents` entry, using the corresponding
+> project agent type and a stable teammate name. Use the current session-scoped Agent Team.
+> Every teammate must run in a separate tmux/psmux pane. Do not use an ordinary subagent.
 
 The following are forbidden:
 
-- calling `Agent` without teammate `name` and team context;
+- calling `Agent` without a teammate `name` or without Agent Team teammate mode;
+- treating a caller-supplied `team_name` as proof of team membership;
 - calling `Agent` in ordinary foreground, background, or fork mode;
 - ordinary foreground or background subagents;
 - forked subagents;
@@ -192,13 +189,14 @@ The following are forbidden:
 - creating or editing project-level team configuration files;
 - manually editing Claude Code team, task, mailbox, or pane state.
 
-After the first teammate is created, verify that it has the requested teammate name, belongs to
-the run's team context, and appears in a separate pane. If any condition fails, stop immediately,
-report the backend failure, and do not dispatch the remaining roster.
+After the first teammate is created, verify that it has the requested teammate name, is
+registered as a teammate of the current session-scoped team, and appears in a separate pane.
+If any condition fails, stop immediately, report the backend failure, and do not dispatch the
+remaining roster.
 
-If another Agent Team from an earlier run is still active in the session, do not reuse it or
-destroy it automatically. Report the conflict and stop so the earlier team can be resolved
-safely first.
+Claude Code supports one Agent Team per session. If an earlier teammate from the same session is
+still active and conflicts with this run, do not reuse or destroy it automatically. Report the
+conflict and stop so the earlier work can be resolved safely first.
 
 ## 6. Authorized teammate types
 
@@ -235,7 +233,7 @@ move unfinished specialist work into the lead session to bypass the boundary.
 If an authorized teammate is unavailable, fails to start, or fails during work, report the real
 failure. Do not substitute a role or create a retry teammate without a fresh envelope.
 
-## 8. Plan and assign work
+## 8. Plan, assign, and require result delivery
 
 The lead coordinates; it does not perform specialist implementation itself.
 
@@ -254,12 +252,27 @@ Every teammate assignment must include:
 - expected output;
 - task dependencies;
 - remaining relevant limits;
-- instruction to report failures accurately.
+- instruction to report failures accurately;
+- the mandatory result-delivery instruction below.
 
 Teammates load project context, including `CLAUDE.md`, but do not inherit the lead's conversation
 history. Put all necessary task-specific context in the assignment.
 
-## 9. Coordinate safely
+### Mandatory teammate result-delivery contract
+
+Every teammate assignment must end with this semantic instruction:
+
+> Before going idle, mark your shared task completed with `TaskUpdate` when a task exists. Your
+> **FINAL ACTION** must be `SendMessage` to `team-lead` with your complete report. Include all
+> findings, changed files, verification or test results, failures, and unresolved work in the
+> message body. Do not rely on ordinary final text in your pane: it is not delivered to the
+> lead. If `SendMessage` explicitly reports that nothing was sent, retry it once. If the retry
+> fails, remain available and preserve the complete report in your pane.
+
+The complete report must be carried in the `SendMessage` body, not only in its summary. A task
+status change, pane output, or idle notification never substitutes for the report.
+
+## 9. Coordinate safely and collect reports
 
 Create independent teammates in the same dispatch round so their panes run concurrently. Use
 task dependencies when the work is genuinely sequential, such as:
@@ -272,8 +285,21 @@ Never let writing teammates edit overlapping paths concurrently. Give `coder` an
 explicit disjoint ownership, or sequence their tasks. Two writing teammates must not edit the
 same file in the same round.
 
-Monitor the shared task list and teammate messages. Wait for every required teammate result.
-Do not implement the task yourself while waiting.
+Maintain a report ledger keyed by teammate name. Count a teammate's result as received only when
+the lead receives that teammate's complete report through `SendMessage`. `TaskUpdate` status and
+`idle_notification` are coordination signals only; neither contains or proves delivery of the
+result.
+
+If a teammate becomes idle before its report arrives, send exactly one bounded recovery message
+to that teammate:
+
+> Your result was not delivered to the lead. Send your complete existing report now through
+> `SendMessage` to `team-lead`; do not redo the task.
+
+After that one recovery message, wait for either the complete report or an explicit delivery
+failure. Do not create a replacement, do not repeat the work in the lead, and do not synthesize
+or shut down the teammate based only on an idle notification. All recovery coordination remains
+subject to the envelope's remaining tool-call budget.
 
 When a teammate fails:
 
@@ -302,15 +328,14 @@ Do not hide unrelated pre-existing changes or attribute them to the current run 
 For a strictly `read_only` run, do not consume tool budget on Git inspection unless it is needed
 to support the requested analysis.
 
-After all required results are collected:
+After every required `SendMessage` report is collected, or a delivery failure is established:
 
 1. Request graceful shutdown of every teammate created by this run.
 2. Wait until no teammate remains active.
-3. Use the runtime's native team-cleanup action if it is exposed. Do not require a separately
-   named `TeamDelete` tool when the installed version manages cleanup through team-aware agent
-   controls.
-4. Clean up only the Agent Team created by this run.
-5. If shutdown or cleanup fails, report it; never kill panes or the tmux/psmux session manually.
+3. Do not search for or require `TeamDelete` or a separately named cleanup action. Current
+   Claude Code versions clean up the session-scoped team automatically when the session ends.
+4. Never edit team directories, mailbox files, pane state, or task state manually.
+5. If graceful shutdown fails, report it; never kill panes or the tmux/psmux session manually.
 
 Nothing is committed or pushed unless the request explicitly asks for it and the envelope
 authorizes it. When files changed, remind the user to review the exact diff before deciding

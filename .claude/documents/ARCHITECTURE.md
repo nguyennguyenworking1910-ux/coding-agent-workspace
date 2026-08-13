@@ -113,6 +113,9 @@ outside a session. Not client logic, not shared schemas.
   looks here, and only at markdown with frontmatter
 - ✅ **Each agent** gets its own file
 - ✅ **Give each subagent only the tools it needs** — omit `Edit`/`Write` for read-only roles
+- ✅ **Always grant `SendMessage` and `TaskUpdate`**, read-only roles included — a teammate
+  reports to the lead through `SendMessage` and nothing else, so a definition without it
+  finishes its work and silently delivers no result
 - ✅ **Import from** `tools/` for tool definitions, `clients/` for external APIs
 - ❌ **Don't store** credentials, configuration (use `clients/config.py`), or shared schemas
 - ❌ **Don't hardcode** API keys, URLs, or environment-specific paths
@@ -124,7 +127,7 @@ outside a session. Not client logic, not shared schemas.
 name: reviewer
 description: Reviews code changes for correctness and maintainability. Use after a
   change is written and before it is committed. Read-only.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, SendMessage, TaskUpdate
 model: opus
 ---
 
@@ -280,6 +283,8 @@ allowed-tools: Tool1(*), Tool2(*), Skill(skill-name)
    - Required frontmatter: `name`, `description`, `tools`, `model`
    - Write `description` as *when to use this agent* — that is what dispatch matches on
    - Grant only the tools the role needs; omit `Edit`/`Write` for read-only agents
+   - Always include `SendMessage` and `TaskUpdate` so the agent can report to the lead
+   - Close the body with the result-delivery contract the other definitions carry
    - Open the body with the ARCHITECTURE.md reading requirement
 
 2. **Register in `agents.json`**
@@ -437,6 +442,9 @@ Team Leader (/solve command — not an agent)
   to the main session, which is the only thing that can dispatch others
 - **Members** execute their specialized tasks and report back
 - **Subagent reports are not shown to the user** — the leader must relay what matters
+- **A teammate's pane text does not reach the leader either** — the report arrives only as a
+  `SendMessage` to `team-lead`, which is why every definition grants that tool and ends with the
+  delivery contract. A completed task or an idle pane is a coordination signal, not a result
 - **Never run two writing agents on overlapping paths concurrently**; give them disjoint file
   sets or sequence them
 - **Specific members** have domain-specific tools (calendar, database, etc.)
