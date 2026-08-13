@@ -60,6 +60,14 @@ load_dotenv(
     encoding="utf-8",
 )
 
+def configure_utf8_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(
+                encoding="utf-8",
+                errors="strict",
+            )
+
 def parse_prompt(prompt: str) -> tuple[str, bool, str] | None:
     """Split a controlled prompt into (command, confirmed, request).
 
@@ -282,6 +290,8 @@ def run(
 
 
 def main() -> int:
+    configure_utf8_output()
+
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
