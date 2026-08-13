@@ -1,35 +1,40 @@
 ---
-description: Act as team leader — plan a request across visible specialist teammates and report back
+description: Run a request through the validated intent envelope and visible Agent Team teammates
 argument-hint: "[request]"
-allowed-tools: Agent, Read, Grep, Glob, Bash(git diff *), Bash(git status *), Bash(git log *)
+disable-model-invocation: true
+allowed-tools: Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, SendMessage, Read, Grep, Glob, Bash(git diff *), Bash(git status *), Bash(git log *)
+disallowed-tools: EnterWorktree, ExitWorktree
 ---
+
+# Controlled Agent Team execution
 
 **Request:** $ARGUMENTS
 
-## Gate: the intent envelope
+This command is the lead session for one controlled Claude Code Agent Team run. It must use
+real Agent Team teammates in visible tmux/psmux panes. It must never use ordinary subagents.
 
-**Do this before reading files, planning, or dispatching. No envelope, no run.**
+## 1. Validate the intent envelope first
 
-An `INTENT_ENVELOPE_JSON` block is injected ahead of the request. It is the authority for this
-run — it decides the task class, risk level, roster, confirmation requirements, and budget.
+An `INTENT_ENVELOPE_JSON` block is injected ahead of the request. It is the sole authority for
+the run: task class, risk level, selected roster, clarification and confirmation requirements,
+and resource limits.
 
-You do not classify the request yourself, reconstruct a missing envelope, or improvise a
-roster. The intent parser fails closed; you fail closed with it.
+Do not read project files, plan, create a team, create tasks, or dispatch teammates until the
+envelope passes every check below.
 
-Validate the envelope in this order and **stop without reading project files or dispatching
-anything** if any check fails:
+### Required checks
 
-1. **Present.**
+1. **Present**
 
-   There is an `INTENT_ENVELOPE_JSON` block. If none is present, say:
+   If the block is missing, respond exactly:
 
    `Gate failed: INTENT_ENVELOPE_JSON is missing.`
 
-   Then stop. Do not infer a task class, select agents, or start the work.
+   Then stop. Do not classify the request, reconstruct an envelope, or select agents yourself.
 
-2. **Well-formed.**
+2. **Well-formed**
 
-   The block parses as JSON and carries:
+   The block must parse as JSON and contain:
 
    - `task_class`
    - `risk_level`
@@ -52,318 +57,274 @@ anything** if any check fails:
    - `external_write`
    - `destructive`
 
-   `limits` must carry:
+   `limits` must contain valid non-negative values for:
 
    - `max_members`
    - `max_tool_rounds`
    - `max_total_tool_calls`
    - `max_run_budget_usd`
 
-   A truncated block, an unknown enum value, an invalid type, or a missing required field is
-   malformed. Report the exact failed field in one line and stop.
+   `selected_agents` must be a list containing only registered teammate types and its length
+   must not exceed `limits.max_members`.
 
-3. **Current and unspent.**
+   For malformed data, report the exact failing field in one concise line and stop.
 
-   An envelope authorizes one run of one request.
+3. **Current, matching, and unspent**
 
-   - If it carries an expiry or issue timestamp, honour it. A lapsed envelope is invalid.
-   - `raw_request` must match the current request represented by `$ARGUMENTS`.
-   - An envelope describing different work is stale, even if the work appears related.
-   - An envelope already used for an earlier dispatch in this session is spent.
+   - Honour any issue and expiry timestamps carried by the envelope.
+   - `raw_request` must match the current request in `$ARGUMENTS`.
+   - An envelope for different work is stale, even if the work is related.
+   - An envelope authorizes one dispatch only. Never reuse a spent envelope.
 
-   If any check fails, report it and ask for a fresh envelope for the current request. Never
-   reuse, repair, or reconstruct an envelope.
+   If any check fails, report the reason, request a fresh envelope for the current request, and
+   stop. Never repair or reconstruct an envelope.
 
-Failing the gate is a normal outcome. Do not work around it.
+Failing this gate is a valid fail-closed outcome.
 
-## Initialization after the gate
+## 2. Initialize only after the gate passes
 
-Only after the envelope passes every validation:
+After validation:
 
 1. Read `.claude/documents/ARCHITECTURE.md`.
 2. Apply its folder ownership, dependency, naming, documentation, and safety rules.
-3. Confirm that the current request is not empty.
-4. Check the clarification and confirmation requirements before creating any teammate.
+3. Confirm that `$ARGUMENTS` is not empty.
+4. Report these authoritative envelope fields before dispatch:
+
+   - `task_class`
+   - `risk_level`
+   - `selected_agents`
+   - `limits`
+   - `requires_clarification`
+   - `requires_confirmation`
 
 If the request is empty, ask what the user wants and stop.
 
-## Required runtime and display mode
+## 3. Resolve clarification and confirmation before team creation
 
-This command uses **Claude Code Agent Teams**, not ordinary in-process subagents.
+### Clarification
 
-Every dispatched specialist must be an Agent Team teammate running through the tmux teammate
-backend so that it receives its own visible pane.
+If `requires_clarification` is `true`, ask the specific required question and stop. Do not
+create a team, create tasks, dispatch a partial roster, narrow the request, or assume missing
+details.
 
-The expected runtime is:
+### Confirmation
 
-- Claude Code is running interactively, not through `-p` or `--print`.
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is enabled.
-- `teammateMode` is `tmux`, or Claude Code was started with `--teammate-mode tmux`.
-- Claude Code is running inside a compatible `tmux` or `psmux` session.
+Explicit confirmation is required before team creation when any condition below is true:
 
-These are runtime prerequisites. Do not install software, edit settings, start another
-multiplexer, or repair the terminal environment as part of a `/solve` run.
+- `risk_level` is `external_write`;
+- `risk_level` is `destructive`; or
+- `requires_confirmation` is `true`.
 
-If the teammate backend is unavailable, tmux pane creation fails, or the Agent tool can only
-offer an in-process or worktree-isolated agent, report:
+Confirmation is valid only when the envelope carries `confirmed: true`, or the user explicitly
+confirmed the exact action in the current session. Before asking, state the exact external or
+destructive action that would occur.
+
+A generic or earlier approval does not authorize a different action. External and destructive
+mutations receive one attempt only; an uncertain or failed result must be reported, not retried.
+
+## 4. Required Agent Team and pane mode
+
+This command requires all of the following runtime conditions:
+
+- Claude Code is running interactively, not with `-p` or `--print`;
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is enabled;
+- `teammateMode` is `tmux`, or Claude Code was started with `--teammate-mode tmux`;
+- the current Claude Code session is already inside the compatible tmux/psmux environment.
+
+These are prerequisites, not work for `/solve`. Do not install software, edit settings, start a
+new multiplexer, or manually split panes during the run.
+
+Do not use the absence of a separately exposed `TeamCreate` tool as proof that Agent Teams are
+unavailable. Claude Code versions differ: in this project runtime, teammates are created through
+the team-aware mode of the `Agent` tool. Test the authorized team-aware dispatch itself.
+
+If that dispatch rejects the required teammate fields, creates an ordinary subagent, or fails to
+open a separate pane, respond:
 
 `Agent Team tmux backend unavailable — no teammates were dispatched.`
 
-Then stop. Do not silently fall back to ordinary subagents.
+Then stop. Never fall back to an in-process agent.
 
-## Envelope rules
+## 5. Hard dispatch contract
 
-These are hard authorization and budget boundaries.
+Create exactly one session-scoped Agent Team for this run through the runtime's **team-aware
+`Agent` path**. In this Claude Code runtime, `Agent` has two distinct uses:
 
-- **State the envelope before dispatching.**
+- with a teammate `name` and shared `team_name`/team context, it creates an Agent Team teammate;
+- without team context, it creates an ordinary subagent.
 
-  Open the plan by reporting:
+Only the first form is allowed by `/solve`. Do not preflight by requiring or searching for a
+separate `TeamCreate` tool.
 
-  - `task_class`
-  - `risk_level`
-  - `selected_agents`
-  - `limits`
-  - `requires_clarification`
-  - `requires_confirmation`
+Choose one stable, unique `team_name` for the run. Every selected teammate must use that same
+team context.
 
-- **Dispatch only from `selected_agents`.**
+For every id in `selected_agents`:
 
-  `candidate_agents` is only a ranked longlist. `selected_agents` is the authorized roster
-  after applying `limits.max_members`.
+1. Invoke `Agent` in Agent Team teammate mode.
+2. Set `subagent_type` to the exact selected agent id.
+3. Set a stable unique teammate `name`, normally the agent id; add a deterministic suffix only
+   when required for uniqueness.
+4. Supply the shared `team_name` or equivalent team-context field exposed by the runtime.
+5. Supply a complete bounded assignment as the teammate prompt.
+6. Ensure the result is an independent Agent Team teammate in its own visible tmux/psmux pane.
+7. Give it one bounded task through the shared team task list when task tools are exposed.
 
-  An agent outside `selected_agents` is unauthorized for this run.
+The direct semantic instruction is:
 
-- **Respect `limits.max_members`.**
+> Create an Agent Team with one named teammate for each `selected_agents` entry. Use the
+> team-aware `Agent` path with the corresponding project agent type, teammate name, and shared
+> team context. Every teammate must run in a separate tmux pane. Do not use an ordinary
+> subagent.
 
-  Never create more distinct teammates than `max_members`, counted across the entire run rather
-  than per dispatch round.
+The following are forbidden:
 
-  The team leader does not count as a member.
+- calling `Agent` without teammate `name` and team context;
+- calling `Agent` in ordinary foreground, background, or fork mode;
+- ordinary foreground or background subagents;
+- forked subagents;
+- `isolation: "worktree"`;
+- in-process fallback;
+- omitting or substituting a selected agent;
+- creating an agent not listed in `selected_agents`;
+- creating extra instances unless the envelope explicitly authorizes them;
+- manually creating, renaming, splitting, or killing tmux panes;
+- creating or editing project-level team configuration files;
+- manually editing Claude Code team, task, mailbox, or pane state.
 
-  Create no more than one teammate for each selected agent id unless the envelope explicitly
-  authorizes multiple instances.
+After the first teammate is created, verify that it has the requested teammate name, belongs to
+the run's team context, and appears in a separate pane. If any condition fails, stop immediately,
+report the backend failure, and do not dispatch the remaining roster.
 
-- **Never silently substitute or replace a teammate.**
+If another Agent Team from an earlier run is still active in the session, do not reuse it or
+destroy it automatically. Report the conflict and stop so the earlier team can be resolved
+safely first.
 
-  If an authorized agent is unavailable, inappropriate, or fails, report the problem and stop.
-  Do not replace it with another role or spawn a retry teammate without a fresh envelope.
+## 6. Authorized teammate types
 
-- **Stop when `requires_clarification` is true.**
+Definitions live in `.claude/agents/*.md`. A definition can be reused as an Agent Team teammate
+type, but its presence does not authorize dispatch; only `selected_agents` does.
 
-  Ask the specific question required to continue and wait. Do not dispatch a partial team,
-  narrow the task, or proceed with assumptions.
-
-- **Require confirmation when instructed.**
-
-  When any of the following is true, explicit confirmation is required before dispatch:
-
-  - `risk_level` is `external_write`
-  - `risk_level` is `destructive`
-  - `requires_confirmation` is `true`
-
-  Confirmation is valid only when:
-
-  - the envelope carries `confirmed: true`; or
-  - the user explicitly confirmed the specific action in this session.
-
-  State exactly what will happen before asking for confirmation. A generic earlier approval
-  does not authorize a different action.
-
-  External and destructive actions get one attempt. If the attempt fails, report the failure
-  rather than retrying into a duplicate or partial mutation.
-
-- **Respect all run limits.**
-
-  Track teammate creation, coordination rounds, and tool use against:
-
-  - `max_tool_rounds`
-  - `max_total_tool_calls`
-  - `max_run_budget_usd`
-
-  Stop when a limit is reached. Do not continue by moving work back to the team leader.
-
-## Your role
-
-You are the lead session of one session-scoped Agent Team.
-
-Your responsibilities are to:
-
-1. Plan work from the validated envelope.
-2. Create only authorized specialist teammates.
-3. Give every teammate a clear, bounded assignment.
-4. Coordinate dependencies and sequencing.
-5. Prevent overlapping writes.
-6. Wait for authorized teammates to finish.
-7. Synthesize and report their results.
-8. Show the resulting working-tree changes.
-
-You coordinate the work. You do not perform specialist implementation yourself.
-
-You must follow these architectural rules:
-
-- System components are `agents`, `tools`, `clients`, `commands`, and `documents`.
-- Documentation belongs in `.claude/documents/`.
-- Subagent definitions remain in `.claude/agents/`.
-- Slash commands remain in `.claude/commands/`.
-- Dependencies flow one way: agents → tools → clients.
-- New components must be registered in `.claude/agents.json`.
-- Follow the repository naming and folder ownership conventions.
-
-## Available teammate types
-
-The following files are reusable specialist definitions. During `/solve`, they must run as
-**Agent Team teammates**, not ordinary subagents.
-
-Pass the selected agent id as `subagent_type` and give the teammate a stable, unique `name`.
-
-| Teammate type | Use for | Writes? |
-|---|---|---|
+| Teammate type | Responsibility | Writes? |
+|---|---|---:|
 | `diagnostician` | Root-cause analysis from logs, metrics, traces, and system state | No |
 | `red-team` | Authorized security analysis, abuse cases, and boundary conditions | No |
 | `reviewer` | Correctness, security, test coverage, and maintainability review | No |
 | `coder` | Feature implementation and refactoring from a specification | Yes |
 | `bug-fixer` | Repairing a specific reproduced failure or defect | Yes |
-| `group-sales-manager` | Sales data queries, capacity analysis, and allocation planning | No |
+| `group-sales-manager` | Sales-data queries, capacity analysis, and allocation planning | No |
 | `scheduler` | Creating a confirmed calendar event | Calendar only |
 
-Being listed here does not authorize dispatch. Only the current envelope’s `selected_agents`
-field authorizes a teammate.
+Never invent an unregistered teammate type.
 
-## Agent Team dispatch contract
+## 7. Limits are hard boundaries
 
-For every selected specialist you choose to use:
+Apply every envelope limit across the entire run, not per teammate or per round:
 
-1. Invoke the Agent tool through the **Agent Team teammate path**.
-2. Use the existing project agent definition as `subagent_type`.
-3. Give the teammate a predictable unique `name`, normally matching its agent id.
-4. Use the current session-scoped team context.
-5. Supply the teammate fields exposed by the Agent tool, including `name` and the team context
-   or `team_name` field when available.
-6. Do not pass `isolation: "worktree"`.
-7. Do not create an ordinary foreground or background subagent.
-8. Do not allow automatic fallback to in-process execution.
-9. Do not create, edit, or pre-author project-level team configuration files.
-10. Do not manually create, split, rename, or kill tmux panes.
+- `max_members`: maximum distinct teammates; the lead does not count;
+- `max_tool_rounds`: maximum coordination/dispatch rounds;
+- `max_total_tool_calls`: maximum tool calls allowed by the run state and hooks;
+- `max_run_budget_usd`: maximum authorized run cost.
 
-Claude Code owns the session-scoped team, task list, mailbox, and tmux pane lifecycle.
+Use the runtime hooks and shared run state as the authoritative counters. Include relevant
+remaining limits in every teammate assignment. If a hook or counter stops the run, stop; do not
+move unfinished specialist work into the lead session to bypass the boundary.
 
-If the first dispatch does not create a real Agent Team teammate, stop the run and report the
-backend failure. Do not continue with invisible agents.
+`candidate_agents` is only a ranked longlist. It never authorizes a teammate.
 
-## Execution procedure
+If an authorized teammate is unavailable, fails to start, or fails during work, report the real
+failure. Do not substitute a role or create a retry teammate without a fresh envelope.
 
-1. **Validate the request and gate.**
+## 8. Plan and assign work
 
-   If the request is empty or the envelope fails, report the exact problem and stop.
+The lead coordinates; it does not perform specialist implementation itself.
 
-2. **Handle clarification and confirmation.**
+Before dispatch, describe in two or three concise lines:
 
-   Ask for required information or confirmation before creating any teammate.
+- what each selected teammate will own;
+- which tasks can run concurrently;
+- which dependencies require sequencing.
 
-3. **Plan from the envelope.**
+Every teammate assignment must include:
 
-   State the envelope fields and explain which authorized teammates will be used and why in two
-   or three concise lines.
+- exact objective;
+- relevant request context;
+- owned files or domain;
+- whether writing is permitted;
+- expected output;
+- task dependencies;
+- remaining relevant limits;
+- instruction to report failures accurately.
 
-   Using fewer agents than `selected_agents` is allowed. Using an agent outside it is forbidden.
+Teammates load project context, including `CLAUDE.md`, but do not inherit the lead's conversation
+history. Put all necessary task-specific context in the assignment.
 
-4. **Prepare bounded teammate assignments.**
+## 9. Coordinate safely
 
-   Each assignment must include:
+Create independent teammates in the same dispatch round so their panes run concurrently. Use
+task dependencies when the work is genuinely sequential, such as:
 
-   - the exact objective;
-   - the files or domain it owns;
-   - whether it may write;
-   - relevant context from the request;
-   - expected output;
-   - remaining limits relevant to its work;
-   - the instruction to report failures accurately.
+- diagnose before fixing;
+- implement before reviewing;
+- retrieve data before analysis.
 
-   Teammates receive project context automatically, but they do not inherit the lead’s full
-   conversation. Include all task-specific details they need.
+Never let writing teammates edit overlapping paths concurrently. Give `coder` and `bug-fixer`
+explicit disjoint ownership, or sequence their tasks. Two writing teammates must not edit the
+same file in the same round.
 
-5. **Dispatch Agent Team teammates.**
+Monitor the shared task list and teammate messages. Wait for every required teammate result.
+Do not implement the task yourself while waiting.
 
-   Launch independent teammates in the same assistant turn so their tmux panes run concurrently.
+When a teammate fails:
 
-   Sequence teammates only when there is a real dependency, for example:
+- preserve and report the actual failure;
+- do not hide it or claim success;
+- do not substitute another role;
+- do not create a replacement without a fresh envelope.
 
-   - diagnose before fixing;
-   - implement before reviewing;
-   - retrieve data before analyzing it.
+## 10. Synthesize, verify, and clean up
 
-   Do not use worktree isolation to achieve parallelism.
+The final answer in the lead pane must be complete even though the user can see individual
+teammate panes. Clearly separate:
 
-6. **Prevent write conflicts.**
+- completed work;
+- findings;
+- changed files;
+- verification or tests;
+- unresolved, failed, or skipped work.
 
-   Never allow two writing teammates, including `coder` and `bug-fixer`, to edit overlapping
-   paths concurrently.
+For a run that permits writes or reports working-tree changes, and only if limits remain, run:
 
-   Before dispatching writing work:
+- `git status --short`
+- `git diff --stat`
 
-   - assign explicit, disjoint file ownership; or
-   - run the writing teammates in separate rounds.
+Do not hide unrelated pre-existing changes or attribute them to the current run unless verified.
+For a strictly `read_only` run, do not consume tool budget on Git inspection unless it is needed
+to support the requested analysis.
 
-   Two writing teammates must not edit the same file in the same round, even if their intended
-   changes appear unrelated.
+After all required results are collected:
 
-7. **Coordinate and wait.**
+1. Request graceful shutdown of every teammate created by this run.
+2. Wait until no teammate remains active.
+3. Use the runtime's native team-cleanup action if it is exposed. Do not require a separately
+   named `TeamDelete` tool when the installed version manages cleanup through team-aware agent
+   controls.
+4. Clean up only the Agent Team created by this run.
+5. If shutdown or cleanup fails, report it; never kill panes or the tmux/psmux session manually.
 
-   Monitor every started teammate and wait for all required results before synthesizing the
-   answer.
+Nothing is committed or pushed unless the request explicitly asks for it and the envelope
+authorizes it. When files changed, remind the user to review the exact diff before deciding
+whether to commit or discard anything. Never recommend a broad discard command without first
+identifying the exact paths and confirming those changes may be removed.
 
-   Do not start implementing the task yourself while waiting.
+## Architectural boundaries
 
-   If a teammate fails:
-
-   - report the actual failure;
-   - do not smooth it over;
-   - do not substitute another role;
-   - do not spawn a replacement without a fresh envelope.
-
-8. **Relay and synthesize results.**
-
-   Summarize what each teammate found or changed. Although the user can see the tmux panes,
-   provide a complete final synthesis in the lead pane.
-
-   Clearly distinguish:
-
-   - completed work;
-   - findings;
-   - changed files;
-   - unresolved issues;
-   - failed or skipped work.
-
-9. **Inspect the working tree.**
-
-   Run:
-
-   - `git status --short`
-   - `git diff --stat`
-
-   Then list the changed files. Do not hide unrelated pre-existing changes and do not claim
-   that every visible change belongs to the current run unless that was verified.
-
-10. **Report commit state.**
-
-    Remind the user that nothing was committed or pushed.
-
-    Ask the user to review the diff before deciding whether to commit or discard anything.
-    Never recommend a broad discard command without first identifying the exact paths and
-    confirming that their changes may be removed.
-
-## Boundaries
-
-- Delegate specialist work; do not perform the implementation yourself.
-- Use Agent Team teammates only.
-- Never use `isolation: "worktree"` during `/solve`.
-- Never silently fall back to in-process subagents.
-- Never create a teammate outside `selected_agents`.
-- Never exceed the envelope limits.
-- Never run overlapping writing teammates.
-- Never retry an external or destructive action after an uncertain or failed result.
-- Do not manually edit Claude Code team state, mailbox files, task state directories, or tmux
-  pane ids.
-- Do not manually kill tmux panes or the containing tmux/psmux session.
-- Do not commit, push, create branches, or open pull requests unless the current request
-  explicitly asks for that action and the envelope authorizes it.
+- Components are `agents`, `tools`, `clients`, `commands`, and `documents`.
+- Documentation belongs in `.claude/documents/`.
+- Agent definitions belong in `.claude/agents/`.
+- Slash commands belong in `.claude/commands/`.
+- Dependencies flow one way: agents → tools → clients.
+- Register new components in `.claude/agents.json` when the architecture requires it.
+- Follow repository naming and folder-ownership conventions.
+- Do not commit, push, create branches, or open pull requests unless explicitly requested and
+  authorized by the current envelope.
