@@ -38,6 +38,9 @@ class IntentEnvelope:
     selected_agents: list[str] = field(default_factory=list)
     limits: ExecutionLimits | None = None
     reasons: list[str] = field(default_factory=list)
+    # What the model asked for: information is missing from the request.
+    requires_clarification: bool = False
+    # The combined policy decision: clarification OR a risk/confidence rule.
     requires_confirmation: bool = False
 
 @dataclass

@@ -6,22 +6,26 @@ build-backend = "setuptools.build_meta"
 name = "coding-agent-workspace"
 version = "0.5.0"
 description = "Claude Code agent workspace: subagent definitions plus the standalone Google Calendar scheduler"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Nguyen Le Dang Nguyen", email = "nguyen.nguyen30@momo.vn"}
 ]
-# Only the scheduler needs runtime dependencies; everything else in this repo is
-# Claude Code configuration (subagents, commands, settings) with no Python deps.
+# Runtime dependencies for the scheduler plus the intent-parser / data-access
+# layer under .claude/system and .claude/clients.
 dependencies = [
     "google-auth-oauthlib>=1.2,<2.0",
     "google-auth-httplib2>=0.2,<0.3",
     "google-api-python-client>=2.108,<3.0",
+    "openai>=2.0,<3.0",
+    "pydantic>=2.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "google-cloud-bigquery>=3.0,<4.0",
+    "filelock>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]
 scheduler-extras = [
     "python-dateutil>=2.8,<3.0",
-    "python-dotenv>=1.0,<2.0",
 ]
 
 [tool.setuptools]

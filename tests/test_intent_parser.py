@@ -155,6 +155,120 @@ class IntentParserTest(unittest.TestCase):
             result.requires_confirmation
         )
 
+    def test_test_operation_selects_reviewer(self):
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[Operation.TEST],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Chạy unit test cho intent_parser"
+        )
+
+        # Previously mapped to a non-existent
+        # "test-agent" and silently fell back.
+        self.assertEqual(
+            result.candidate_agents,
+            ["reviewer"],
+        )
+        self.assertEqual(
+            result.selected_agents,
+            ["reviewer"],
+        )
+
+    def test_requires_clarification_preserved(self):
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[Operation.DIAGNOSE],
+            domains=[Domain.CODE],
+            requires_clarification=True,
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Xem lại cái đó giúp tôi"
+        )
+
+        self.assertTrue(
+            result.requires_clarification
+        )
+        # Clarification also forces confirmation.
+        self.assertTrue(
+            result.requires_confirmation
+        )
+
+    def test_clarification_independent_of_policy(self):
+        # The model wants no clarification, but a
+        # local guardrail still demands confirmation:
+        # the two flags must not be conflated.
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[Operation.DIAGNOSE],
+            domains=[Domain.DATA],
+            requires_clarification=False,
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Drop table production trong BigQuery"
+        )
+
+        self.assertFalse(
+            result.requires_clarification
+        )
+        self.assertTrue(
+            result.requires_confirmation
+        )
+
+    def test_envelope_dict_has_clarification(self):
+        from intent_parser import envelope_to_dict
+
+        decision = make_decision(
+            requires_clarification=True,
+        )
+
+        envelope = self.create_parser(
+            decision
+        ).parse("Làm cái này")
+
+        payload = envelope_to_dict(envelope)
+
+        self.assertIs(
+            payload["requires_clarification"],
+            True,
+        )
+
+    def test_no_real_api_call(self):
+        # Guards the fake: a real client would need
+        # OPENAI_API_KEY and would hit the network.
+        decision = make_decision(
+            operations=[Operation.TEST],
+        )
+
+        client = FakeClient(decision)
+
+        IntentParser(
+            CLAUDE_DIR / "agents.json",
+            client=client,
+        ).parse("Chạy test")
+
+        self.assertEqual(
+            len(client.responses.calls),
+            1,
+        )
+        self.assertEqual(
+            client.responses.calls[0]["model"],
+            "gpt-5.6-luna",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,14 @@
 {
   "theme": "dark",
-  "claudeMd": "# Coding Agent Workspace\n\nA Claude Code workspace: seven specialist subagents plus a standalone Google Calendar scheduler.\n\n## Before building anything\n\nRead `.claude/documents/ARCHITECTURE.md`. It owns the folder rules, and `python .claude/system_test.py` enforces them.\n\n## The team\n\nSubagents are defined in `.claude/agents/*.md`. Markdown with YAML frontmatter is the only form Claude Code discovers and dispatches - a Python agent class is invisible to the harness and will never be dispatched.\n\n| Subagent | Use for | Writes? |\n|---|---|---|\n| `diagnostician` | Why something is slow, flaky, or intermittently failing | No |\n| `red-team` | Security holes and edge cases | No |\n| `reviewer` | Correctness and maintainability of a finished change | No |\n| `coder` | Building a feature, doing a refactor | Yes |\n| `bug-fixer` | Making a specific broken thing work | Yes |\n| `group-sales-manager` | Sales data queries (bq CLI), capacity and allocation analysis | No |\n| `scheduler` | Putting something on the calendar (native MCP) | Calendar only |\n\nOrchestrate with `/solve`, which plans a request and dispatches these. The team leader is that command, not an agent - only the main session can dispatch others.\n\nNever run two writing agents on overlapping paths concurrently. Writing agents edit the tree and never commit; the user reviews the diff.\n\n## Markdown placement (critical)\n\nAll documentation goes in `.claude/documents/`. There are exactly two exceptions, and both are load-bearing rather than stylistic: subagent definitions must live at `.claude/agents/*.md` and slash commands at `.claude/commands/*.md`. Move one into `documents/` and that agent or command silently stops existing.\n\n## Standalone scheduler\n\n`python .claude/schedule.py \"<request>\"` runs the scheduler outside a session, against the Google Calendar REST API with local credentials (see `.claude/documents/SCHEDULER_SETUP.md`). It is the only Python agent in the repo and the only reason `.claude/system/schemas.py` exists. Inside a session, prefer the `scheduler` subagent or `/schedule-agent` - both use the native MCP integration and need no credentials.\n\n## Conventions\n\n- `snake_case` for Python files, `kebab-case` for subagent and command filenames\n- A subagent's `description` is what dispatch matches on - write it as when to use the agent\n- Grant only the tools a role needs; omit `Edit`/`Write` for read-only agents\n- Register new agents in `.claude/agents.json` and in the team table in `.claude/commands/solve.md`\n- Windows consoles are cp1252; entry points force UTF-8 output\n",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./credentials.json)",
+      "Read(./token.json)",
+      "Read(./service_account.json)"
+    ]
+  },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_AGENT_COMMUNICATION_ENABLED": "1",
@@ -12,5 +20,75 @@
     "tmuxAutoAttach": true,
     "tmuxSplitPanes": true
   },
-  "teammateMode": "tmux"
+  "teammateMode": "tmux",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/intent_gate.py"
+            ],
+            "timeout": 60,
+            "statusMessage": "Classifying intent..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/policy_gate.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/round_counter.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/cleanup_state.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/cleanup_state.py"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }

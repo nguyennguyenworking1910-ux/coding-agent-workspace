@@ -17,6 +17,13 @@ Two things live in this repo:
    outside a session, for scripting or cron. It talks to the Google Calendar REST API and
    needs local credentials.
 
+The working agreement for both is [CLAUDE.md](./CLAUDE.md) in the repository root, loaded
+automatically at the start of every session. It holds the team table, the folder rules, and
+the hard rules for controlled orchestration — no envelope means no run, dispatch only from
+`selected_agents`, one writing agent per path, and never commit unless you ask. Edit that
+file to change how the agents behave; it previously lived inside `.claude/settings.json` as a
+`claudeMd` string, which made it invisible to review.
+
 ## The team
 
 | Subagent | Use for | Writes? |
@@ -59,26 +66,28 @@ ask red-team to probe the auth middleware
 /schedule-agent trình ký GLX appendix 28 today 30 mins
 ```
 
-This uses Claude's native Google Calendar integration and needs no local credentials. Works
-in any language; the event title keeps your original wording.
+This confirms the details with you, then dispatches the `scheduler` subagent, which books the
+slot by running `.claude/schedule.py` — so it needs the credentials set up below. Works in any
+language; the event title keeps your original wording.
 
 ## Installation
 
 Nothing is required for the subagents or slash commands — they are configuration, not code.
 
-Only the standalone scheduler needs a Python environment:
+The standalone scheduler and the intent parser need a Python environment:
 
 ```bash
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # macOS/Linux: source .venv/bin/activate
 pip install -e .
 
 python .claude/schedule.py "schedule planning session tomorrow 2 hours"
 ```
 
-Requires **Python 3.9+**. Credential setup is in
-[.claude/documents/SCHEDULER_SETUP.md](./.claude/documents/SCHEDULER_SETUP.md) — the short
-version is:
+Requires **Python 3.10+**. Full setup — virtual environment, `OPENAI_API_KEY` for the intent
+parser, and credentials — is in
+[.claude/documents/SETUP.md](./.claude/documents/SETUP.md). The short version for the
+calendar:
 
 ```bash
 gcloud auth application-default login \
@@ -109,7 +118,7 @@ gcloud auth application-default login \
 │
 ├── commands/
 │   ├── solve.md          # /solve — the team leader
-│   └── schedule-agent.md # /schedule-agent — calendar via MCP
+│   └── schedule-agent.md # /schedule-agent — dispatches the scheduler
 │
 ├── clients/              # Google Calendar API wrapper + credential resolution
 ├── system/schemas.py     # TaskResult, shared by the Python scheduler path
@@ -125,9 +134,12 @@ Read in this order:
    design, folder ownership, and the rules for adding anything
 2. **[.claude/documents/AGENT_INITIALIZATION.md](./.claude/documents/AGENT_INITIALIZATION.md)** —
    the checklist every agent follows before executing
-3. **[.claude/documents/SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md)** — scheduler
-   usage and examples
-4. **[.claude/documents/SETUP.md](./.claude/documents/SETUP.md)** — credential setup
+3. **[.claude/documents/SETUP.md](./.claude/documents/SETUP.md)** — Python environment, API
+   keys, credentials, and the test commands
+4. **[.claude/documents/SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md)** — scheduling
+   from a session or a shell, and credential troubleshooting
+5. **[.claude/documents/BIGQUERY_INTEGRATION.md](./.claude/documents/BIGQUERY_INTEGRATION.md)** —
+   adding and running `.sql` query templates
 
 Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 
@@ -156,8 +168,9 @@ Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 
 ## Adding a subagent
 
-1. Create `.claude/agents/{name}.md` with `name`, `description`, `tools`, and `model`
-   frontmatter, then the system prompt as the body.
+1. Create `.claude/agents/{name}.md` with `name`, `description`, `tools`, `model`,
+   `permissionMode`, and `maxTurns` frontmatter, then the system prompt as the body. The
+   frontmatter is authoritative; `agents.json` must agree with it.
 2. Write the `description` for dispatch — it is what Claude Code matches a request against,
    so say when to use the agent, not just what it is.
 3. Give it only the tools it needs. Omit `Edit`/`Write` for anything read-only.
@@ -175,8 +188,10 @@ python .claude/system_test.py
 ```
 
 Checks folder structure, that every `.md` is in a valid location, that `agents.json` parses,
-that all seven subagents have frontmatter and the ARCHITECTURE.md requirement, and that the
-documentation index is complete.
+that all seven subagents have frontmatter and the ARCHITECTURE.md requirement, that each
+registry entry has a matching definition whose `name`, `model`, and `maxTurns` agree with it,
+that `AGENTS_BY_OPERATION` in the intent parser names only enabled agents, and that the
+documentation index is complete. It exits non-zero on failure.
 
 ## Troubleshooting
 
@@ -189,8 +204,8 @@ documentation index is complete.
 
 **Scheduler says credentials are missing.** Run the `gcloud auth application-default login`
 command above, or see
-[SCHEDULER_SETUP.md](./.claude/documents/SCHEDULER_SETUP.md) for the OAuth and service
-account alternatives.
+[SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md) for the OAuth and service account
+alternatives and a message-by-message walkthrough.
 
 **Scheduler output is garbled on Windows.** The console defaults to cp1252. Set
 `PYTHONIOENCODING=utf-8`, or use the entry points here — they already force UTF-8.

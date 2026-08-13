@@ -10,7 +10,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Analyzes logs, metrics, and traces to find root causes and performance bottlenecks",
@@ -29,7 +29,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Diagnoses a failing test or error and implements the fix",
@@ -48,7 +48,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Implements features and performs refactors from a specification",
@@ -67,7 +67,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Reviews code changes for correctness, security, and maintainability",
@@ -86,7 +86,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Adversarial security and edge-case testing of this codebase",
@@ -105,7 +105,7 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Queries group sales data and plans resource/workload allocation",
@@ -130,19 +130,20 @@
         "max_run_budget_usd": {
           "small_task": 1.0,
           "medium_task": 2.0,
-          "complexity_task": 4.0
+          "complex_task": 4.0
         }
       },
       "description": "Schedules tasks and meetings on Google Calendar from natural language, in any language",
       "enabled": true,
       "type": "calendar_manager",
       "definition": ".claude/agents/scheduler.md",
-      "tools": ["google_calendar", "Read"],
+      "tools": ["Read", "Bash"],
       "permissions": "write",
       "calendar_access": {
         "enabled": true,
         "timezone": "Asia/Ho_Chi_Minh",
-        "operations": ["list_calendars", "list_events", "search_events", "suggest_time", "get_event", "create_event", "update_event"]
+        "note": "Reached by running the local entry point `python .claude/schedule.py \"<request>\"` through Bash, which uses the Google Calendar REST API and requires local credentials.",
+        "operations": ["list_events", "create_event"]
       },
       "capabilities": [
         "schedule_tasks",
@@ -155,7 +156,7 @@
         "module": "claude.agents.team.scheduler",
         "class": "SchedulerAgent",
         "entry_point": ".claude/schedule.py",
-        "note": "Standalone path for running the scheduler outside a Claude Code session. Uses the Google Calendar REST API and needs local credentials - see .claude/documents/SCHEDULER_SETUP.md."
+        "note": "Runs the scheduler outside a Claude Code session, and is also what the scheduler subagent invokes through Bash. Uses the Google Calendar REST API and needs local credentials; the entry point prints the accepted credential paths on failure."
       }
     }
   ],
@@ -178,34 +179,15 @@
     {
       "id": "schedule-agent",
       "name": "Schedule Agent",
-      "description": "Schedules a request on Google Calendar via the native MCP integration",
+      "description": "Schedules a request on Google Calendar by dispatching the scheduler subagent",
       "definition": ".claude/commands/schedule-agent.md"
     }
   ],
   "tools": [
     {
-      "id": "google_calendar",
-      "name": "Google Calendar Tool",
-      "description": "Create, list, update, and search Google Calendar events via Claude AI MCP",
-      "type": "calendar_access",
-      "enabled": true,
-      "mcp": true,
-      "provider": "claude_ai",
-      "note": "No local credentials required.",
-      "methods": [
-        {"name": "list_calendars", "description": "List the user's calendars"},
-        {"name": "list_events", "description": "List events on a calendar with optional time filters"},
-        {"name": "search_events", "description": "Search for events matching criteria"},
-        {"name": "suggest_time", "description": "Find available time slots for meetings"},
-        {"name": "get_event", "description": "Get a single event by id"},
-        {"name": "create_event", "description": "Create a new event on the calendar"},
-        {"name": "update_event", "description": "Update an existing event"}
-      ]
-    },
-    {
       "id": "scheduler_tools",
       "name": "Scheduler Tools",
-      "description": "Python calendar helpers used only by the standalone .claude/schedule.py path",
+      "description": "Python calendar helpers behind the .claude/schedule.py entry point, which is how the scheduler subagent reaches the calendar",
       "type": "calendar_access",
       "enabled": true,
       "module": "claude.agents.tools.scheduler",
@@ -242,10 +224,6 @@
     "version": 1,
     "default_task_class": "medium_task",
     "minimum_confidence": 0.7,
-
-    "task_class_aliases": {
-      "complexity_task": "complex_task"
-    },
 
     "intent_parser": {
       "provider": "openai",

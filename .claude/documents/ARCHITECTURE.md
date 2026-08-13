@@ -42,9 +42,10 @@ Root configuration and orchestration for all agents and tools.
 │   ├── README.md            Index of all documentation
 │   ├── ARCHITECTURE.md      This file
 │   ├── AGENT_INITIALIZATION.md  Mandatory pre-execution checklist
-│   ├── SETUP.md             Credential setup & configuration guide
-│   ├── SCHEDULE_CLI.md      Schedule agent usage guide
-│   └── SCHEDULER_SETUP.md   Scheduler credential setup
+│   ├── SETUP.md             Python environment, API keys & credential setup
+│   ├── SCHEDULE_CLI.md      Scheduling usage, confirmation rules & troubleshooting
+│   ├── BIGQUERY_INTEGRATION.md  BigQuery data access guide
+│   └── EXAMPLES_GUIDE.md    Reference implementations and usage patterns
 │
 ├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
 │   ├── reviewer.md          ┐
@@ -75,7 +76,7 @@ Root configuration and orchestration for all agents and tools.
 │
 ├── commands/                [SLASH COMMANDS FOR USERS]
 │   ├── solve.md             /solve — team leader: plans and dispatches subagents
-│   └── schedule-agent.md    /schedule-agent — calendar via native MCP
+│   └── schedule-agent.md    /schedule-agent — dispatches the scheduler subagent
 │
 ├── system/                  [SHARED SCHEMAS]
 │   └── schemas.py           TaskResult, used by the Python scheduler path
@@ -371,7 +372,7 @@ allowed-tools: Tool1(*), Tool2(*), Skill(skill-name)
            self.credentials = config.resolve_credentials('service_name')
    ```
 
-3. **Document setup** in `.claude/clients/SETUP.md`
+3. **Document setup** in `.claude/documents/SETUP.md`
    - Installation steps
    - Credential paths
    - Troubleshooting
@@ -597,7 +598,7 @@ Add the subagent to the team members table in `.claude/commands/solve.md` and to
 
 **Step 7: Add setup guide**
 ```
-.claude/clients/SETUP.md  (add GitHub setup section)
+.claude/documents/SETUP.md  (add GitHub setup section)
 ```
 
 ---

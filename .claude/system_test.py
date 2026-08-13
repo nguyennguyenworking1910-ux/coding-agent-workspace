@@ -184,9 +184,178 @@ class SystemTest:
                 print_error(f"Subagent missing ARCHITECTURE.md requirement: {agent_file}")
                 self.tests_failed += 1
 
+    def _parse_frontmatter(self, content):
+        """Return the YAML frontmatter of a subagent definition as a flat dict.
+
+        Deliberately not a YAML parser: subagent frontmatter is flat `key: value`
+        lines, and depending on PyYAML would make the structural check need an
+        install to run.
+        """
+        if not content.startswith('---'):
+            return {}
+
+        # The body starts at the closing fence, which is the next line that is
+        # exactly '---'.
+        lines = content.splitlines()[1:]
+        fields = {}
+
+        for line in lines:
+            if line.strip() == '---':
+                break
+            if ':' not in line or line.startswith((' ', '\t', '#')):
+                continue
+            key, _, value = line.partition(':')
+            fields[key.strip()] = value.strip()
+
+        return fields
+
+    def _load_agents_by_operation(self):
+        """Read AGENTS_BY_OPERATION out of intent_parser.py without importing it.
+
+        Importing the module pulls in openai and pydantic and reads the
+        environment; this check only needs the literal, so it is lifted with ast.
+        """
+        import ast
+
+        parser_path = self.base_path / '.claude' / 'system' / 'intent_parser.py'
+
+        if not parser_path.exists():
+            return None
+
+        tree = ast.parse(parser_path.read_text(encoding='utf-8'))
+
+        for node in tree.body:
+            targets = (
+                [node.target] if isinstance(node, ast.AnnAssign) else
+                node.targets if isinstance(node, ast.Assign) else []
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == 'AGENTS_BY_OPERATION':
+                    return ast.literal_eval(node.value)
+
+        return None
+
+    def test_registry_sync(self):
+        """Test 5: Verify agents.json and the subagent frontmatter agree."""
+        print_header("TEST 5: REGISTRY / FRONTMATTER SYNC")
+
+        agents_json_path = self.base_path / '.claude' / 'agents.json'
+
+        if not agents_json_path.exists():
+            print_error("agents.json file not found!")
+            self.tests_failed += 1
+            return
+
+        try:
+            with open(agents_json_path, 'r', encoding='utf-8') as f:
+                agents_config = json.load(f)
+        except json.JSONDecodeError as e:
+            print_error(f"agents.json is invalid: {e}")
+            self.tests_failed += 1
+            return
+
+        registry = agents_config.get('agents', [])
+        enabled_ids = set()
+
+        for agent in registry:
+            agent_id = agent.get('id')
+
+            if not agent_id:
+                print_error(f"Registry entry has no id: {agent.get('name', '?')}")
+                self.tests_failed += 1
+                continue
+
+            if agent.get('enabled', True):
+                enabled_ids.add(agent_id)
+
+            # The definition path is declarative, but the harness only ever reads
+            # .claude/agents/<id>.md - so check both agree and both exist.
+            definition = agent.get('definition', f'.claude/agents/{agent_id}.md')
+            expected = f'.claude/agents/{agent_id}.md'
+            path = self.base_path / expected
+
+            if not path.exists():
+                print_error(f"{agent_id}: no markdown definition at {expected}")
+                self.tests_failed += 1
+                continue
+
+            if definition.replace('\\', '/') != expected:
+                print_error(f"{agent_id}: definition points at {definition}, not {expected}")
+                self.tests_failed += 1
+            else:
+                print_success(f"{agent_id}: definition found at {expected}")
+                self.tests_passed += 1
+
+            fields = self._parse_frontmatter(path.read_text(encoding='utf-8'))
+
+            # Frontmatter is authoritative for dispatch; the registry is the index.
+            # A mismatch means the roster describes an agent that does not exist.
+            fm_name = fields.get('name')
+            if fm_name == agent_id:
+                print_success(f"{agent_id}: frontmatter name matches the id")
+                self.tests_passed += 1
+            else:
+                print_error(f"{agent_id}: frontmatter name is {fm_name!r}, expected {agent_id!r}")
+                self.tests_failed += 1
+
+            runtime = agent.get('runtime', {})
+
+            fm_model = fields.get('model')
+            registry_model = runtime.get('model')
+            if fm_model and fm_model == registry_model:
+                print_success(f"{agent_id}: model {fm_model} matches the registry")
+                self.tests_passed += 1
+            else:
+                print_error(
+                    f"{agent_id}: model {fm_model!r} != registry {registry_model!r}"
+                )
+                self.tests_failed += 1
+
+            fm_turns = fields.get('maxTurns')
+            registry_turns = runtime.get('max_turns')
+            if fm_turns is not None and str(registry_turns) == fm_turns:
+                print_success(f"{agent_id}: maxTurns {fm_turns} matches the registry")
+                self.tests_passed += 1
+            else:
+                print_error(
+                    f"{agent_id}: maxTurns {fm_turns!r} != registry max_turns {registry_turns!r}"
+                )
+                self.tests_failed += 1
+
+        # The intent parser maps an operation to the agents /solve may dispatch.
+        # Naming a disabled or deleted agent there produces a roster the command
+        # cannot honour, and it fails closed at run time instead of here.
+        agents_by_operation = self._load_agents_by_operation()
+
+        if agents_by_operation is None:
+            print_error("AGENTS_BY_OPERATION not found in .claude/system/intent_parser.py")
+            self.tests_failed += 1
+            return
+
+        unknown = {
+            (operation, agent_id)
+            for operation, agent_ids in agents_by_operation.items()
+            for agent_id in agent_ids
+            if agent_id not in enabled_ids
+        }
+
+        if unknown:
+            for operation, agent_id in sorted(unknown):
+                print_error(
+                    f"AGENTS_BY_OPERATION[{operation!r}] names {agent_id!r}, "
+                    "which is not an enabled agent id"
+                )
+                self.tests_failed += 1
+        else:
+            print_success(
+                f"AGENTS_BY_OPERATION references only enabled agents "
+                f"({len(agents_by_operation)} operations)"
+            )
+            self.tests_passed += 1
+
     def test_documentation_index(self):
-        """Test 5: Verify documentation README exists and is complete."""
-        print_header("TEST 5: DOCUMENTATION INDEX")
+        """Test 6: Verify documentation README exists and is complete."""
+        print_header("TEST 6: DOCUMENTATION INDEX")
 
         readme_path = self.base_path / '.claude' / 'documents' / 'README.md'
 
@@ -218,8 +387,8 @@ class SystemTest:
                 self.tests_failed += 1
 
     def test_critical_documentation(self):
-        """Test 6: Verify critical documentation files exist."""
-        print_header("TEST 6: CRITICAL DOCUMENTATION")
+        """Test 7: Verify critical documentation files exist."""
+        print_header("TEST 7: CRITICAL DOCUMENTATION")
 
         critical_docs = [
             '.claude/documents/ARCHITECTURE.md',
@@ -240,8 +409,8 @@ class SystemTest:
                 self.tests_failed += 1
 
     def test_system_initialization(self):
-        """Test 7: Verify system_init.py exists and is complete."""
-        print_header("TEST 7: SYSTEM INITIALIZATION")
+        """Test 8: Verify system_init.py exists and is complete."""
+        print_header("TEST 8: SYSTEM INITIALIZATION")
 
         system_init_path = self.base_path / '.claude' / 'agents' / 'system_init.py'
 
@@ -273,8 +442,8 @@ class SystemTest:
                 self.tests_failed += 1
 
     def test_scheduler_agent(self):
-        """Test 8: Verify Scheduler agent can be imported."""
-        print_header("TEST 8: SCHEDULER AGENT")
+        """Test 9: Verify Scheduler agent can be imported."""
+        print_header("TEST 9: SCHEDULER AGENT")
 
         scheduler_path = self.base_path / '.claude' / 'agents' / 'team' / 'scheduler.py'
 
@@ -308,8 +477,8 @@ class SystemTest:
             self.tests_failed += 1
 
     def test_git_status(self):
-        """Test 9: Verify no uncommitted changes."""
-        print_header("TEST 9: GIT STATUS")
+        """Test 10: Verify no uncommitted changes."""
+        print_header("TEST 10: GIT STATUS")
 
         import subprocess
 
@@ -336,8 +505,8 @@ class SystemTest:
             print_warning(f"Git check failed: {e}")
 
     def test_recent_commits(self):
-        """Test 10: Verify recent commits related to system update."""
-        print_header("TEST 10: RECENT COMMITS")
+        """Test 11: Verify recent commits related to system update."""
+        print_header("TEST 11: RECENT COMMITS")
 
         import subprocess
 
@@ -384,6 +553,7 @@ class SystemTest:
         self.test_documentation_files()
         self.test_agents_json()
         self.test_agent_files()
+        self.test_registry_sync()
         self.test_documentation_index()
         self.test_critical_documentation()
         self.test_system_initialization()
@@ -391,7 +561,7 @@ class SystemTest:
         self.test_git_status()
         self.test_recent_commits()
 
-        self.print_summary()
+        return self.print_summary()
 
     def print_summary(self):
         """Print test summary."""

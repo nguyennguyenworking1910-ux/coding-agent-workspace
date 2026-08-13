@@ -2,7 +2,9 @@
 name: group-sales-manager
 description: Queries and analyzes group sales data, and plans resource/workload allocation. Use for sales reporting questions ("top groups this quarter", "summary by region") and for capacity or scheduling trade-off analysis across a task queue.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
+permissionMode: plan
+maxTurns: 8
 ---
 
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets.

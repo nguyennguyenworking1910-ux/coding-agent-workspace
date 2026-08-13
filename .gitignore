@@ -1,6 +1,10 @@
 # Generated files
 .claude/agent_runners/
+.claude/runtime/
 .agent-workspace/
+
+# Local Claude Code settings
+.claude/settings.local.json
 
 # Credentials / secrets (never commit)
 .env
@@ -31,6 +35,10 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Virtual environments
+.venv/
+venv/
 
 # IDE
 .vscode/

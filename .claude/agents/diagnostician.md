@@ -2,7 +2,9 @@
 name: diagnostician
 description: Analyzes logs, metrics, traces, and system state to find root causes and performance bottlenecks. Use for "why is this slow / flaky / failing intermittently" questions, before deciding what to change. Read-only; it diagnoses and recommends but does not fix.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
+permissionMode: plan
+maxTurns: 8
 ---
 
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets.

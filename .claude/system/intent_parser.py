@@ -167,7 +167,8 @@ AGENTS_BY_OPERATION: dict[str, tuple[str, ...]] = {
     "build": ("coder",),
     "refactor": ("coder",),
     "review": ("reviewer",),
-    "test": ("test-agent",),
+    # The reviewer is read-only but can run tests via Bash.
+    "test": ("reviewer",),
     "security": ("red-team",),
     "sales_query": ("group-sales-manager",),
     "schedule": ("scheduler",),
@@ -209,6 +210,19 @@ class IntentParserConfigError(ValueError):
 class IntentParserAPIError(RuntimeError):
     """Raised when OpenAI cannot produce a valid intent decision."""
 
+def configure_utf8_output() -> None:
+    """Ensure JSON output supports Unicode on Windows terminals."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(
+            encoding="utf-8",
+            errors="strict",
+        )
+
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(
+            encoding="utf-8",
+            errors="strict",
+        )
 
 def normalize_text(value: str) -> str:
     normalized = unicodedata.normalize(
@@ -537,6 +551,9 @@ class IntentParser:
             selected_agents=selected_agents,
             limits=limits,
             reasons=reasons,
+            requires_clarification=(
+                decision.requires_clarification
+            ),
             requires_confirmation=requires_confirmation,
         )
 
@@ -848,6 +865,8 @@ def envelope_to_dict(
 
 
 def main() -> int:
+    configure_utf8_output()
+
     argument_parser = argparse.ArgumentParser(
         description=(
             "Classify a request before agent dispatch"

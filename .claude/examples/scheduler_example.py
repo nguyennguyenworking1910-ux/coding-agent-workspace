@@ -81,10 +81,10 @@ async def main():
 
 if __name__ == "__main__":
     print("\n⚠️  Note: This example requires Google Calendar credentials.")
-    print("See SCHEDULER_SETUP.md for setup instructions.\n")
+    print("See .claude/documents/SETUP.md for setup instructions.\n")
 
     try:
         asyncio.run(main())
     except Exception as e:
         print(f"Error: {e}")
-        print("\nSetup required. See SCHEDULER_SETUP.md")
+        print("\nSetup required. See .claude/documents/SETUP.md")

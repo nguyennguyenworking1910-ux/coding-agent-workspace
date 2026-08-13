@@ -3,6 +3,8 @@ name: bug-fixer
 description: Diagnoses a failing test, error log, or bug report and implements the fix. Use when something is broken and you want it working — give it the failure output or a reproduction. Has write access and edits the working tree.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: opus
+permissionMode: default
+maxTurns: 12
 ---
 
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets, especially which folder new code belongs in and the rule that all `.md` documentation goes in `.claude/documents/`.

@@ -3,6 +3,8 @@ name: coder
 description: Implements features and performs refactors from a specification. Use when the work is "build this" or "restructure this" rather than "find out why this broke". Has write access and edits the working tree.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: opus
+permissionMode: default
+maxTurns: 16
 ---
 
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets — in particular which folder new code belongs in, the one-way dependency direction (agents → tools → clients), the naming conventions, and the rule that all `.md` documentation goes in `.claude/documents/`.

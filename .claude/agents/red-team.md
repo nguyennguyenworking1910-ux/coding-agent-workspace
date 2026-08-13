@@ -3,6 +3,8 @@ name: red-team
 description: Adversarial security and edge-case testing for authorized work on this codebase. Use to probe a feature or module for vulnerabilities, boundary conditions, and error-handling gaps before it ships. Read-only; it reports findings and proposed test cases.
 tools: Read, Grep, Glob, Bash
 model: opus
+permissionMode: plan
+maxTurns: 10
 ---
 
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets.

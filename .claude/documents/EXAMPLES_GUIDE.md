@@ -15,7 +15,7 @@ Demonstrates how to use the SchedulerAgent with Google Calendar integration:
 3. **Direct tool usage** - Use scheduler tools directly
 
 **Requirements:**
-- Google Calendar API credentials (see `.claude/clients/SETUP.md`)
+- Google Calendar API credentials (see `.claude/documents/SETUP.md`)
 - `pip install -r .claude/agents/requirements.txt`
 
 **Run:**

@@ -23,21 +23,21 @@ This folder contains all system documentation, setup guides, and reference mater
   - System orchestration and team hierarchy
   - Best practices and naming conventions
 
-- **[SETUP.md](./SETUP.md)** — Credential setup and configuration guide for Google Calendar integration
-  - OAuth Desktop App setup
-  - Service Account configuration
-  - gcloud CLI (Application Default Credentials) setup
-  - Troubleshooting and credential resolution order
+- **[SETUP.md](./SETUP.md)** — Installing and configuring the Python side of the workspace
+  - Python 3.10+ requirement
+  - Virtual environment on Windows, and `pip install -e .`
+  - `OPENAI_API_KEY` for the intent parser (which fails closed without it)
+  - Google Cloud CLI and Application Default Credentials, per-API scopes
+  - Google Calendar credential resolution order (token → OAuth app → service account → ADC)
+  - Unit-test and system-test commands, and troubleshooting
 
 ### Feature Documentation
-- **[SCHEDULE_CLI.md](./SCHEDULE_CLI.md)** — Schedule agent usage guide
-  - Quick start guide
-  - Schedule task examples (English & Vietnamese)
-  - Time specification formats
-  - Architecture overview
-  - Troubleshooting
-
-- **[SCHEDULER_SETUP.md](./SCHEDULER_SETUP.md)** — Scheduler credential setup, in depth
+- **[SCHEDULE_CLI.md](./SCHEDULE_CLI.md)** — Scheduling, from a session or a shell
+  - `/schedule-agent` usage (dispatches the `scheduler` subagent)
+  - `python .claude/schedule.py "<request>"` usage and exit codes
+  - The confirmation requirement for calendar writes
+  - Timezone handling — everything is `Asia/Ho_Chi_Minh`
+  - Credential troubleshooting, message by message
 
 - **[BIGQUERY_INTEGRATION.md](./BIGQUERY_INTEGRATION.md)** — BigQuery data access guide
   - gcloud ADC setup and project selection
@@ -110,4 +110,4 @@ When creating new documentation:
 
 ---
 
-**Last Updated:** August 11, 2026
+**Last Updated:** August 13, 2026
