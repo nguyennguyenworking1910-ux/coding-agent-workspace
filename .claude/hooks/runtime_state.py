@@ -120,9 +120,13 @@ def new_state(
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
 
-    ``members_used`` is the list of distinct agent ids already dispatched, not a
-    bare count: ``max_members`` caps distinct members, so re-dispatching the same
-    agent must not consume budget twice.
+    ``members_used`` is the list of distinct teammate names already dispatched.
+    Each unique name consumes one member slot, so re-dispatching the same
+    teammate name must not consume budget again.
+
+    ``total_tool_calls_regular`` tracks non-coordination calls against the regular
+    budget (which excludes the coordination reserve). ``total_tool_calls`` is the
+    hard cap across all calls.
     """
     return {
         "request": redact_secrets(request),
@@ -133,6 +137,7 @@ def new_state(
         "confirmed": bool(confirmed),
         "members_used": [],
         "total_tool_calls": 0,
+        "total_tool_calls_regular": 0,
         "agent_rounds": 0,
     }
 

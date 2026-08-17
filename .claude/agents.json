@@ -5,7 +5,7 @@
       "id": "diagnostician",
       "name": "Diagnostician",
       "runtime": {
-        "model": "sonnet",
+        "model": "haiku",
         "max_turns": 8,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -24,7 +24,7 @@
       "id": "bug-fixer",
       "name": "Bug Fixer",
       "runtime": {
-        "model": "opus",
+        "model": "haiku",
         "max_turns": 12,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -43,7 +43,7 @@
       "id": "coder",
       "name": "Coder",
       "runtime": {
-        "model": "opus",
+        "model": "haiku",
         "max_turns": 16,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -62,7 +62,7 @@
       "id": "reviewer",
       "name": "Reviewer",
       "runtime": {
-        "model": "sonnet",
+        "model": "haiku",
         "max_turns": 8,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -81,7 +81,7 @@
       "id": "red-team",
       "name": "Red Team",
       "runtime": {
-        "model": "opus",
+        "model": "haiku",
         "max_turns": 10,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -125,7 +125,7 @@
       "id": "scheduler",
       "name": "Scheduler",
       "runtime": {
-        "model": "sonnet",
+        "model": "haiku",
         "max_turns": 6,
         "max_run_budget_usd": {
           "small_task": 1.0,

@@ -35,6 +35,8 @@ AGENT_TOOL_NAMES = frozenset({"Agent", "Task"})
 
 FILE_WRITE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 
+COORDINATION_TOOLS = frozenset({"SendMessage", "TaskUpdate"})
+
 SHELL_TOOLS = frozenset({"Bash", "PowerShell", "BashOutput"})
 
 RISK_READ_ONLY = "read_only"
@@ -239,6 +241,24 @@ def _limit(state: dict[str, Any], name: str) -> int | None:
         return None
 
 
+def _coordination_reserve(state: dict[str, Any]) -> int:
+    """Calculate the coordination reserve for SendMessage/TaskUpdate.
+
+    These tools are essential for handoff between team leader and teammates.
+    They must not be blocked just because regular tool calls exhausted the budget.
+
+    Reserve is min(max_total_tool_calls, 2 * max_members), sized so that in the
+    worst case with max_members teammates, each can deliver their result once.
+    """
+    max_total = _limit(state, "max_total_tool_calls")
+    max_members = _limit(state, "max_members")
+
+    if max_total is None or max_members is None:
+        return 0
+
+    return min(max_total, 2 * max_members)
+
+
 def apply_call(
     state: dict[str, Any],
     tool_name: str,
@@ -249,18 +269,42 @@ def apply_call(
     `state` is modified in place; the caller persists it. Counting happens before
     any early return so a denied call still consumes budget — otherwise a loop of
     denied calls would be free.
+
+    SendMessage and TaskUpdate are not subject to the regular budget cap; they
+    draw from a coordination reserve instead so that handoff communication is never
+    blocked by tool exhaustion.
     """
     state["total_tool_calls"] = int(state.get("total_tool_calls", 0)) + 1
 
     max_total = _limit(state, "max_total_tool_calls")
+    is_coordination_tool = tool_name in COORDINATION_TOOLS
 
-    if max_total is not None and state["total_tool_calls"] > max_total:
-        return deny(
-            f"Tool-call budget exhausted: this run has used "
-            f"{state['total_tool_calls']} of {max_total} calls allowed for "
-            f"task_class {state.get('task_class')}. Report what is done so far "
-            "and stop; a new request gets a new envelope."
-        )
+    if max_total is not None:
+        if is_coordination_tool:
+            # Coordination tools are not subject to the regular budget;
+            # they use a reserve. But they still count toward the hard cap.
+            if state["total_tool_calls"] > max_total:
+                return deny(
+                    f"Coordination budget exhausted: this run has used "
+                    f"{state['total_tool_calls']} of {max_total} total calls. "
+                    "The hard cap includes coordination calls. "
+                    "Report what is done so far and stop."
+                )
+        else:
+            # Regular tools are subject to regular budget minus the reserve.
+            coordination_reserve = _coordination_reserve(state)
+            regular_budget = max(0, max_total - coordination_reserve)
+            regular_calls = int(state.get("total_tool_calls_regular", 0))
+
+            if regular_calls >= regular_budget:
+                return deny(
+                    f"Tool-call budget exhausted: this run has used "
+                    f"{regular_calls} of {regular_budget} regular calls "
+                    f"(coordination reserve: {coordination_reserve}). "
+                    f"Report what is done so far and stop; a new request gets a new envelope."
+                )
+
+            state["total_tool_calls_regular"] = regular_calls + 1
 
     risk_level = str(state.get("risk_level") or "")
     confirmed = bool(state.get("confirmed"))
@@ -329,11 +373,18 @@ def _check_agent_dispatch(
     state: dict[str, Any],
     tool_input: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Enforce the roster, the member cap, and the dispatch-round cap."""
+    """Enforce the roster, the member cap, and the dispatch-round cap.
+
+    Members are tracked by their unique `name` field, not by subagent_type.
+    Multiple instances with the same subagent_type but different names are
+    distinct members and each consumes a slot.
+    """
     subagent_type = ""
+    teammate_name = ""
 
     if isinstance(tool_input, dict):
         subagent_type = str(tool_input.get("subagent_type") or "").strip()
+        teammate_name = str(tool_input.get("name") or "").strip()
 
     selected_agents = [str(agent) for agent in state.get("selected_agents") or []]
 
@@ -350,6 +401,12 @@ def _check_agent_dispatch(
             "not allowed — report that the roster does not cover this work and stop."
         )
 
+    if not teammate_name:
+        return deny(
+            "Blocked: the dispatch provides no name. Each teammate must have a stable, "
+            "unique name. Provide it via the `name` parameter."
+        )
+
     max_rounds = _limit(state, "max_tool_rounds")
     agent_rounds = int(state.get("agent_rounds", 0))
 
@@ -360,20 +417,20 @@ def _check_agent_dispatch(
             "reported and stop."
         )
 
-    members_used = [str(agent) for agent in state.get("members_used") or []]
+    members_used = [str(member) for member in state.get("members_used") or []]
 
-    if subagent_type not in members_used:
+    if teammate_name not in members_used:
         max_members = _limit(state, "max_members")
 
         if max_members is not None and len(members_used) + 1 > max_members:
             return deny(
-                f"Blocked: dispatching '{subagent_type}' would make "
+                f"Blocked: dispatching teammate '{teammate_name}' would make "
                 f"{len(members_used) + 1} members, over the {max_members} allowed for "
                 f"task_class {state.get('task_class')}. Already dispatched: "
                 f"{', '.join(members_used) or 'none'}."
             )
 
-        members_used.append(subagent_type)
+        members_used.append(teammate_name)
         state["members_used"] = members_used
 
     return None

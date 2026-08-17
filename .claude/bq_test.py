@@ -35,8 +35,7 @@ from pathlib import Path
 
 _CLAUDE_DIR = Path(__file__).resolve().parent
 
-BY_MERCHANT = "groupsale_by_merchant"
-UNMATCHED = "groupsale_unmatched_keys"
+USAGE_MONTHLY = "groupsale_usage_monthly"
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -127,51 +126,6 @@ class Results:
         return bool(condition)
 
 
-# --- reading the templates as text ---
-
-# The merchant patterns and labels are written twice on purpose: the CASE in
-# groupsale_by_merchant.sql assigns labels in priority order, and the exclusion in
-# groupsale_unmatched_keys.sql has to mirror it. These regexes exist so the duplication
-# is checked rather than trusted.
-_CASE_BRANCH = re.compile(
-    r"WHEN\s+REGEXP_CONTAINS\(\s*UPPER\(\s*groupsale_key\s*\)\s*,\s*r'([^']+)'\s*\)\s*"
-    r"THEN\s*'([^']+)'",
-    re.IGNORECASE,
-)
-_MAP_MERCHANT = re.compile(r"STRUCT\(\s*'([^']+)'\s+AS\s+merchant\b", re.IGNORECASE)
-# `[^\[\]]` rather than `[^\]]`: the alias arrays sit inside the outer `UNNEST([...])`
-# bracket, and allowing `[` in the class lets a match start at that outer bracket and
-# swallow the merchant label with it.
-_MAP_ALIASES = re.compile(r"\[([^\[\]]*)\]\s+AS\s+aliases", re.IGNORECASE)
-_EXCLUSION = re.compile(
-    r"NOT\s+REGEXP_CONTAINS\(\s*UPPER\(\s*groupsale_key\s*\)\s*,\s*r'([^']+)'\s*\)",
-    re.IGNORECASE,
-)
-_TABLE = re.compile(r"FROM\s+`([^`]+)`", re.IGNORECASE)
-_DEFAULT_DATE = re.compile(r"DATE\s+'(\d{4}-\d{2}-\d{2})'")
-
-
-def template_sql(name):
-    """The raw text of a template, read through the tool layer."""
-    return bq.get_template(name)
-
-
-def case_branches(sql):
-    """[(pattern, label), ...] from the CASE, in the order they are evaluated."""
-    return _CASE_BRANCH.findall(sql)
-
-
-def map_merchants(sql):
-    """The merchant labels the alias map can select."""
-    return _MAP_MERCHANT.findall(sql)
-
-
-def map_aliases(sql):
-    """Every alias string in the map, lower-cased."""
-    aliases = []
-    for group in _MAP_ALIASES.findall(sql):
-        aliases.extend(re.findall(r"'([^']*)'", group))
-    return [a.lower() for a in aliases]
 
 
 # --- level 0: offline ---
@@ -182,105 +136,59 @@ def run_offline_checks(results):
 
     available = bq.list_templates()
 
-    for name in (BY_MERCHANT, UNMATCHED):
-        if not results.check(f"Template discovered: {name}", name in available,
-                             f"available: {', '.join(available) or '(none)'}"):
-            return  # nothing below can work without the files
-
-    merchant_sql = template_sql(BY_MERCHANT)
-    unmatched_sql = template_sql(UNMATCHED)
+    if not results.check(f"Template discovered: {USAGE_MONTHLY}", USAGE_MONTHLY in available,
+                         f"available: {', '.join(available) or '(none)'}"):
+        return  # nothing below can work without the template
 
     # -- parameters --
 
+    usage_sql = bq.get_template(USAGE_MONTHLY)
+    param_names = set(bq.extract_param_names(usage_sql))
+
     results.check(
-        f"{BY_MERCHANT} takes exactly merchant, start_date, end_date",
-        set(bq.extract_param_names(merchant_sql)) == {"merchant", "start_date", "end_date"},
-        f"found: {bq.extract_param_names(merchant_sql)}",
+        f"{USAGE_MONTHLY} has merchant parameter",
+        "merchant" in param_names,
+        f"found: {param_names}",
     )
     results.check(
-        f"{UNMATCHED} takes exactly start_date, end_date",
-        set(bq.extract_param_names(unmatched_sql)) == {"start_date", "end_date"},
-        f"found: {bq.extract_param_names(unmatched_sql)}",
+        f"{USAGE_MONTHLY} has usage_type parameter",
+        "usage_type" in param_names,
+        f"found: {param_names}",
+    )
+    results.check(
+        f"{USAGE_MONTHLY} has start_date parameter",
+        "start_date" in param_names,
+        f"found: {param_names}",
+    )
+    results.check(
+        f"{USAGE_MONTHLY} has end_date parameter",
+        "end_date" in param_names,
+        f"found: {param_names}",
     )
 
-    # A missing or misspelled parameter must fail locally, before a job is created.
+    # A missing parameter must fail locally, before a job is created.
     try:
-        bq.validate_params(BY_MERCHANT, {"merchant": "cgv", "start_date": None})
-        results.fail("Missing parameter is rejected locally", "validate_params accepted it")
+        bq.validate_params(USAGE_MONTHLY, {"merchant": None})
+        results.fail("Missing parameters are rejected locally", "validate_params accepted incomplete set")
     except bq.TemplateError as e:
-        results.ok("Missing parameter is rejected locally", str(e).splitlines()[0])
+        results.ok("Missing parameters are rejected locally", str(e).splitlines()[0])
 
+    # An unknown parameter must fail locally.
     try:
         bq.validate_params(
-            BY_MERCHANT,
-            {"merchant": "cgv", "start_date": None, "end_date": None, "typo": 1},
+            USAGE_MONTHLY,
+            {"merchant": None, "usage_type": None, "start_date": None, "end_date": None, "typo": 1},
         )
-        results.fail("Unknown parameter is rejected locally", "validate_params accepted it")
+        results.fail("Unknown parameters are rejected locally", "validate_params accepted it")
     except bq.TemplateError:
-        results.ok("Unknown parameter is rejected locally")
+        results.ok("Unknown parameters are rejected locally")
 
-    # -- the duplication between the two templates --
-
-    branches = case_branches(merchant_sql)
-    case_patterns = [p.upper() for p, _ in branches]
-    case_labels = [label for _, label in branches]
-
-    results.check(
-        "CASE labels every merchant exactly once",
-        len(case_labels) == len(set(case_labels)) and len(case_labels) == 5,
-        f"labels: {case_labels}",
-    )
-
-    excluded = _EXCLUSION.findall(unmatched_sql)
-    if not excluded:
-        results.fail(f"{UNMATCHED} has a merchant exclusion", "no NOT REGEXP_CONTAINS found")
-    else:
-        unmatched_patterns = [p.upper() for p in excluded[0].split("|")]
-        results.check(
-            "Both templates use the same merchant patterns",
-            set(case_patterns) == set(unmatched_patterns),
-            f"only in {BY_MERCHANT}: {sorted(set(case_patterns) - set(unmatched_patterns))}; "
-            f"only in {UNMATCHED}: {sorted(set(unmatched_patterns) - set(case_patterns))}",
-        )
-
-    # A label in the map that the CASE never produces selects nothing and returns zero
-    # rows - the exact silent-empty-result failure the templates are built to avoid.
-    mapped = map_merchants(merchant_sql)
-    results.check(
-        "Every alias-map merchant is produced by the CASE",
-        set(mapped) == set(case_labels),
-        f"map: {sorted(set(mapped))} vs CASE: {sorted(set(case_labels))}",
-    )
-
-    aliases = map_aliases(merchant_sql)
-    results.check(
-        "Aliases are lower case, single-spaced, and unique",
-        aliases == [a.strip() for a in aliases]
-        and all("  " not in a for a in aliases)
-        and len(aliases) == len(set(aliases)),
-        f"{len(aliases)} aliases",
-    )
-    results.check(
-        "Every merchant has its own name as an alias",
-        all(label.lower() in aliases for label in case_labels),
-        f"missing: {[l for l in case_labels if l.lower() not in aliases]}",
-    )
-
-    # -- shared constants --
-
-    tables = {t for t in _TABLE.findall(merchant_sql)} | {t for t in _TABLE.findall(unmatched_sql)}
-    results.check(
-        "Both templates read the same table",
-        len(tables) == 1,
-        f"tables: {sorted(tables)}",
-    )
-
-    floors = set(_DEFAULT_DATE.findall(merchant_sql)) | set(_DEFAULT_DATE.findall(unmatched_sql))
-    results.check(
-        "Both templates default to the same start date",
-        len(floors) == 1,
-        f"defaults: {sorted(floors)}",
-    )
+    # Valid parameter sets should be accepted.
+    try:
+        bq.validate_params(USAGE_MONTHLY, {"merchant": None, "usage_type": None, "start_date": None, "end_date": None})
+        results.ok("Valid parameter set is accepted")
+    except bq.TemplateError as e:
+        results.fail("Valid parameter set is accepted", str(e))
 
 
 # --- level 1: dry run ---
@@ -289,15 +197,15 @@ def run_offline_checks(results):
 # window, and the alias path. A dry run type-checks all of it without executing.
 DRY_RUN_SHAPES = [
     ("explicit merchant and window",
-     {"merchant": "cgv", "start_date": "2026-07-01", "end_date": "2026-07-31"}),
-    ("all defaults (no merchant, no dates)",
-     {"merchant": None, "start_date": None, "end_date": None}),
-    ("multi-word alias",
-     {"merchant": "beta cinemas", "start_date": None, "end_date": None}),
-    ("code used as an alias (glx)",
-     {"merchant": "glx", "start_date": None, "end_date": None}),
-    ("open-ended window (start only)",
-     {"merchant": None, "start_date": "2026-07-01", "end_date": None}),
+     {"merchant": "BHD", "usage_type": None, "start_date": "2026-07-01", "end_date": "2026-07-31"}),
+    ("all defaults (all nulls)",
+     {"merchant": None, "usage_type": None, "start_date": None, "end_date": None}),
+    ("tickets only",
+     {"merchant": "BHD", "usage_type": "TICKET", "start_date": None, "end_date": None}),
+    ("combos only",
+     {"merchant": "BHD", "usage_type": "COMBO", "start_date": None, "end_date": None}),
+    ("multiple merchants (null), date window",
+     {"merchant": None, "usage_type": None, "start_date": "2026-07-01", "end_date": "2026-08-31"}),
 ]
 
 
@@ -318,8 +226,6 @@ def run_dry_run_checks(results):
     """Ask BigQuery to compile each shape of the query without executing it.
 
     This is where the SQL is actually validated: syntax, types, and the table reference.
-    Note that ERROR() does not fire here - nothing is executed - so the unknown-merchant
-    guard is a live check, not a dry-run one.
     """
     print_header("LEVEL 1: DRY RUN (BigQuery compiles, nothing executes)")
 
@@ -330,7 +236,7 @@ def run_dry_run_checks(results):
             results.skip(name, blocked)
             continue
 
-        result = bq.run_template(BY_MERCHANT, params, dry_run=True)
+        result = bq.run_template(USAGE_MONTHLY, params, dry_run=True)
         if result["ok"]:
             results.ok(name, f"{result['gigabytes_processed']} GiB would be scanned")
             continue
@@ -343,20 +249,6 @@ def run_dry_run_checks(results):
             continue
         results.fail(name, error)
 
-    name = f"Compiles: {UNMATCHED}"
-    if blocked:
-        results.skip(name, blocked)
-    else:
-        result = bq.run_template(
-            UNMATCHED, {"start_date": None, "end_date": None}, dry_run=True
-        )
-        if result["ok"]:
-            results.ok(name, f"{result['gigabytes_processed']} GiB would be scanned")
-        elif _unavailable(result.get("error", "")):
-            results.skip(name, result["error"].strip().splitlines()[0])
-        else:
-            results.fail(name, result.get("error", ""))
-
     return blocked
 
 
@@ -368,190 +260,68 @@ def _rowset(result):
 
 
 def _run(params, limit=None):
-    """Run the merchant template, returning the result dict unchanged."""
-    return bq.run_template(BY_MERCHANT, params, limit=limit)
+    """Run the usage monthly template, returning the result dict unchanged."""
+    return bq.run_template(USAGE_MONTHLY, params, limit=limit)
 
 
 def run_live_checks(results, start_date, end_date):
     """Real queries. These test behaviour the SQL cannot be trusted on until it runs."""
     print_header("LEVEL 2: LIVE (real queries)")
 
-    window = {"start_date": start_date, "end_date": end_date}
-    print(f"Window: start_date={start_date or 'null (template default)'}, "
-          f"end_date={end_date or 'null (no upper bound)'}\n")
+    window = {"merchant": None, "usage_type": None, "start_date": start_date, "end_date": end_date}
+    print(f"Window: start_date={start_date or 'null'}, end_date={end_date or 'null'}\n")
 
-    # -- a named merchant only ever returns its own label --
+    # -- query runs with all nulls --
 
-    named = _run({"merchant": "lotte", **window})
-    if not named["ok"]:
-        if _unavailable(named.get("error", "")):
-            results.skip("Live checks", named["error"].strip().splitlines()[0])
+    result = _run(window)
+    if not result["ok"]:
+        if _unavailable(result.get("error", "")):
+            results.skip("Live checks", result["error"].strip().splitlines()[0])
             return
-        results.fail("Query runs for a named merchant", named["error"])
+        results.fail("Query runs with all parameters null", result["error"])
         return
 
-    labels = {row["merchant"] for row in named["rows"]}
-    if not named["rows"]:
-        # Passing an assertion over zero rows would be vacuous, so say so instead.
-        results.skip("A named merchant returns only its own rows", "no rows in this window")
-    else:
+    results.ok("Query runs with all parameters null", f"{result['row_count']} rows")
+
+    # -- query returns expected columns --
+
+    if result["rows"]:
+        cols = set(result["rows"][0].keys())
+        expected_cols = {"usage_month", "merchant", "usage_type", "groupsale_key", "trans",
+                        "qty_used", "debit_used", "cumulative_qty_used", "cumulative_debit_used"}
         results.check(
-            "A named merchant returns only its own rows",
-            labels == {"Lotte"},
-            f"labels present: {sorted(labels)}",
+            "Result has all expected columns",
+            expected_cols <= cols,
+            f"missing: {sorted(expected_cols - cols)}",
         )
-
-    # -- the all-merchants default --
-
-    every = _run({"merchant": None, **window})
-    if not every["ok"]:
-        results.fail("Query runs with merchant=null", every["error"])
-        return
-
-    all_labels = {row["merchant"] for row in every["rows"]}
-    results.check(
-        "merchant=null covers more than one merchant",
-        len(all_labels) > 1,
-        f"merchants present: {sorted(all_labels)}",
-    )
-    results.check(
-        "merchant=null never returns an unclassified row",
-        "Unknown" not in all_labels,
-        "an 'Unknown' row means the merchant filter is not applied",
-    )
-
-    # -- the date default --
-
-    merchant_sql = template_sql(BY_MERCHANT)
-    floors = _DEFAULT_DATE.findall(merchant_sql)
-    if start_date is not None:
-        results.skip("start_date=null equals the documented default", "--start was given")
-    elif not floors:
-        results.skip("start_date=null equals the documented default", "no default date in the SQL")
     else:
-        explicit = _run({"merchant": None, "start_date": floors[0], "end_date": end_date})
-        if not explicit["ok"]:
-            results.fail("start_date=null equals the documented default", explicit["error"])
-        else:
-            results.check(
-                "start_date=null equals the documented default",
-                _rowset(explicit) == _rowset(every),
-                f"null: {every['row_count']} rows vs {floors[0]}: {explicit['row_count']} rows",
-            )
+        results.skip("Result has all expected columns", "no rows in this window")
 
-    # -- aliases resolve to the same merchant --
+    # -- BHD tickets return debit_used --
 
-    galaxy = _run({"merchant": "galaxy", **window})
-    glx = _run({"merchant": "glx", **window})
-    if galaxy["ok"] and glx["ok"]:
+    bhd_tickets = _run({"merchant": "BHD", "usage_type": "TICKET", "start_date": None, "end_date": None})
+    if bhd_tickets["ok"] and bhd_tickets["rows"]:
+        has_debit = all(row.get("debit_used") is not None for row in bhd_tickets["rows"])
         results.check(
-            "Aliases 'galaxy' and 'glx' return identical rows",
-            _rowset(galaxy) == _rowset(glx),
-            f"galaxy: {galaxy['row_count']} rows, glx: {glx['row_count']} rows",
+            "BHD tickets have debit_used values",
+            has_debit,
+            f"{sum(1 for r in bhd_tickets['rows'] if r.get('debit_used') is None)}/{len(bhd_tickets['rows'])} rows have NULL debit",
         )
     else:
-        results.fail(
-            "Aliases 'galaxy' and 'glx' return identical rows",
-            galaxy.get("error") or glx.get("error"),
-        )
+        results.skip("BHD tickets have debit_used values", "no BHD ticket rows in data")
 
-    # -- the guard: an unknown merchant must fail loudly --
+    # -- non-BHD merchants return NULL debit_used --
 
-    unknown = _run({"merchant": "cinestar", **window})
-    if unknown["ok"]:
-        results.fail(
-            "An unknown merchant fails instead of returning nothing",
-            f"the query succeeded with {unknown['row_count']} rows - a typo would be "
-            "reported as 'no sales'",
+    beta_tickets = _run({"merchant": "Beta", "usage_type": "TICKET", "start_date": None, "end_date": None})
+    if beta_tickets["ok"] and beta_tickets["rows"]:
+        has_null_debit = all(row.get("debit_used") is None for row in beta_tickets["rows"])
+        results.check(
+            "Non-BHD merchants have NULL debit_used",
+            has_null_debit,
+            f"{sum(1 for r in beta_tickets['rows'] if r.get('debit_used') is not None)}/{len(beta_tickets['rows'])} rows have non-NULL debit",
         )
-    elif "unknown merchant" in unknown.get("error", "").lower():
-        results.ok("An unknown merchant fails instead of returning nothing",
-                   "ERROR() names the merchant")
     else:
-        results.fail(
-            "An unknown merchant fails instead of returning nothing",
-            f"failed, but not with the guard message: {unknown.get('error', '')}",
-        )
-
-    run_reconciliation(results, every, window, merchant_sql)
-
-
-def run_reconciliation(results, matched, window, merchant_sql):
-    """Matched rows + unmatched rows must account for the whole table in this window.
-
-    This is the check that catches a wrong merchant pattern. If a chain's code is not in
-    the CASE, its rows do not vanish - they land in `groupsale_unmatched_keys`, and the
-    two totals still have to add up to the table's own total.
-    """
-    name = "Matched + unmatched = every Group Sale row in the window"
-
-    unmatched = bq.run_template(UNMATCHED, window)
-    if not unmatched["ok"]:
-        results.fail(name, unmatched["error"])
-        return
-
-    # Both sides are aggregated per groupsale_key, so a truncated result set means the
-    # sums below are partial and the comparison would be meaningless.
-    if matched.get("truncated") or unmatched.get("truncated"):
-        results.skip(
-            name,
-            f"result truncated at the {matched['row_limit']} row cap - narrow the window "
-            "with --start/--end, or raise BIGQUERY_MAX_ROWS",
-        )
-        return
-
-    tables = _TABLE.findall(merchant_sql)
-    floors = _DEFAULT_DATE.findall(merchant_sql)
-    if not tables or not floors:
-        results.skip(name, "could not read the table or default date out of the template")
-        return
-
-    # The table name and the default date are interpolated because BigQuery cannot
-    # parameterize an identifier. Both are read out of a repo file, never from a request,
-    # and the two date values below are still bound as real query parameters.
-    total_sql = f"""
-    SELECT
-      COUNT(*)                                  AS transaction_count,
-      SUM(COALESCE(total_amount_groupsale, 0))  AS total_amount
-    FROM `{tables[0]}`
-    WHERE groupsale_key IS NOT NULL
-      AND booking_date >= IFNULL(PARSE_DATE('%Y-%m-%d', @start_date), DATE '{floors[0]}')
-      AND (@end_date IS NULL OR booking_date <= PARSE_DATE('%Y-%m-%d', @end_date))
-    """
-    whole = bq.run_sql(total_sql, window)
-    if not whole["ok"]:
-        results.fail(name, whole["error"])
-        return
-
-    expected = whole["rows"][0]
-    matched_count = sum(row["transaction_count"] for row in matched["rows"])
-    unmatched_count = sum(row["transaction_count"] for row in unmatched["rows"])
-    matched_amount = sum(row["total_amount"] for row in matched["rows"])
-    unmatched_amount = sum(row["total_amount"] for row in unmatched["rows"])
-
-    results.check(
-        name,
-        matched_count + unmatched_count == expected["transaction_count"]
-        and matched_amount + unmatched_amount == expected["total_amount"],
-        f"matched {matched_count} + unmatched {unmatched_count} = "
-        f"{matched_count + unmatched_count}, table has {expected['transaction_count']}",
-    )
-
-    # Not a pass/fail - unmatched rows are legitimate, but they are excluded from every
-    # per-merchant figure, so their size is the number to know.
-    if unmatched["rows"]:
-        share = (
-            100.0 * unmatched_count / expected["transaction_count"]
-            if expected["transaction_count"] else 0.0
-        )
-        print(f"{Colors.YELLOW}  note: {len(unmatched['rows'])} groupsale_keys "
-              f"({unmatched_count} rows, {share:.1f}%) match no merchant and are excluded "
-              f"from every figure above.{Colors.END}")
-        print(f"        run: python .claude/bq_query.py {UNMATCHED} "
-              f"--param start_date=null --param end_date=null")
-    else:
-        print(f"{Colors.GREEN}  note: every groupsale_key in this window matched a "
-              f"merchant.{Colors.END}")
+        results.skip("Non-BHD merchants have NULL debit_used", "no Beta ticket rows in data")
 
 
 # --- entry point ---
