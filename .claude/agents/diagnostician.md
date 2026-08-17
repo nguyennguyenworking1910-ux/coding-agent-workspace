@@ -2,7 +2,7 @@
 name: diagnostician
 description: Analyzes logs, metrics, traces, and system state to find root causes and performance bottlenecks. Use for "why is this slow / flaky / failing intermittently" questions, before deciding what to change. Read-only; it diagnoses and recommends but does not fix.
 tools: Read, Grep, Glob, Bash, SendMessage, TaskUpdate
-model: sonnet
+model: haiku
 permissionMode: plan
 maxTurns: 8
 ---

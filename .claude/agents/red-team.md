@@ -2,7 +2,7 @@
 name: red-team
 description: Adversarial security and edge-case testing for authorized work on this codebase. Use to probe a feature or module for vulnerabilities, boundary conditions, and error-handling gaps before it ships. Read-only; it reports findings and proposed test cases.
 tools: Read, Grep, Glob, Bash, SendMessage, TaskUpdate
-model: opus
+model: haiku
 permissionMode: plan
 maxTurns: 10
 ---

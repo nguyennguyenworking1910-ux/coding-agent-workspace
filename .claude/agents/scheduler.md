@@ -2,7 +2,7 @@
 name: scheduler
 description: Schedules tasks onto the user's Google Calendar without double-booking. Use for "book time for X", "schedule Y tomorrow", or "find a slot for Z" requests, in any language. Creates real calendar events.
 tools: Read, Bash, SendMessage, TaskUpdate
-model: sonnet
+model: haiku
 permissionMode: default
 maxTurns: 6
 ---

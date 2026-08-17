@@ -2,7 +2,7 @@
 name: bug-fixer
 description: Diagnoses a failing test, error log, or bug report and implements the fix. Use when something is broken and you want it working — give it the failure output or a reproduction. Has write access and edits the working tree.
 tools: Read, Grep, Glob, Edit, Write, Bash, SendMessage, TaskUpdate
-model: opus
+model: haiku
 permissionMode: default
 maxTurns: 12
 ---

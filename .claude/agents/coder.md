@@ -2,7 +2,7 @@
 name: coder
 description: Implements features and performs refactors from a specification. Use when the work is "build this" or "restructure this" rather than "find out why this broke". Has write access and edits the working tree.
 tools: Read, Grep, Glob, Edit, Write, Bash, SendMessage, TaskUpdate
-model: opus
+model: haiku
 permissionMode: default
 maxTurns: 16
 ---

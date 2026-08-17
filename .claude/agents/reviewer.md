@@ -2,7 +2,7 @@
 name: reviewer
 description: Reviews code changes for correctness, security, and maintainability. Use after a change is written and before it is committed — pass it a diff, a branch, or a set of files. Read-only; it reports findings and never edits.
 tools: Read, Grep, Glob, Bash, SendMessage, TaskUpdate
-model: sonnet
+model: haiku
 permissionMode: plan
 maxTurns: 8
 ---

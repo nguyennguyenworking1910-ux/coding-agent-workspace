@@ -100,7 +100,7 @@
       "id": "group-sales-manager",
       "name": "Group Sales Manager",
       "runtime": {
-        "model": "sonnet",
+        "model": "haiku",
         "max_turns": 8,
         "max_run_budget_usd": {
           "small_task": 1.0,
@@ -108,7 +108,7 @@
           "complex_task": 4.0
         }
       },
-      "description": "Queries group sales data and plans resource/workload allocation",
+      "description": "Measures Group Sale usage (tickets, combos, BHD debit) by merchant, usage type, and period",
       "enabled": true,
       "type": "sales_manager",
       "definition": ".claude/agents/group-sales-manager.md",
