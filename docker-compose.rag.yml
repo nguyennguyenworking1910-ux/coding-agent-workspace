@@ -1,0 +1,32 @@
+name: coding-agent-rag
+
+services:
+  workspace-rag-db:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    container_name: coding-agent-rag-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: coding_agent_rag
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: ${RAG_DB_PASSWORD:?RAG_DB_PASSWORD is required}
+
+    ports:
+      - "127.0.0.1:5434:5432"
+
+    volumes:
+      - coding_agent_rag_pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U rag_user -d coding_agent_rag"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  coding_agent_rag_pgdata:
