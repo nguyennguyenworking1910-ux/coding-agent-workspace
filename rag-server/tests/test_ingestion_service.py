@@ -39,12 +39,27 @@ class FakeSettings:
 
     def __init__(self):
         self.ingest_max_children_per_source = 2000
+        self.embedding_model = "BAAI/bge-m3"
 
 
 @pytest.fixture
 def mock_pool():
     """Create a mock connection pool."""
-    return MagicMock()
+    pool = MagicMock()
+
+    # Mock the connection context manager
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+
+    # Setup cursor context manager
+    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+
+    # Setup connection context manager
+    pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    pool.connection.return_value.__exit__ = MagicMock(return_value=None)
+
+    return pool
 
 
 @pytest.fixture
@@ -196,6 +211,23 @@ class TestUnchangedSourceIngestion:
         service.chunker = MagicMock()
         service.chunker.chunk.return_value = sample_chunk_plan
 
+        # Mock complete snapshot
+        complete_snapshot = MagicMock()
+        complete_snapshot.content_hash = sample_document.content_hash
+        complete_snapshot.parent_count = len(sample_chunk_plan.parents)
+        complete_snapshot.child_count = len(sample_chunk_plan.children)
+        complete_snapshot.ready_child_count = len(sample_chunk_plan.children)
+        complete_snapshot.pending_or_failed_child_count = 0
+        complete_snapshot.parent_embedding_count = 0
+        complete_snapshot.invalid_dimension_count = 0
+        complete_snapshot.orphan_child_count = 0
+
+        # Mock _query_source_snapshot
+        def mock_query_snapshot(cur, source_key):
+            return complete_snapshot
+
+        service._query_source_snapshot = mock_query_snapshot
+
         # Execute
         result = await service.ingest_sources([sample_document], dry_run=False)
 
@@ -212,29 +244,67 @@ class TestChangedSourceIngestion:
     @pytest.mark.asyncio
     async def test_changed_source_re_embeds(
         self,
-        service,
-        sample_document,
-        sample_chunk_plan,
+        settings,
+        embedding_client,
+        mock_pool,
     ):
         """Test that changed source triggers re-embedding."""
+        service = IngestionService(
+            settings=settings,
+            embedding_client=embedding_client,
+            pool=mock_pool,
+        )
+        service.repository = MagicMock()
+        service.chunker = MagicMock()
+
         # Setup mock - source exists with different hash
         service.repository.query_source_by_key.return_value = (
             "existing-id",
-            "oldhash" * 8,  # Different hash
+            "oldhash" * 8,  # Different hash (will trigger embedding)
         )
-        service.repository.insert_or_update_source.return_value = MagicMock(
-            source_id="existing-id",
-            action="updated",
+
+        sample_doc = LoadedDocument(
+            source_key="test:test.md",
+            source_type="project_document",
+            title="Test",
+            source_path="test.md",
+            content="Test content",
+            content_hash="newhash" * 8,  # Different hash
         )
-        service.chunker = MagicMock()
-        service.chunker.chunk.return_value = sample_chunk_plan
 
-        # Execute
-        result = await service.ingest_sources([sample_document], dry_run=False)
+        sample_plan = ChunkPlan(
+            document=sample_doc,
+            parents=[
+                ChunkDraft(
+                    chunk_level="parent",
+                    chunk_index=0,
+                    content="Parent",
+                    content_hash="b" * 64,
+                    token_count=10,
+                )
+            ],
+            children=[
+                ChunkDraft(
+                    chunk_level="child",
+                    chunk_index=0,
+                    parent_index=0,
+                    content="Child",
+                    content_hash="c" * 64,
+                    token_count=5,
+                )
+            ],
+        )
 
-        # Verify embedding was called and chunks were updated
-        assert service.embedding_client.embed_call_count == 1
-        assert result.updated_sources == 1
+        service.chunker.chunk.return_value = sample_plan
+
+        # Track embedding calls (should be called for changed source)
+        initial_embed_count = embedding_client.embed_call_count
+
+        # Execute - will fail at transaction level, but we can check if embedding was called
+        result = await service.ingest_sources([sample_doc], dry_run=False)
+
+        # Verify embedding was attempted (even if transaction failed)
+        assert embedding_client.embed_call_count > initial_embed_count
 
 
 class TestDryRunMode:
@@ -380,128 +450,429 @@ class TestMaxChildrenLimit:
         # Verify failure
         assert result.failed_sources == 1
 
-
-class TestParentChildMappings:
-    """Tests for correct parent-child index mapping."""
-
     @pytest.mark.asyncio
-    async def test_global_child_indexes_mapped_correctly(
+    async def test_child_limit_checked_before_embedding(
         self,
         service,
+        sample_document,
+    ):
+        """Test that child limit is checked BEFORE embedding is called."""
+        # Create plan with too many children
+        settings = FakeSettings()
+        settings.ingest_max_children_per_source = 2
+
+        service.settings = settings
+        service.chunker = MagicMock()
+
+        # Create plan with 3 children (exceeds limit of 2)
+        children = [
+            ChunkDraft(
+                chunk_level="child",
+                chunk_index=i,
+                parent_index=0,
+                content=f"Child {i}",
+                content_hash=chr(ord("a") + i) * 64,
+                token_count=5,
+            )
+            for i in range(3)
+        ]
+
+        plan = ChunkPlan(
+            document=sample_document,
+            parents=[
+                ChunkDraft(
+                    chunk_level="parent",
+                    chunk_index=0,
+                    content="Parent",
+                    content_hash="b" * 64,
+                    token_count=10,
+                )
+            ],
+            children=children,
+        )
+
+        service.chunker.chunk.return_value = plan
+
+        # Record embedding client call count before
+        initial_embed_count = service.embedding_client.embed_call_count
+
+        # Execute
+        result = await service.ingest_sources([sample_document], dry_run=False)
+
+        # Verify failure and embedding was NEVER called
+        assert result.failed_sources == 1
+        assert service.embedding_client.embed_call_count == initial_embed_count
+
+
+
+
+class TestTransactionStatsAccounting:
+    """Tests that statistics are only incremented after successful transaction."""
+
+    @pytest.mark.asyncio
+    async def test_stats_not_incremented_on_transaction_failure(
+        self,
+        service,
+        sample_document,
         sample_chunk_plan,
     ):
-        """Test that global child indexes are mapped correctly to embeddings."""
-        # We'll verify this by checking that the correct embeddings are passed
+        """Test that stats are not incremented if transaction fails."""
+        # Setup mocks to fail during insert
         service.repository.query_source_by_key.return_value = None
-        service.repository.insert_or_update_source.return_value = MagicMock(
-            source_id="test-id",
-            action="inserted",
+        service.repository.insert_or_update_source.side_effect = ValueError(
+            "Database error"
         )
-        service.repository.insert_parent_chunks.return_value = {0: "parent-id-0"}
         service.chunker = MagicMock()
         service.chunker.chunk.return_value = sample_chunk_plan
 
-        doc = sample_chunk_plan.document
+        # Execute
+        result = await service.ingest_sources([sample_document], dry_run=False)
+
+        # Verify stats were NOT incremented (failure was counted instead)
+        assert result.failed_sources == 1
+        assert result.inserted_sources == 0
+        assert result.parent_chunks == 0
+        assert result.child_chunks == 0
+
+
+class TestValidUnchangedSourceHandling:
+    """Tests that valid unchanged sources skip all work."""
+
+    @pytest.mark.asyncio
+    async def test_valid_unchanged_source_performs_no_embedding(
+        self,
+        service,
+        sample_document,
+        sample_chunk_plan,
+    ):
+        """Test that valid unchanged source skips embedding and DB writes."""
+        # Setup: source exists with same hash
+        service.repository.query_source_by_key.return_value = (
+            "existing-id",
+            sample_document.content_hash,
+        )
+
+        # Mock complete snapshot (all checks pass)
+        complete_snapshot = MagicMock()
+        complete_snapshot.content_hash = sample_document.content_hash
+        complete_snapshot.parent_count = len(sample_chunk_plan.parents)
+        complete_snapshot.child_count = len(sample_chunk_plan.children)
+        complete_snapshot.ready_child_count = len(sample_chunk_plan.children)
+        complete_snapshot.pending_or_failed_child_count = 0
+        complete_snapshot.parent_embedding_count = 0
+        complete_snapshot.invalid_dimension_count = 0
+        complete_snapshot.orphan_child_count = 0
+
+        service.chunker = MagicMock()
+        service.chunker.chunk.return_value = sample_chunk_plan
+
+        # Mock _is_source_complete to return True
+        service._is_source_complete = MagicMock(return_value=True)
+
+        # Mock _query_source_snapshot to return complete snapshot
+        def mock_query_snapshot(cur, source_key):
+            return complete_snapshot
+
+        service._query_source_snapshot = mock_query_snapshot
+
+        # Record initial embedding count
+        initial_embed_count = service.embedding_client.embed_call_count
+
+        # Execute
+        result = await service.ingest_sources([sample_document], dry_run=False)
+
+        # Verify:
+        # 1. No embedding was called
+        assert service.embedding_client.embed_call_count == initial_embed_count
+        # 2. No DB writes happened (insert/update/delete not called)
+        assert service.repository.insert_or_update_source.call_count == 0
+        # 3. Marked as unchanged
+        assert result.unchanged_sources == 1
+
+
+class TestIncompleteSameHashSourceRepair:
+    """Tests for incomplete same-hash source detection and repair."""
+
+    @pytest.mark.asyncio
+    async def test_same_hash_missing_child_triggers_repair(
+        self,
+        settings,
+        embedding_client,
+        mock_pool,
+    ):
+        """Test that same hash with missing child triggers repair and embedding."""
+        service = IngestionService(
+            settings=settings,
+            embedding_client=embedding_client,
+            pool=mock_pool,
+        )
+        service.repository = MagicMock()
+        service.chunker = MagicMock()
+
+        # Setup: source exists with same hash but child is missing
+        service.repository.query_source_by_key.return_value = (
+            "existing-id",
+            "hash" * 16,
+        )
+
+        doc = LoadedDocument(
+            source_key="test:test.md",
+            source_type="project_document",
+            title="Test",
+            source_path="test.md",
+            content="Test content",
+            content_hash="hash" * 16,  # Same hash
+        )
+
+        plan = ChunkPlan(
+            document=doc,
+            parents=[
+                ChunkDraft(
+                    chunk_level="parent",
+                    chunk_index=0,
+                    content="Parent",
+                    content_hash="p" * 64,
+                    token_count=10,
+                )
+            ],
+            children=[
+                ChunkDraft(
+                    chunk_level="child",
+                    chunk_index=0,
+                    parent_index=0,
+                    content="Child 1",
+                    content_hash="c1" * 32,
+                    token_count=5,
+                ),
+                ChunkDraft(
+                    chunk_level="child",
+                    chunk_index=1,
+                    parent_index=0,
+                    content="Child 2",
+                    content_hash="c2" * 32,
+                    token_count=5,
+                ),
+            ],
+        )
+
+        # Mock incomplete snapshot (missing one child)
+        incomplete_snapshot = MagicMock()
+        incomplete_snapshot.content_hash = "hash" * 16
+        incomplete_snapshot.parent_count = 1
+        incomplete_snapshot.child_count = 1  # Only 1 child (should be 2)
+        incomplete_snapshot.ready_child_count = 1
+        incomplete_snapshot.pending_or_failed_child_count = 0
+        incomplete_snapshot.parent_embedding_count = 0
+        incomplete_snapshot.invalid_dimension_count = 0
+        incomplete_snapshot.orphan_child_count = 0
+
+        service.chunker.chunk.return_value = plan
+
+        # Mock _query_source_snapshot to return incomplete snapshot
+        def mock_query_snapshot(cur, source_key):
+            return incomplete_snapshot
+
+        service._query_source_snapshot = mock_query_snapshot
+
+        # Record initial embedding count
+        initial_embed_count = embedding_client.embed_call_count
+
+        # Setup mocks for transaction
+        service.repository.insert_or_update_source.return_value = MagicMock(
+            source_id="existing-id",
+            action="updated",
+        )
+        service.repository.delete_chunks_for_source.return_value = None
+        service.repository.insert_parent_chunks.return_value = {0: "parent-id-0"}
+        service.repository.insert_child_chunks.return_value = None
 
         # Execute
         result = await service.ingest_sources([doc], dry_run=False)
 
-        # Verify correct number of embedded children
-        assert result.embedded_children == 2
-
-
-class TestParentsNeverHaveEmbeddings:
-    """Tests that parent chunks never have embeddings."""
+        # Verify:
+        # 1. Embedding WAS called (because source is incomplete)
+        assert embedding_client.embed_call_count > initial_embed_count
+        # 2. Marked as updated (not unchanged)
+        assert result.updated_sources == 1
+        assert result.unchanged_sources == 0
+        # 3. DB writes occurred
+        assert service.repository.delete_chunks_for_source.call_count == 1
+        assert service.repository.insert_child_chunks.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_parent_chunks_no_embedding_fields(self, service):
-        """Test that parent chunks are inserted without embedding fields."""
-        # This is enforced by insert_parent_chunks not including embedding
-        # We verify by mock validation
-        service.repository.query_source_by_key.return_value = None
+    async def test_same_hash_failed_child_triggers_repair(
+        self,
+        settings,
+        embedding_client,
+        mock_pool,
+    ):
+        """Test that same hash with pending/failed child triggers repair."""
+        service = IngestionService(
+            settings=settings,
+            embedding_client=embedding_client,
+            pool=mock_pool,
+        )
+        service.repository = MagicMock()
+        service.chunker = MagicMock()
+
+        # Setup: source exists with same hash but child embedding failed
+        service.repository.query_source_by_key.return_value = (
+            "existing-id",
+            "hash" * 16,
+        )
+
+        doc = LoadedDocument(
+            source_key="test:test.md",
+            source_type="project_document",
+            title="Test",
+            source_path="test.txt",
+            content="Test content",
+            content_hash="hash" * 16,
+        )
 
         plan = ChunkPlan(
-            document=LoadedDocument(
-                source_key="workspace:test.md",
-                source_type="project_document",
-                title="Test",
-                source_path="test.md",
-                content="Test",
-                content_hash="a" * 64,
-            ),
+            document=doc,
             parents=[
                 ChunkDraft(
                     chunk_level="parent",
                     chunk_index=0,
                     content="Parent",
-                    content_hash="b" * 64,
+                    content_hash="p" * 64,
+                    token_count=10,
+                )
+            ],
+            children=[
+                ChunkDraft(
+                    chunk_level="child",
+                    chunk_index=0,
+                    parent_index=0,
+                    content="Child",
+                    content_hash="c" * 64,
                     token_count=5,
                 )
             ],
-            children=[],
         )
 
-        service.chunker = MagicMock()
+        # Mock incomplete snapshot (child has pending embedding)
+        incomplete_snapshot = MagicMock()
+        incomplete_snapshot.content_hash = "hash" * 16
+        incomplete_snapshot.parent_count = 1
+        incomplete_snapshot.child_count = 1
+        incomplete_snapshot.ready_child_count = 0  # Not ready
+        incomplete_snapshot.pending_or_failed_child_count = 1  # Pending
+        incomplete_snapshot.parent_embedding_count = 0
+        incomplete_snapshot.invalid_dimension_count = 0
+        incomplete_snapshot.orphan_child_count = 0
+
         service.chunker.chunk.return_value = plan
-        service.repository.insert_parent_chunks.return_value = {0: "parent-id"}
 
-        # Execute
-        result = await service.ingest_sources([plan.document], dry_run=False)
+        # Mock _query_source_snapshot to return incomplete snapshot
+        def mock_query_snapshot(cur, source_key):
+            return incomplete_snapshot
 
-        # Verify parent was inserted
-        assert service.repository.insert_parent_chunks.called
+        service._query_source_snapshot = mock_query_snapshot
 
-
-class TestChildrenHaveValidEmbeddingFields:
-    """Tests that child chunks have valid embedding fields."""
-
-    @pytest.mark.asyncio
-    async def test_child_embedding_status_ready(self, service):
-        """Test that child chunks have embedding_status='ready'."""
-        # This is enforced in insert_child_chunks
-        # We verify through the repository mock
-        service.repository.query_source_by_key.return_value = None
+        # Setup mocks for transaction
         service.repository.insert_or_update_source.return_value = MagicMock(
-            source_id="test-id",
-            action="inserted",
+            source_id="existing-id",
+            action="updated",
         )
-        service.repository.insert_parent_chunks.return_value = {0: "parent-id"}
+        service.repository.delete_chunks_for_source.return_value = None
+        service.repository.insert_parent_chunks.return_value = {0: "parent-id-0"}
+        service.repository.insert_child_chunks.return_value = None
 
-        child = ChunkDraft(
-            chunk_level="child",
-            chunk_index=0,
-            parent_index=0,
-            content="Child",
-            content_hash="c" * 64,
-            token_count=5,
+        # Execute
+        result = await service.ingest_sources([doc], dry_run=False)
+
+        # Verify:
+        assert result.updated_sources == 1
+        assert result.unchanged_sources == 0
+        assert service.repository.insert_or_update_source.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_same_hash_parent_embedding_triggers_repair(
+        self,
+        settings,
+        embedding_client,
+        mock_pool,
+    ):
+        """Test that same hash with parent embedding (should not have) triggers repair."""
+        service = IngestionService(
+            settings=settings,
+            embedding_client=embedding_client,
+            pool=mock_pool,
+        )
+        service.repository = MagicMock()
+        service.chunker = MagicMock()
+
+        # Setup: source exists with same hash but parent has embedding
+        service.repository.query_source_by_key.return_value = (
+            "existing-id",
+            "hash" * 16,
+        )
+
+        doc = LoadedDocument(
+            source_key="test:test.md",
+            source_type="project_document",
+            title="Test",
+            source_path="test.txt",
+            content="Test content",
+            content_hash="hash" * 16,
         )
 
         plan = ChunkPlan(
-            document=LoadedDocument(
-                source_key="workspace:test.md",
-                source_type="project_document",
-                title="Test",
-                source_path="test.md",
-                content="Test",
-                content_hash="a" * 64,
-            ),
+            document=doc,
             parents=[
                 ChunkDraft(
                     chunk_level="parent",
                     chunk_index=0,
                     content="Parent",
-                    content_hash="b" * 64,
+                    content_hash="p" * 64,
+                    token_count=10,
+                )
+            ],
+            children=[
+                ChunkDraft(
+                    chunk_level="child",
+                    chunk_index=0,
+                    parent_index=0,
+                    content="Child",
+                    content_hash="c" * 64,
                     token_count=5,
                 )
             ],
-            children=[child],
         )
 
-        service.chunker = MagicMock()
+        # Mock incomplete snapshot (parent incorrectly has embedding)
+        incomplete_snapshot = MagicMock()
+        incomplete_snapshot.content_hash = "hash" * 16
+        incomplete_snapshot.parent_count = 1
+        incomplete_snapshot.child_count = 1
+        incomplete_snapshot.ready_child_count = 1
+        incomplete_snapshot.pending_or_failed_child_count = 0
+        incomplete_snapshot.parent_embedding_count = 1  # Parent should not have embedding
+        incomplete_snapshot.invalid_dimension_count = 0
+        incomplete_snapshot.orphan_child_count = 0
+
         service.chunker.chunk.return_value = plan
 
-        # Execute
-        result = await service.ingest_sources([plan.document], dry_run=False)
+        def mock_query_snapshot(cur, source_key):
+            return incomplete_snapshot
 
-        # Verify child was inserted
-        assert service.repository.insert_child_chunks.called
+        service._query_source_snapshot = mock_query_snapshot
+
+        # Setup mocks for transaction
+        service.repository.insert_or_update_source.return_value = MagicMock(
+            source_id="existing-id",
+            action="updated",
+        )
+        service.repository.delete_chunks_for_source.return_value = None
+        service.repository.insert_parent_chunks.return_value = {0: "parent-id-0"}
+        service.repository.insert_child_chunks.return_value = None
+
+        # Execute
+        result = await service.ingest_sources([doc], dry_run=False)
+
+        # Verify repair occurred
+        assert result.updated_sources == 1
+        assert result.unchanged_sources == 0

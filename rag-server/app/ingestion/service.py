@@ -6,8 +6,11 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 from psycopg_pool import ConnectionPool
+from psycopg.connection import Connection
+from psycopg.cursor import Cursor
 
 from .chunker import DocumentChunker
 from .embedding_client import EmbeddingClient
@@ -15,6 +18,22 @@ from .models import LoadedDocument
 from .repository import IngestionRepository
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSnapshot:
+    """Immutable snapshot of a source's database state."""
+
+    source_id: str
+    content_hash: str
+    revision: int
+    parent_count: int
+    child_count: int
+    ready_child_count: int
+    pending_or_failed_child_count: int
+    parent_embedding_count: int
+    invalid_dimension_count: int
+    orphan_child_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,25 +161,50 @@ class IngestionService:
         """
         logger.info(f"Processing source: {source.source_key}")
 
-        # Step 1: Check if source exists
-        existing = self.repository.query_source_by_key(source.source_key)
-
-        # Step 2: Chunk the document
+        # Step 1: Chunk the document
         chunk_plan = self.chunker.chunk(source)
 
-        # Step 3: Hash check (outside transaction)
+        # Step 2: VALIDATE CHILD LIMIT BEFORE ANY EMBEDDING
+        max_children = self.settings.ingest_max_children_per_source
+        if len(chunk_plan.children) > max_children:
+            logger.error(
+                f"Source {source.source_key} has {len(chunk_plan.children)} children, "
+                f"exceeds limit of {max_children}"
+            )
+            raise ValueError(
+                f"Source has {len(chunk_plan.children)} children, "
+                f"exceeds limit of {max_children}"
+            )
+
+        if dry_run:
+            # For dry run, skip DB check and embedding, just predict
+            logger.info(f"DRY RUN: Would ingest {source.source_key}")
+            stats["inserted"] += 1
+            stats["parent_chunks"] += len(chunk_plan.parents)
+            stats["child_chunks"] += len(chunk_plan.children)
+            stats["embedded_children"] += len(chunk_plan.children)
+            return
+
+        # Step 3: Fast unchanged check (before embedding)
+        existing = self.repository.query_source_by_key(source.source_key)
         if existing:
             source_id, stored_hash = existing
             if stored_hash == source.content_hash:
-                logger.info(f"Source unchanged: {source.source_key}")
-                stats["unchanged"] += 1
-                return
+                # Verify source completeness before skipping embedding
+                with self.pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        snap = self._query_source_snapshot(cur, source.source_key)
+                        if snap and self._is_source_complete(snap, chunk_plan):
+                            logger.info(f"Source unchanged (fast check): {source.source_key}")
+                            stats["unchanged"] += 1
+                            return
+                # If same hash but incomplete, fall through to embedding and rebuild
 
-        # Step 4: Generate embeddings for all child chunks (outside transaction)
+        # Step 4: Generate embeddings for all child chunks (only if source changed)
         child_texts = [child.content for child in chunk_plan.children]
         embeddings_dict = {}
 
-        if child_texts and not dry_run:
+        if child_texts:
             logger.info(f"Embedding {len(child_texts)} child chunks")
             embeddings = await self.embedding_client.embed_texts(child_texts)
 
@@ -177,23 +221,7 @@ class IngestionService:
 
             logger.info(f"Successfully embedded all {len(child_texts)} children")
 
-        # Step 5: Validate child count limit
-        max_children = self.settings.ingest_max_children_per_source
-        if len(chunk_plan.children) > max_children:
-            raise ValueError(
-                f"Source has {len(chunk_plan.children)} children, "
-                f"exceeds limit of {max_children}"
-            )
-
-        if dry_run:
-            logger.info(f"DRY RUN: Would ingest {source.source_key}")
-            stats["inserted"] += 1
-            stats["parent_chunks"] += len(chunk_plan.parents)
-            stats["child_chunks"] += len(chunk_plan.children)
-            stats["embedded_children"] += len(embeddings_dict)
-            return
-
-        # Step 6-11: Begin transaction with advisory lock
+        # Step 5-11: Begin transaction with advisory lock
         await self._ingest_with_transaction(
             source,
             chunk_plan,
@@ -210,76 +238,255 @@ class IngestionService:
     ) -> None:
         """Ingest with transactional safety and advisory lock.
 
+        One connection, one transaction, advisory lock to prevent races.
+
         Args:
             source: LoadedDocument
             chunk_plan: ChunkPlan with parents and children
             embeddings_dict: Mapping of child index to embedding
             stats: Mutable stats dictionary
         """
-        # Use hash of source_key for advisory lock (consistent, deterministic)
         lock_id = self._compute_lock_id(source.source_key)
 
-        try:
-            with self.pool.connection() as conn:
+        with self.pool.connection() as conn:
+            try:
                 conn.autocommit = False
-                with conn.cursor() as cur:
-                    # Step 6: Acquire advisory lock
-                    cur.execute(
-                        "SELECT pg_advisory_xact_lock(%s)",
-                        (lock_id,),
-                    )
 
-                    # Step 6b: Recheck content_hash (race condition prevention)
-                    existing = self.repository.query_source_by_key(
-                        source.source_key
-                    )
-                    if existing:
-                        source_id, stored_hash = existing
-                        if stored_hash == source.content_hash:
-                            logger.info(
-                                f"Source unchanged after lock: {source.source_key}"
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        # Step 5a: Acquire advisory lock
+                        cur.execute(
+                            "SELECT pg_advisory_xact_lock(%s)",
+                            (lock_id,),
+                        )
+
+                        # Step 5b: Recheck content_hash inside transaction (race condition prevention)
+                        snap = self._query_source_snapshot(
+                            cur, source.source_key
+                        )
+                        if snap:
+                            if snap.content_hash == source.content_hash:
+                                # Check structure completeness
+                                if self._is_source_complete(
+                                    snap, chunk_plan
+                                ):
+                                    logger.info(
+                                        f"Source unchanged (locked check): {source.source_key}"
+                                    )
+                                    stats["unchanged"] += 1
+                                    # Transaction will rollback, no writes
+                                    return
+                                # If same hash but incomplete, fall through to rebuild
+
+                        # Step 6: Insert or update rag_sources
+                        upsert_result = self.repository.insert_or_update_source(
+                            source, cur
+                        )
+                        source_id = upsert_result.source_id
+
+                        action_for_stats = upsert_result.action
+                        if upsert_result.action == "inserted":
+                            pass  # Will increment inserted_sources at end
+                        else:
+                            # Delete old chunks if updating (including incomplete)
+                            self.repository.delete_chunks_for_source(
+                                source_id, cur
                             )
-                            stats["unchanged"] += 1
-                            conn.rollback()
-                            return
 
-                    # Step 7: Insert or update rag_sources
-                    upsert_result = self.repository.insert_or_update_source(source)
-                    source_id = upsert_result.source_id
+                        # Step 7: Insert parent chunks
+                        parent_id_map = (
+                            self.repository.insert_parent_chunks(
+                                source_id,
+                                chunk_plan.parents,
+                                cur,
+                            )
+                        )
 
-                    if upsert_result.action == "inserted":
-                        stats["inserted"] += 1
-                    else:
-                        stats["updated"] += 1
-                        # Delete old chunks if updating
-                        self.repository.delete_chunks_for_source(source_id)
+                        # Step 8: Insert child chunks with embeddings
+                        self.repository.insert_child_chunks(
+                            source_id,
+                            chunk_plan.children,
+                            parent_id_map,
+                            embeddings_dict,
+                            cur,
+                            embedding_model=self.settings.embedding_model,
+                        )
 
-                    # Step 8: Insert parent chunks
-                    parent_id_map = self.repository.insert_parent_chunks(
-                        source_id,
-                        chunk_plan.parents,
-                    )
-                    stats["parent_chunks"] += len(chunk_plan.parents)
+                        # Step 9: Transaction commits here (end of context)
+                        # All writes are now durable
 
-                    # Step 9: Insert child chunks with embeddings
-                    self.repository.insert_child_chunks(
-                        source_id,
-                        chunk_plan.children,
-                        parent_id_map,
-                        embeddings_dict,
-                    )
-                    stats["child_chunks"] += len(chunk_plan.children)
-                    stats["embedded_children"] += len(embeddings_dict)
+                # Success: increment stats ONLY AFTER commit
+                if action_for_stats == "inserted":
+                    stats["inserted"] += 1
+                else:
+                    stats["updated"] += 1
 
-                    # Step 10: Commit (implicit on context exit)
-                    conn.commit()
-                    logger.info(f"Successfully ingested: {source.source_key}")
+                stats["parent_chunks"] += len(chunk_plan.parents)
+                stats["child_chunks"] += len(chunk_plan.children)
+                stats["embedded_children"] += len(embeddings_dict)
 
-        except Exception as e:
-            logger.error(
-                f"Transaction failed for {source.source_key}: {type(e).__name__}"
+                logger.info(f"Successfully ingested: {source.source_key}")
+
+            except Exception as e:
+                # Transaction already rolled back by context manager
+                logger.error(
+                    f"Transaction failed for {source.source_key}: {type(e).__name__}: {e}"
+                )
+                raise
+
+    def _query_source_snapshot(
+        self,
+        cur: Cursor,
+        source_key: str,
+    ) -> Optional[SourceSnapshot]:
+        """Query database for source snapshot within a transaction.
+
+        Args:
+            cur: Database cursor (must be within transaction)
+            source_key: Source key to query
+
+        Returns:
+            SourceSnapshot if source exists, None otherwise
+        """
+        # Get source row
+        cur.execute(
+            """
+            SELECT id, content_hash, revision
+            FROM rag_sources
+            WHERE source_key = %s
+            """,
+            (source_key,),
+        )
+        source_row = cur.fetchone()
+        if not source_row:
+            return None
+
+        source_id, content_hash, revision = source_row
+
+        # Get chunk statistics
+        cur.execute(
+            """
+            SELECT
+                SUM(CASE WHEN chunk_level = 'parent' THEN 1 ELSE 0 END) as parent_count,
+                SUM(CASE WHEN chunk_level = 'child' THEN 1 ELSE 0 END) as child_count,
+                SUM(CASE WHEN chunk_level = 'child' AND embedding_status = 'ready' THEN 1 ELSE 0 END) as ready_child_count,
+                SUM(CASE WHEN chunk_level = 'child' AND embedding_status IN ('pending', 'failed') THEN 1 ELSE 0 END) as pending_or_failed_count,
+                SUM(CASE WHEN chunk_level = 'parent' AND embedding IS NOT NULL THEN 1 ELSE 0 END) as parent_embedding_count,
+                SUM(CASE WHEN chunk_level = 'child' AND (embedding IS NULL OR vector_dims(embedding) != 1024) THEN 1 ELSE 0 END) as invalid_dim_count,
+                SUM(CASE WHEN chunk_level = 'child' AND parent_id IS NULL THEN 1 ELSE 0 END) as orphan_count
+            FROM rag_chunks
+            WHERE source_id = %s
+            """,
+            (source_id,),
+        )
+        stats_row = cur.fetchone()
+        if not stats_row:
+            return None
+
+        (
+            parent_count,
+            child_count,
+            ready_count,
+            pending_or_failed_count,
+            parent_embedding_count,
+            invalid_dim_count,
+            orphan_count,
+        ) = stats_row
+
+        # Handle None values (no chunks)
+        parent_count = parent_count or 0
+        child_count = child_count or 0
+        ready_count = ready_count or 0
+        pending_or_failed_count = pending_or_failed_count or 0
+        parent_embedding_count = parent_embedding_count or 0
+        invalid_dim_count = invalid_dim_count or 0
+        orphan_count = orphan_count or 0
+
+        return SourceSnapshot(
+            source_id=str(source_id),
+            content_hash=content_hash,
+            revision=revision,
+            parent_count=parent_count,
+            child_count=child_count,
+            ready_child_count=ready_count,
+            pending_or_failed_child_count=pending_or_failed_count,
+            parent_embedding_count=parent_embedding_count,
+            invalid_dimension_count=invalid_dim_count,
+            orphan_child_count=orphan_count,
+        )
+
+    def _is_source_complete(
+        self,
+        snapshot: SourceSnapshot,
+        chunk_plan,
+    ) -> bool:
+        """Check if source is complete and consistent.
+
+        A source is complete if:
+        - Parent count matches chunk_plan
+        - Child count matches chunk_plan
+        - All children are ready
+        - No children are pending/failed
+        - No parent has embedding
+        - All child embeddings have valid dimensions (1024)
+        - No orphan children
+
+        Args:
+            snapshot: SourceSnapshot from database
+            chunk_plan: ChunkPlan with expected structure
+
+        Returns:
+            True if source is complete, False if incomplete or needs repair
+        """
+        # Check parent count
+        if snapshot.parent_count != len(chunk_plan.parents):
+            logger.debug(
+                f"Parent count mismatch: {snapshot.parent_count} vs {len(chunk_plan.parents)}"
             )
-            raise
+            return False
+
+        # Check child count
+        if snapshot.child_count != len(chunk_plan.children):
+            logger.debug(
+                f"Child count mismatch: {snapshot.child_count} vs {len(chunk_plan.children)}"
+            )
+            return False
+
+        # Check all children are ready (no pending/failed)
+        if snapshot.pending_or_failed_child_count > 0:
+            logger.debug(
+                f"Children in pending/failed state: {snapshot.pending_or_failed_child_count}"
+            )
+            return False
+
+        # Check no children are missing ready state
+        if snapshot.ready_child_count != snapshot.child_count:
+            logger.debug(
+                f"Not all children ready: {snapshot.ready_child_count} vs {snapshot.child_count}"
+            )
+            return False
+
+        # Check parents don't have embeddings
+        if snapshot.parent_embedding_count > 0:
+            logger.debug(
+                f"Parents have embeddings: {snapshot.parent_embedding_count}"
+            )
+            return False
+
+        # Check all child embeddings have correct dimension
+        if snapshot.invalid_dimension_count > 0:
+            logger.debug(
+                f"Invalid dimension embeddings: {snapshot.invalid_dimension_count}"
+            )
+            return False
+
+        # Check no orphan children
+        if snapshot.orphan_child_count > 0:
+            logger.debug(f"Orphan children found: {snapshot.orphan_child_count}")
+            return False
+
+        logger.debug(f"Source is complete")
+        return True
 
     @staticmethod
     def _compute_lock_id(source_key: str) -> int:

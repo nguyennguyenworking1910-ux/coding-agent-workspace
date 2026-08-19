@@ -418,3 +418,182 @@ class TestTokenCountConsistency:
 
         for chunk in plan.parents + plan.children:
             assert chunk.token_count > 0
+
+
+class TestChildLoopTerminationFix:
+    """Regression tests for child-loop termination bug fix."""
+
+    def test_no_shrinking_suffix_chunks(self, tmp_path: Path) -> None:
+        """Test that parent no longer emits shrinking suffix chunks.
+
+        Before the fix, the loop would continue past the end of content,
+        emitting progressively smaller chunks that represent the tail.
+        """
+        file_path = tmp_path / "doc.txt"
+        # Create content exactly 900 chars + 100 chars = 1000 chars
+        # This should produce 2 children, not 3+ with shrinking tails
+        content = "a" * 1000
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        # Should only have one parent
+        assert len(plan.parents) == 1
+        parent = plan.parents[0]
+
+        # For 1000-char parent, should create only 2 children (not more)
+        children = plan.children
+        assert len(children) <= 2, (
+            f"Expected at most 2 children for 1000-char parent, "
+            f"got {len(children)}"
+        )
+
+    def test_max_children_for_2400_char_parent(self, tmp_path: Path) -> None:
+        """Test that a 2400-character parent produces at most 5 children."""
+        file_path = tmp_path / "doc.txt"
+        # Exactly 2400 chars (parent max)
+        content = "x" * 2400
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        # Should have one parent
+        assert len(plan.parents) == 1
+
+        children = plan.children
+        assert len(children) <= 5, (
+            f"Expected at most 5 children for 2400-char parent, "
+            f"got {len(children)}"
+        )
+
+    def test_final_child_emitted_exactly_once(self, tmp_path: Path) -> None:
+        """Test that final child is emitted exactly once."""
+        file_path = tmp_path / "doc.txt"
+        # Create content that spans multiple children
+        content = "w" * 2000
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        if len(plan.children) > 1:
+            # Get the last child
+            last_child = plan.children[-1]
+
+            # Last child should be unique by content (no duplicates)
+            child_contents = [c.content for c in plan.children]
+            assert child_contents.count(last_child.content) == 1
+
+    def test_final_child_char_end_reaches_parent_end(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that final child covers up to the parent's end."""
+        file_path = tmp_path / "doc.txt"
+        content = "c" * 1500
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        if plan.children:
+            # Get the parent
+            parent = plan.parents[0]
+            # The last child should contain the final character of parent
+            last_child_content = plan.children[-1].content
+            parent_content = parent.content
+
+            # Check that the end of parent is covered by last child
+            assert parent_content.rstrip() in (parent_content)
+            # The last child should end near or at parent end
+            assert last_child_content[-1] == parent_content[-1] or (
+                parent_content.endswith(" ") and
+                last_child_content.rstrip() == parent_content.rstrip()
+            )
+
+    def test_child_start_offsets_strictly_increase(self, tmp_path: Path) -> None:
+        """Test that child start offsets strictly increase."""
+        file_path = tmp_path / "doc.txt"
+        # Create varied content that produces multiple children
+        content = " ".join([f"word{i}" for i in range(200)])
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        parent = plan.parents[0]
+        children = plan.children
+
+        # Verify children are sequential parts of parent
+        # by checking that they appear in order in parent content
+        if len(children) > 1:
+            prev_pos = 0
+            for child in children:
+                # Find where this child appears in parent
+                pos = parent.content.find(child.content)
+                assert pos >= prev_pos, (
+                    f"Children not in sequence: "
+                    f"prev_pos={prev_pos}, current_pos={pos}"
+                )
+                prev_pos = pos + 1
+
+    def test_every_child_is_nonempty(self, tmp_path: Path) -> None:
+        """Test that every child is non-empty."""
+        file_path = tmp_path / "doc.txt"
+        content = "t" * 1800
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        for child in plan.children:
+            assert len(child.content.strip()) > 0, "Child has empty content"
+            assert len(child.content) > 0, "Child content is empty string"
+
+    def test_every_child_at_most_900_chars(self, tmp_path: Path) -> None:
+        """Test that every child is at most 900 characters."""
+        file_path = tmp_path / "doc.txt"
+        content = "m" * 2400
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+        plan = chunker.chunk(doc)
+
+        max_child_chars = chunker.config.child_max_chars
+        for child in plan.children:
+            assert len(child.content) <= max_child_chars, (
+                f"Child exceeds max size: "
+                f"{len(child.content)} > {max_child_chars}"
+            )
+
+    def test_identical_input_produces_identical_chunk_plan(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that identical input produces an identical ChunkPlan."""
+        file_path = tmp_path / "doc.txt"
+        content = "d" * 1800
+        file_path.write_text(content)
+
+        doc = DocumentLoader.load(file_path, tmp_path)
+        chunker = DocumentChunker()
+
+        # Chunk twice
+        plan1 = chunker.chunk(doc)
+        plan2 = chunker.chunk(doc)
+
+        # Should produce identical results
+        assert len(plan1.children) == len(plan2.children)
+
+        for c1, c2 in zip(plan1.children, plan2.children):
+            assert c1.content == c2.content
+            assert c1.content_hash == c2.content_hash
+            assert c1.chunk_index == c2.chunk_index
+            assert c1.parent_index == c2.parent_index

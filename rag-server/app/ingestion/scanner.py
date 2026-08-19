@@ -39,16 +39,20 @@ class RepositoryScanner:
         """Discover all files tracked by git or present in working tree.
 
         Respects .gitignore rules. Uses git ls-files to discover both
-        tracked and untracked files.
+        tracked and untracked files. NUL-separated output supports paths
+        with spaces and Unicode characters.
 
         Returns:
-            List of absolute paths to files in the repository
+            List of absolute paths to files in the repository, sorted in
+            deterministic POSIX order
 
         Raises:
-            subprocess.CalledProcessError: If git command fails
+            RuntimeError: If git command fails (fail-closed)
         """
         try:
-            # Use git ls-files to discover all files (tracked and untracked)
+            # Use git ls-files with NUL-separated output for correct handling
+            # of paths with spaces and Unicode characters
+            # -z: NUL-separated output
             # --cached: tracked files
             # --others: untracked files
             # --exclude-standard: apply .gitignore, .git/info/exclude, etc.
@@ -56,28 +60,38 @@ class RepositoryScanner:
                 [
                     "git",
                     "ls-files",
+                    "-z",
                     "--cached",
                     "--others",
                     "--exclude-standard",
                 ],
                 cwd=str(self.repository_root),
                 capture_output=True,
-                text=True,
+                text=False,  # Binary output for NUL handling
                 check=True,
             )
 
             files = []
-            for line in result.stdout.strip().split("\n"):
-                if line:
-                    # Paths from git ls-files are relative
-                    file_path = (self.repository_root / line).resolve()
-                    files.append(file_path)
+            # Split by NUL byte, decode each path as UTF-8
+            for relative_path_bytes in result.stdout.split(b"\x00"):
+                if relative_path_bytes:  # Skip empty entries
+                    try:
+                        relative_path = relative_path_bytes.decode("utf-8")
+                        # Paths from git ls-files are relative to repository root
+                        file_path = (self.repository_root / relative_path).resolve()
+                        files.append(file_path)
+                    except UnicodeDecodeError as e:
+                        raise RuntimeError(
+                            f"Failed to decode file path as UTF-8: {relative_path_bytes}"
+                        ) from e
 
-            return files
+            # Return in sorted (deterministic) order
+            return sorted(files)
 
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                f"Failed to discover files with git: {e.stderr}"
+                f"Failed to discover files with git (exit code {e.returncode}): "
+                f"{e.stderr.decode('utf-8', errors='replace') if e.stderr else 'unknown error'}"
             ) from e
 
     def scan(self) -> tuple[list[Path], dict[str, int]]:

@@ -35,41 +35,40 @@ def preview_ingestion(
         print(f"Error: Repository root not found: {root}", file=sys.stderr)
         sys.exit(1)
 
-    # Determine files to process
+    # Discover files using RepositoryScanner
+    try:
+        scanner = RepositoryScanner(repository_root)
+        all_files, skip_reasons = scanner.scan()
+    except Exception as e:
+        print(f"Error scanning repository: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Filter to requested path if specified
+    files_to_process = all_files
     if path:
         target_path = (repository_root / path).resolve()
 
-        if target_path.is_dir():
-            # Process all files in directory
-            try:
-                scanner = RepositoryScanner(repository_root)
-                all_files, _ = scanner.scan()
-                # Filter to only files under target directory
-                files_to_process = [
-                    f for f in all_files
-                    if f.is_relative_to(target_path)
-                    if f.is_file()
-                ]
-            except Exception as e:
-                print(f"Error scanning directory: {e}", file=sys.stderr)
-                sys.exit(1)
+        if target_path.is_file():
+            # Single file - check if it's in scanner results
+            if target_path in all_files:
+                files_to_process = [target_path]
+            else:
+                # File was filtered by scanner
+                files_to_process = []
+        elif target_path.is_dir():
+            # Directory - filter to only files under target directory
+            files_to_process = [
+                f for f in all_files
+                if f.is_relative_to(target_path)
+            ]
         else:
-            # Process single file
-            files_to_process = [target_path]
-    else:
-        # Scan entire repository
-        try:
-            scanner = RepositoryScanner(repository_root)
-            files_to_process, _ = scanner.scan()
-        except Exception as e:
-            print(f"Error scanning repository: {e}", file=sys.stderr)
+            print(f"Error: Path not found: {path}", file=sys.stderr)
             sys.exit(1)
 
     # Process files
-    discovered = len(files_to_process)
+    allowed = len(files_to_process)
     loaded = 0
-    skipped = 0
-    skip_reasons: dict[str, int] = defaultdict(int)
+    loaded_skip_reasons: dict[str, int] = defaultdict(int)
     parent_chunks = 0
     child_chunks = 0
     max_parent_chars = 0
@@ -110,15 +109,19 @@ def preview_ingestion(
                 )
 
         except LoaderError as e:
-            skipped += 1
-            skip_reasons[type(e).__name__] += 1
+            loaded_skip_reasons["LoaderError"] = (
+                loaded_skip_reasons.get("LoaderError", 0) + 1
+            )
         except Exception as e:
-            skipped += 1
-            skip_reasons[type(e).__name__] += 1
+            loaded_skip_reasons[type(e).__name__] = (
+                loaded_skip_reasons.get(type(e).__name__, 0) + 1
+            )
 
     # Prepare output
+    skipped = allowed - loaded
     summary = {
-        "discovered": discovered,
+        "discovered": len(all_files) + sum(skip_reasons.values()),
+        "allowed": allowed,
         "loaded": loaded,
         "skipped": skipped,
         "parent_chunks": parent_chunks,
@@ -126,7 +129,7 @@ def preview_ingestion(
         "max_parent_chars": max_parent_chars,
         "max_child_chars": max_child_chars,
         "source_types": dict(source_types),
-        "skip_reasons": dict(skip_reasons),
+        "skip_reasons": {**skip_reasons, **loaded_skip_reasons},
     }
 
     # Print JSON summary

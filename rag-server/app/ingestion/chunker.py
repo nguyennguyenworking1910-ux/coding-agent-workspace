@@ -20,6 +20,9 @@ class ChunkerConfig(NamedTuple):
     child_overlap_chars: int = 100
 
 
+CHUNKER_VERSION = "2.0.0"
+
+
 class TokenEstimator:
     """Estimates token counts deterministically."""
 
@@ -341,6 +344,7 @@ class DocumentChunker:
         token_count = TokenEstimator.estimate(text)
 
         metadata = {
+            "chunker_version": CHUNKER_VERSION,
             "token_count_method": "estimated",
         }
         if current_heading:
@@ -455,12 +459,15 @@ class DocumentChunker:
                     children.append(child)
                     child_index += 1
 
-            # Move offset forward, accounting for overlap
-            offset = max(offset + target - overlap, offset + 1)
-
-            # Avoid infinite loop on very small content
-            if offset >= len(content):
+            # Break immediately if we've reached the end of content
+            if end >= len(content):
                 break
+
+            # Move offset forward with overlap, only if more content remains
+            next_offset = end - overlap
+            if next_offset <= offset:
+                next_offset = offset + 1
+            offset = next_offset
 
         return children
 
@@ -495,7 +502,9 @@ class DocumentChunker:
             content_hash=content_hash,
             token_count=token_count,
             metadata={
+                "chunker_version": CHUNKER_VERSION,
                 "token_count_method": "estimated",
+                "parent_index": parent_index,
             },
         )
 

@@ -15,6 +15,7 @@ from app.database import create_pool
 from app.ingestion.embedding_client import HttpEmbeddingClient
 from app.ingestion.filters import FileFilter
 from app.ingestion.loaders import DocumentLoader, LoaderError
+from app.ingestion.scanner import RepositoryScanner
 from app.ingestion.service import IngestionService
 
 # Configure logging
@@ -89,40 +90,67 @@ async def main() -> int:
         return 1
 
     try:
-        # Scan repository for documents
+        # Discover files using RepositoryScanner (respects .gitignore)
+        logger.info("Discovering files with git ls-files...")
+        try:
+            scanner = RepositoryScanner(root)
+            all_files, skip_reasons = scanner.scan()
+            logger.info(
+                f"Scanner found {len(all_files)} allowed files. "
+                f"Skip reasons: {skip_reasons}"
+            )
+        except RuntimeError as e:
+            print(f"ERROR: Failed to scan repository: {e}", file=sys.stderr)
+            return 1
+
+        # Filter to requested paths if specified
         documents_to_load = []
+        requested_paths = set()
 
-        for path_str in args.paths:
-            target_path = root / path_str
-            logger.info(f"Scanning: {target_path}")
+        if args.paths:
+            # User specified paths - filter all_files to only those
+            for path_str in args.paths:
+                # Normalize to POSIX path
+                requested_path = Path(path_str)
+                target_path = (root / requested_path).resolve()
 
-            if not target_path.exists():
-                logger.warning(f"Path does not exist: {target_path}")
-                continue
+                # Track requested path (for checking if none matched)
+                requested_paths.add(path_str)
 
-            if target_path.is_file():
-                # Single file - validate it
-                filter_result = FileFilter.filter_path(target_path, root)
-                if filter_result.allowed:
-                    documents_to_load.append(target_path)
-                else:
-                    logger.warning(
-                        f"File filtered out: {target_path} "
-                        f"({filter_result.reason})"
+                logger.info(f"Processing requested path: {path_str}")
+
+                if not target_path.exists():
+                    logger.warning(f"Requested path not found: {target_path}")
+                    continue
+
+                if target_path.is_file():
+                    # Single file - verify it's in scanner results
+                    if target_path in all_files:
+                        documents_to_load.append(target_path)
+                        logger.info(f"Added file: {target_path}")
+                    else:
+                        # File exists but was filtered by scanner
+                        filter_result = FileFilter.filter_path(target_path, root)
+                        logger.warning(
+                            f"File filtered: {target_path} "
+                            f"({filter_result.reason})"
+                        )
+                elif target_path.is_dir():
+                    # Directory - filter scanner results to that directory
+                    matching = [
+                        f for f in all_files
+                        if f.is_relative_to(target_path) or f == target_path
+                    ]
+                    documents_to_load.extend(matching)
+                    logger.info(
+                        f"Found {len(matching)} files in {target_path}"
                     )
-            elif target_path.is_dir():
-                # Directory - walk and filter all files
-                for file_path in target_path.rglob("*"):
-                    if file_path.is_file():
-                        filter_result = FileFilter.filter_path(file_path, root)
-                        if filter_result.allowed:
-                            documents_to_load.append(file_path)
-                        else:
-                            logger.debug(
-                                f"File filtered: {file_path} "
-                                f"({filter_result.reason})"
-                            )
+        else:
+            # No paths specified - use all discovered files
+            documents_to_load = all_files
 
+        # Deduplicate and sort for deterministic order
+        documents_to_load = sorted(set(documents_to_load))
         logger.info(f"Found {len(documents_to_load)} files to load")
 
         # Load documents

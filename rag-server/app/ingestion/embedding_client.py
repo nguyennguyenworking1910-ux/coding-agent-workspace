@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import httpx
+import json
 import logging
 import math
 from dataclasses import dataclass
 from typing import Protocol
+
+from ..config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class HttpEmbeddingClient:
         api_base_url: str,
         api_timeout_seconds: int,
         embedding_batch_size: int,
+        settings: Settings | None = None,
     ):
         """Initialize HTTP embedding client.
 
@@ -54,10 +58,12 @@ class HttpEmbeddingClient:
             api_base_url: Base URL of embedding API (e.g., http://127.0.0.1:8200)
             api_timeout_seconds: Timeout for API requests in seconds
             embedding_batch_size: Maximum batch size for embeddings
+            settings: Optional Settings object for embedding model and dimension
         """
         self.api_base_url = api_base_url.rstrip("/")
         self.api_timeout_seconds = api_timeout_seconds
         self.embedding_batch_size = embedding_batch_size
+        self.settings = settings or Settings.from_env()
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of texts by batching requests to API.
@@ -162,16 +168,16 @@ class HttpEmbeddingClient:
             if model is None or dimensions is None or embeddings is None:
                 raise ValueError("Missing required fields (model, dimensions, embeddings)")
 
-            # Validate model
-            if model != "BAAI/bge-m3":
+            # Validate model matches settings
+            if model != self.settings.embedding_model:
                 raise ValueError(
-                    f"Invalid model '{model}': expected 'BAAI/bge-m3'"
+                    f"Invalid model '{model}': expected '{self.settings.embedding_model}'"
                 )
 
-            # Validate dimensions
-            if dimensions != 1024:
+            # Validate dimensions matches settings
+            if dimensions != self.settings.embedding_dimension:
                 raise ValueError(
-                    f"Invalid dimensions {dimensions}: expected 1024"
+                    f"Invalid dimensions {dimensions}: expected {self.settings.embedding_dimension}"
                 )
 
             # Validate embedding count
@@ -182,7 +188,7 @@ class HttpEmbeddingClient:
                 )
 
             # Validate each embedding
-            self._validate_embeddings(embeddings)
+            self._validate_embeddings(embeddings, self.settings.embedding_dimension)
 
             logger.info(
                 f"Validated response: model={model}, "
@@ -199,11 +205,12 @@ class HttpEmbeddingClient:
             raise ValueError(f"Invalid response structure: {e}") from e
 
     @staticmethod
-    def _validate_embeddings(embeddings: list) -> None:
+    def _validate_embeddings(embeddings: list, expected_dimension: int = 1024) -> None:
         """Validate embedding vectors.
 
         Args:
             embeddings: List of embedding vectors
+            expected_dimension: Expected number of dimensions per embedding
 
         Raises:
             ValueError: If any embedding is invalid
@@ -214,10 +221,10 @@ class HttpEmbeddingClient:
                     f"Embedding {idx} is not a list/tuple"
                 )
 
-            if len(embedding) != 1024:
+            if len(embedding) != expected_dimension:
                 raise ValueError(
                     f"Embedding {idx} has {len(embedding)} dimensions, "
-                    f"expected 1024"
+                    f"expected {expected_dimension}"
                 )
 
             for val_idx, val in enumerate(embedding):
