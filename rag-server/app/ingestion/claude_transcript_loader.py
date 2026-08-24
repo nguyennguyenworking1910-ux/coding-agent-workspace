@@ -92,8 +92,15 @@ class ClaudeTranscriptLoader:
             raise TranscriptLoadError(file_path, "file not found", str(e))
 
         # Check if file was modified recently (still being written)
-        time_since_mod = time.time() - snapshot1.modified_time
-        if time_since_mod < self.quiet_period_seconds:
+        time_since_mod = max(
+            0.0,
+            time.time() - snapshot1.modified_time,
+        )
+
+        if (
+            self.quiet_period_seconds > 0
+            and time_since_mod < self.quiet_period_seconds
+        ):
             raise TranscriptLoadError(
                 file_path,
                 "transcript_active",
@@ -159,7 +166,6 @@ class ClaudeTranscriptLoader:
             raise TranscriptLoadError(
                 file_path,
                 "no usable messages",
-                f"invalid_lines={parsed['invalid_line_count']}",
             )
 
         # Create normalized text
@@ -173,8 +179,8 @@ class ClaudeTranscriptLoader:
         # Compute hash from redacted text
         content_hash = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
 
-        # Create title
-        title = self._create_title(parsed)
+        # Create title from redacted content (secrets safe)
+        title = self._create_title(parsed, redacted_text)
 
         # Build metadata
         metadata = {
@@ -189,14 +195,15 @@ class ClaudeTranscriptLoader:
             "models_used": parsed["models_used"],
             "invalid_line_count": parsed["invalid_line_count"],
             "redaction_count": redaction_result.redaction_count,
-            "importer_version": LOADER_VERSION,
-            "redaction_version": REDACTION_VERSION,
+            "source_key": f"claude-chat:{session_id}",
+            "source_type": "claude_chat",
+            "source_path": f"{session_id}.jsonl",
             "trust_level": "user_generated",
-            "contains_instructions": True,
             "include_tool_results": False,
             "include_thinking": False,
             "include_subagents": False,
-            "loader_version": LOADER_VERSION,
+            "importer_version": LOADER_VERSION,
+            "redaction_version": REDACTION_VERSION,
         }
 
         return LoadedDocument(
@@ -225,18 +232,22 @@ class ClaudeTranscriptLoader:
         """
         messages = []
         invalid_line_count = 0
+        non_empty_line_count = 0
         user_message_count = 0
         assistant_message_count = 0
         models_used = set()
         seen_uuids = set()
         started_at = None
         ended_at = None
+        total_text_chars = 0
 
         with open(file_path, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
+
+                non_empty_line_count += 1
 
                 try:
                     record = json.loads(line)
@@ -258,6 +269,15 @@ class ClaudeTranscriptLoader:
                             continue
                         seen_uuids.add(uuid)
 
+                    # Check aggregate text limit before adding
+                    msg_text_len = len(message_data["text"])
+                    if total_text_chars + msg_text_len > self.max_text_chars:
+                        raise TranscriptLoadError(
+                            file_path,
+                            "extracted text exceeds limit",
+                        )
+                    total_text_chars += msg_text_len
+
                     messages.append(message_data)
 
                     # Count by role
@@ -265,19 +285,30 @@ class ClaudeTranscriptLoader:
                         user_message_count += 1
                     elif message_data["role"] == "assistant":
                         assistant_message_count += 1
-                        # Extract model info
+                        # Extract model info (message.model takes precedence)
+                        if message := record.get("message"):
+                            if isinstance(message, dict):
+                                if model := message.get("model"):
+                                    models_used.add(model)
                         if model := record.get("model"):
-                            models_used.add(model)
+                            if model not in models_used:
+                                models_used.add(model)
 
-                # Track timestamps
-                if ts := record.get("timestamp"):
-                    if not started_at:
-                        started_at = ts
-                    ended_at = ts
+                    # Track timestamps from included messages only
+                    if ts := message_data.get("timestamp"):
+                        if not started_at:
+                            started_at = ts
+                        ended_at = ts
 
-        # Check invalid line ratio
-        total_lines = line_num
-        invalid_ratio = invalid_line_count / total_lines if total_lines > 0 else 0
+        # Check for usable messages before checking invalid ratio
+        if not messages:
+            raise TranscriptLoadError(
+                file_path,
+                "no usable messages",
+            )
+
+        # Check invalid line ratio (use non-empty lines as denominator)
+        invalid_ratio = invalid_line_count / non_empty_line_count if non_empty_line_count > 0 else 0
         if invalid_ratio > self.max_invalid_line_ratio:
             raise TranscriptLoadError(
                 file_path,
@@ -285,17 +316,10 @@ class ClaudeTranscriptLoader:
                 f"ratio={invalid_ratio:.2%}",
             )
 
-        # Check for usable messages
-        if not messages:
-            raise TranscriptLoadError(
-                file_path,
-                "no usable messages",
-            )
-
         return {
             "messages": messages,
-            "started_at": started_at or datetime.now().isoformat(),
-            "ended_at": ended_at or started_at or datetime.now().isoformat(),
+            "started_at": started_at,
+            "ended_at": ended_at,
             "user_message_count": user_message_count,
             "assistant_message_count": assistant_message_count,
             "models_used": sorted(models_used),
@@ -308,26 +332,44 @@ class ClaudeTranscriptLoader:
         if record.get("system"):
             return True
 
-        # Exclude progress/status records
-        if record.get("type") == "progress":
-            return True
-
-        # Exclude metadata
+        # Exclude metadata flags
         if record.get("isMeta"):
             return True
 
-        # Exclude internal metadata
+        if record.get("isSidechain"):
+            return True
+
+        # Exclude internal record types
         if record.get("type") in [
+            "progress",
             "summary",
             "file_history",
+            "file-history-snapshot",
             "queue",
+            "queue-operation",
             "hook",
             "debug",
         ]:
             return True
 
-        # Only include records with role/message
-        if not (record.get("message") or record.get("role")):
+        # Get role: message.role > top-level role > type (only if "user" or "assistant")
+        message = record.get("message", {})
+        role = None
+
+        if isinstance(message, dict):
+            role = message.get("role")
+
+        if not role:
+            role = record.get("role")
+
+        if not role:
+            # Fallback to type only if it's exactly "user" or "assistant"
+            record_type = record.get("type")
+            if record_type in ["user", "assistant"]:
+                role = record_type
+
+        # Only include user and assistant roles
+        if role not in ["user", "assistant"]:
             return True
 
         return False
@@ -336,87 +378,136 @@ class ClaudeTranscriptLoader:
         """Extract message content from record.
 
         Returns:
-            Dict with role and text, or None if no text
+            Dict with role, text and timestamp, or None if no text.
+            Only accepts string content; ignores tool_use, thinking, tool_result.
         """
-        # Get role from message or top level
+        # Get role: message.role > top-level role > type (only if "user" or "assistant")
         message = record.get("message", {})
+        role = None
+
         if isinstance(message, dict):
             role = message.get("role")
-        else:
-            role = None
 
         if not role:
             role = record.get("role")
+
+        if not role:
+            # Fallback to type only if it's exactly "user" or "assistant"
+            record_type = record.get("type")
+            if record_type in ["user", "assistant"]:
+                role = record_type
 
         # Only include user and assistant
         if role not in ["user", "assistant"]:
             return None
 
-        # Extract text from content array or direct text
+        # Extract text from content array, content string, or direct text
         text_parts = []
+        content_was_processed = False
 
         if isinstance(message, dict):
-            # Handle content array
+            # Handle content field (string or array)
             if content := message.get("content"):
-                if isinstance(content, list):
+                if isinstance(content, str):
+                    # Direct string content
+                    trimmed = content.strip()
+                    if trimmed:
+                        text_parts.append(trimmed)
+                        content_was_processed = True
+                elif isinstance(content, list):
+                    # Array of content blocks
                     for block in content:
                         if isinstance(block, dict):
-                            if block.get("type") == "text":
+                            block_type = block.get("type")
+                            # Only accept text blocks; ignore tool_use, thinking, tool_result
+                            if block_type == "text":
                                 if text := block.get("text"):
-                                    text_parts.append(text)
-                else:
-                    # Direct text content
-                    text_parts.append(str(content))
+                                    # Only accept string text
+                                    if isinstance(text, str):
+                                        trimmed = text.strip()
+                                        if trimmed:
+                                            text_parts.append(trimmed)
+                                            content_was_processed = True
+                            # All other block types (thinking, tool_use, tool_result) are ignored
 
-            # Handle direct text field
-            if text := message.get("text"):
-                text_parts.append(text)
+            # Handle direct text field (only if string and not already from content)
+            if not content_was_processed:
+                if text := message.get("text"):
+                    if isinstance(text, str):
+                        trimmed = text.strip()
+                        if trimmed:
+                            text_parts.append(trimmed)
 
-        # Also check top-level text
+        # Also check top-level text (only if string)
         if text := record.get("text"):
-            text_parts.append(text)
+            if isinstance(text, str):
+                trimmed = text.strip()
+                if trimmed and trimmed not in text_parts:
+                    text_parts.append(trimmed)
 
         # Combine text
         full_text = "\n".join(text_parts).strip()
         if not full_text:
             return None
 
-        # Check text size
-        if len(full_text) > self.max_text_chars:
-            logger.warning(f"Message text exceeds limit, truncating")
-            full_text = full_text[:self.max_text_chars]
-
         return {
             "role": role,
             "text": full_text,
-            "timestamp": record.get("timestamp", datetime.now().isoformat()),
+            "timestamp": record.get("timestamp"),
         }
 
     def _create_normalized_text(self, parsed: dict) -> str:
-        """Create normalized Markdown-like text from messages."""
+        """Create normalized Markdown-like text from messages.
+
+        Timestamps are included only if present (deterministic).
+        """
         lines = ["# Claude Code Session\n"]
 
         for message in parsed["messages"]:
             role = message["role"].capitalize()
-            timestamp = message.get("timestamp", "")
+            timestamp = message.get("timestamp")
             text = message["text"]
 
-            lines.append(f"## {role} — {timestamp}")
+            if timestamp:
+                lines.append(f"## {role} — {timestamp}")
+            else:
+                lines.append(f"## {role}")
             lines.append(text)
             lines.append("")
 
         return "\n".join(lines).strip()
 
-    def _create_title(self, parsed: dict) -> str:
-        """Create title from first user message or default."""
-        for message in parsed["messages"]:
-            if message["role"] == "user":
-                text = message["text"]
-                # Use first line, truncated
-                first_line = text.split("\n")[0]
-                if len(first_line) > 100:
-                    first_line = first_line[:97] + "..."
-                return first_line
+    def _create_title(self, parsed: dict, redacted_content: str) -> str:
+        """Create title from first user message (from redacted content).
+
+        Uses the redacted content to ensure secrets never appear in the title.
+        """
+        # Parse redacted content to extract first user message
+        lines = redacted_content.split("\n")
+        in_first_user_message = False
+        title_lines = []
+
+        for line in lines:
+            # Check if we're starting a user message section
+            if line.startswith("## User"):
+                in_first_user_message = True
+                continue
+            elif line.startswith("##"):
+                # Hit another section, stop
+                if title_lines:
+                    break
+            elif in_first_user_message:
+                if line.strip():
+                    title_lines.append(line)
+                    # Get first non-empty line
+                    break
+
+        if title_lines:
+            text = title_lines[0]
+            # Truncate if needed
+            if len(text) > 100:
+                text = text[:97] + "..."
+            return text
 
         # Fallback to session ID
         return "Claude Code session"

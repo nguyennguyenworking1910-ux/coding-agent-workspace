@@ -27,6 +27,7 @@ from .embedding import (
     EmbeddingInputError,
     EmbeddingService,
 )
+from .retrieval import router as retrieval_router
 
 
 LOGGER = logging.getLogger(__name__)
@@ -82,6 +83,8 @@ app = FastAPI(
     ),
     lifespan=lifespan,
 )
+
+app.include_router(retrieval_router)
 
 
 @app.get("/")

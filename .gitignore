@@ -68,3 +68,9 @@ workflow_test.txt
 chat-exports/
 !.env.rag.example
 rag-server/.model-cache/
+
+# Local RAG documents - never commit document contents
+rag-data/*
+!rag-data/documents/
+rag-data/documents/*
+!rag-data/documents/.gitkeep

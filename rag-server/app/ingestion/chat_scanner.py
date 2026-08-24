@@ -117,13 +117,20 @@ class ChatScanner:
         """
         try:
             if session_id:
-                # Scan specific session
-                yield from self._scan_session(session_id)
+                # Validate session ID format
+                if not self._is_safe_session_id(session_id):
+                    logger.warning(
+                        f"Rejected unsafe session ID: {session_id}"
+                    )
+                    return
+
+                # Scan specific session across all projects
+                for project_dir in self._iter_project_dirs():
+                    yield from self._scan_session(project_dir, session_id)
             else:
                 # Scan all projects
                 for project_dir in self._iter_project_dirs():
-                    if project_dir.is_dir():
-                        yield from self._scan_project(project_dir)
+                    yield from self._scan_project(project_dir)
 
         except ChatScanError:
             raise
@@ -132,6 +139,30 @@ class ChatScanner:
                 self.projects_dir,
                 f"scan failed: {str(e)}",
             ) from e
+
+    def _is_safe_session_id(self, session_id: str) -> bool:
+        """Validate session ID to prevent path traversal attacks.
+
+        Rejects IDs containing:
+        - / or backslash (path separators)
+        - .. (parent directory)
+        - null bytes
+
+        Args:
+            session_id: Session ID to validate
+
+        Returns:
+            True if session_id is safe
+        """
+        if not session_id:
+            return False
+        if "/" in session_id or "\\" in session_id:
+            return False
+        if ".." in session_id:
+            return False
+        if "\0" in session_id:
+            return False
+        return True
 
     def _iter_project_dirs(self) -> Generator[Path, None, None]:
         """Iterate over project directories in projects_dir."""
@@ -148,47 +179,72 @@ class ChatScanner:
                 f"cannot list projects: {str(e)}",
             ) from e
 
-    def _scan_session(self, session_id: str) -> Generator[ScannedTranscript, None, None]:
-        """Scan for a specific session ID."""
-        # Session files are typically in project directories
-        for project_dir in self._iter_project_dirs():
-            history_file = project_dir / "history.jsonl"
-            if history_file.exists():
-                # Try to find the session in this file
-                # For now, just scan if the session ID matches directory pattern
-                yield from self._scan_project(project_dir)
+    def _iter_transcript_files(
+        self,
+        project_dir: Path,
+    ) -> Generator[Path, None, None]:
+        """Iterate over direct *.jsonl files in a project directory.
+
+        Does not recursively search subdirectories.
+        Yields files sorted deterministically.
+        """
+        try:
+            jsonl_files = [
+                f for f in sorted(project_dir.iterdir())
+                if f.is_file()
+                and f.suffix == ".jsonl"
+                and not f.is_symlink()
+            ]
+            for transcript_file in jsonl_files:
+                yield transcript_file
+        except (OSError, PermissionError):
+            # Skip projects we cannot read
+            return
+
+    def _scan_session(
+        self,
+        project_dir: Path,
+        session_id: str,
+    ) -> Generator[ScannedTranscript, None, None]:
+        """Scan for a specific session ID in a project directory."""
+        # Look for a file matching <session_id>.jsonl
+        for transcript_file in self._iter_transcript_files(project_dir):
+            if transcript_file.stem == session_id:
+                yield from self._scan_transcript(transcript_file)
+                return  # Found the exact session
 
     def _scan_project(
         self,
         project_dir: Path,
     ) -> Generator[ScannedTranscript, None, None]:
-        """Scan a single project directory for transcripts."""
-        history_file = project_dir / "history.jsonl"
+        """Scan a single project directory for all transcripts."""
+        for transcript_file in self._iter_transcript_files(project_dir):
+            yield from self._scan_transcript(transcript_file)
 
-        if not history_file.exists():
-            return
-
-        if not history_file.is_file():
-            return
-
+    def _scan_transcript(
+        self,
+        transcript_file: Path,
+    ) -> Generator[ScannedTranscript, None, None]:
+        """Scan a single transcript file."""
         # Check file size
         try:
-            file_size = history_file.stat().st_size
-            file_mtime = history_file.stat().st_mtime
+            file_size = transcript_file.stat().st_size
+            file_mtime = transcript_file.stat().st_mtime
         except (OSError, ValueError):
             return
 
         if file_size > self.max_file_bytes:
             logger.warning(
-                f"Skipping transcript {history_file}: exceeds size limit"
+                f"Skipping transcript {transcript_file.name}: "
+                f"exceeds size limit"
             )
             return
 
-        # Extract session ID from project directory
-        session_id = project_dir.name
+        # Extract session ID from file stem
+        session_id = transcript_file.stem
 
         # Check if this transcript belongs to our repository
-        if not self._transcript_belongs_to_repo(history_file):
+        if not self._transcript_belongs_to_repo(transcript_file):
             logger.debug(
                 f"Skipping transcript {session_id}: "
                 f"not part of {self.repo_root.name}"
@@ -196,7 +252,7 @@ class ChatScanner:
             return
 
         yield ScannedTranscript(
-            file_path=history_file,
+            file_path=transcript_file,
             session_id=session_id,
             file_size_bytes=file_size,
             modified_time=file_mtime,

@@ -13,7 +13,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.config import Settings
 from app.ingestion.chat_scanner import ChatScanner, ChatScanError
 from app.ingestion.claude_transcript_loader import (
     ClaudeTranscriptLoader,
@@ -38,7 +37,6 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    settings = Settings.from_env()
 
     # Resolve projects directory
     projects_dir = ChatScanner.resolve_projects_dir(
@@ -125,9 +123,9 @@ def main() -> int:
                 assistant_messages += doc.metadata.get("assistant_message_count", 0)
                 total_redactions += doc.metadata.get("redaction_count", 0)
 
-                # Add to sessions list (without message content)
+                # Add to sessions list (without message content, without paths)
                 sessions.append({
-                    "session_id": doc.metadata.get("session_id"),
+                    "session_id": scanned.session_id,
                     "message_count": msg_count,
                     "user_messages": doc.metadata.get("user_message_count", 0),
                     "assistant_messages": doc.metadata.get("assistant_message_count", 0),
@@ -137,15 +135,20 @@ def main() -> int:
             except TranscriptLoadError as e:
                 skipped += 1
                 skip_reasons[e.reason] = skip_reasons.get(e.reason, 0) + 1
+                # Provide helpful feedback for explicit session requests
+                if args.session_id:
+                    reason_msg = e.reason if e.reason else "unknown error"
+                    print(f"ERROR: Session {args.session_id} could not be loaded ({reason_msg})", file=sys.stderr)
+                    return 1
                 continue
 
     except ChatScanError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
-    # Check if explicitly requested session was found
-    if args.session_id and loaded == 0:
-        print(f"ERROR: Session {args.session_id} not found or could not be loaded", file=sys.stderr)
+    # Check if explicitly requested session was not discovered
+    if args.session_id and discovered == 0:
+        print(f"ERROR: Session {args.session_id} not found", file=sys.stderr)
         return 1
 
     # Output
