@@ -35,9 +35,9 @@ class RetrievalRepository:
                 c.id AS child_id,
                 c.parent_id,
                 c.source_id,
-                1.0 - (c.embedding <=> $1::vector) AS similarity,
+                1.0 - (c.embedding <=> %(embedding)s::vector) AS similarity,
                 ROW_NUMBER() OVER (
-                    ORDER BY c.embedding <=> $1::vector ASC
+                    ORDER BY c.embedding <=> %(embedding)s::vector ASC
                 ) AS vector_rank
             FROM rag_chunks c
             INNER JOIN rag_sources s ON c.source_id = s.id
@@ -47,22 +47,30 @@ class RetrievalRepository:
                 AND c.embedding_status = 'ready'
         """
 
-        params: list[Any] = [query_vector]
-        param_count = 1
+        params: dict[str, Any] = {
+            "embedding": query_vector,
+            "candidate_k": candidate_k,
+        }
 
         if source_types:
-            param_count += 1
-            params.append(source_types)
-            query += f"\n                AND s.source_type = ANY(${param_count}::text[])"
+            params["source_types"] = source_types
+            query += """
+                AND s.source_type = ANY(
+                    %(source_types)s::text[]
+                )
+            """
 
         if source_keys:
-            param_count += 1
-            params.append(source_keys)
-            query += f"\n                AND s.source_key = ANY(${param_count}::text[])"
+            params["source_keys"] = source_keys
+            query += """
+                AND s.source_key = ANY(
+                    %(source_keys)s::text[]
+                )
+            """
 
-        query += f"""
-            ORDER BY c.embedding <=> $1::vector ASC
-            LIMIT {candidate_k}
+        query += """
+            ORDER BY c.embedding <=> %(embedding)s::vector ASC
+            LIMIT %(candidate_k)s
         """
 
         with self._pool.connection() as connection:
@@ -101,29 +109,38 @@ class RetrievalRepository:
                 ) AS text_rank_position
             FROM rag_chunks c
             INNER JOIN rag_sources s ON c.source_id = s.id,
-            websearch_to_tsquery('simple', $1) AS q
+            websearch_to_tsquery('simple', %(query_text)s) AS q
             WHERE
                 c.chunk_level = 'child'
                 AND c.embedding_status IN ('ready', 'pending', 'failed')
                 AND c.search_vector @@ q
         """
 
-        params: list[Any] = [query_text]
-        param_count = 1
+        params: dict[str, Any] = {
+            "query_text": query_text,
+            "candidate_k": candidate_k,
+        }
 
         if source_types:
-            param_count += 1
-            params.append(source_types)
-            query += f"\n                AND s.source_type = ANY(${param_count}::text[])"
+            params["source_types"] = source_types
+            query += """
+                AND s.source_type = ANY(
+                    %(source_types)s::text[]
+                )
+            """
 
         if source_keys:
-            param_count += 1
-            params.append(source_keys)
-            query += f"\n                AND s.source_key = ANY(${param_count}::text[])"
+            params["source_keys"] = source_keys
+            query += """
+                AND s.source_key = ANY(
+                    %(source_keys)s::text[]
+                )
+            """
 
-        query += f"""
-            ORDER BY ts_rank_cd(c.search_vector, q) DESC
-            LIMIT {candidate_k}
+        query += """
+            ORDER BY
+                ts_rank_cd(c.search_vector, q) DESC
+            LIMIT %(candidate_k)s
         """
 
         with self._pool.connection() as connection:
@@ -163,24 +180,36 @@ class RetrievalRepository:
                 s.title,
                 s.id AS source_id
             FROM rag_chunks p
-            INNER JOIN rag_sources s ON p.source_id = s.id
+            INNER JOIN rag_sources s
+                ON p.source_id = s.id
             WHERE
-                p.id = ANY($1::uuid[])
+                p.id = ANY(
+                    %(parent_ids)s::uuid[]
+                )
                 AND p.chunk_level = 'parent'
         """
+
+        params = {
+            "parent_ids": parent_ids,
+        }
 
         with self._pool.connection() as connection:
             with connection.cursor(
                 row_factory=dict_row
             ) as cursor:
-                cursor.execute(query, [parent_ids])
+                cursor.execute(
+                    query,
+                    params,
+                )
                 results = cursor.fetchall()
 
-        result_map = {}
-        for row in (results or []):
-            parent_id_str = str(row["parent_id"])
-            result_map[parent_id_str] = {
-                "parent_id": parent_id_str,
+        result_map: dict[str, dict[str, Any]] = {}
+
+        for row in results or []:
+            parent_id = str(row["parent_id"])
+
+            result_map[parent_id] = {
+                "parent_id": parent_id,
                 "parent_chunk_index": (
                     row["parent_chunk_index"]
                 ),
@@ -190,6 +219,7 @@ class RetrievalRepository:
                 "title": row["title"],
                 "source_id": str(row["source_id"]),
             }
+
         return result_map
 
     def verify_parent_source(
@@ -202,19 +232,24 @@ class RetrievalRepository:
                 SELECT 1
                 FROM rag_chunks c
                 INNER JOIN rag_chunks p ON (
-                    p.id = $1
+                    p.id = %(parent_id)s
                     AND c.source_id = p.source_id
                     AND c.parent_id = p.id
                 )
-                WHERE c.id = $2
+                WHERE c.id = %(child_id)s
             )
         """
+
+        params = {
+            "parent_id": parent_id,
+            "child_id": child_id,
+        }
 
         with self._pool.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     query,
-                    [parent_id, child_id],
+                    params,
                 )
                 result = cursor.fetchone()
 

@@ -37,6 +37,7 @@ packages = [
     "claude.agents.team",
     "claude.agents.tools",
     "claude.agents.tools.scheduler",
+    "claude.agents.tools.rag",
     "claude.clients",
     "claude.system",
 ]

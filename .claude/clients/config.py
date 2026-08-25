@@ -13,14 +13,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+
+BASE_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = BASE_DIR.parents[1]
+
+
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+    load_dotenv(
+        REPOSITORY_ROOT / ".env",
+        override=False,
+    )
 except Exception:  # pragma: no cover - dotenv is optional
     pass
-
-BASE_DIR = Path(__file__).resolve().parent
 
 
 def _resolve_path(env_name: str, default: Path) -> Path:
@@ -48,6 +54,23 @@ def _resolve_int(env_name: str, default: int) -> int:
             pass
     return default
 
+def _resolve_float(
+    env_name: str,
+    default: float,
+) -> float:
+    """Resolve a positive float from the environment."""
+    value = os.environ.get(env_name)
+
+    if value:
+        try:
+            parsed = float(value.strip())
+
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+
+    return default
 
 # --- Google Calendar ---
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -117,4 +140,27 @@ BIGQUERY_ADC_LOGIN_COMMAND = (
     "--scopes=openid,"
     "https://www.googleapis.com/auth/userinfo.email,"
     "https://www.googleapis.com/auth/cloud-platform"
+)
+
+# --- Local RAG API ---
+RAG_API_HOST = (
+    os.environ.get(
+        "RAG_API_HOST",
+        "127.0.0.1",
+    ).strip()
+    or "127.0.0.1"
+)
+
+RAG_API_PORT = _resolve_int(
+    "RAG_API_PORT",
+    8200,
+)
+
+RAG_API_BASE_URL = (
+    f"http://{RAG_API_HOST}:{RAG_API_PORT}"
+)
+
+RAG_API_TIMEOUT_SECONDS = _resolve_float(
+    "RAG_API_TIMEOUT_SECONDS",
+    30.0,
 )

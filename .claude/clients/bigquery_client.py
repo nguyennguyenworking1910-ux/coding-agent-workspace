@@ -193,7 +193,7 @@ class BigQueryClient:
                     "No BigQuery project id.\n\n"
                     "The credentials resolved, but no project was found to bill and "
                     "run the query against. Set one:\n"
-                    "  - BIGQUERY_PROJECT=my-project-id in .claude/clients/.env\n"
+                    "  - BIGQUERY_PROJECT=my-project-id in the repository root .env\n"
                     "  - or: gcloud config set project my-project-id, then\n"
                     f"    {config.BIGQUERY_ADC_LOGIN_COMMAND}"
                 )
@@ -239,7 +239,7 @@ class BigQueryClient:
                         f"the {self.max_bytes_billed} byte cap "
                         f"({self.max_bytes_billed / 1024**3:.2f} GiB).\n"
                         "Narrow the query (filter on the partition column), or raise "
-                        "BIGQUERY_MAX_BYTES_BILLED in .claude/clients/.env.\n"
+                        "BIGQUERY_MAX_BYTES_BILLED in the repository root .env.\n"
                         f"{text}"
                     )
                 return f"BigQuery rejected the query (400):\n{text}"

@@ -382,10 +382,12 @@ allowed-tools: Tool1(*), Tool2(*), Skill(skill-name)
    - Credential paths
    - Troubleshooting
 
-4. **Add environment template**
+4. **Add variables to the unified environment template**
    ```
-   .claude/clients/.env.example
+   .env.example
    ```
+All local services read configuration from the repository root `.env`.
+Do not create component-specific `.env` files.
 
 ---
 

@@ -218,6 +218,26 @@
         {"name": "list_tables", "description": "List the tables and views in a dataset"},
         {"name": "get_table_schema", "description": "Describe the columns of a table or view"}
       ]
+    },
+    {
+      "id": "rag_tools",
+      "name": "RAG Tools",
+      "description": "Search indexed workspace documents and Claude conversations through the private local RAG API",
+      "type": "knowledge_access",
+      "enabled": true,
+      "module": "claude.agents.tools.rag",
+      "entry_point": ".claude/rag_search.py",
+      "note": "Read-only knowledge retrieval. Agents reach this tool through the CLI entry point. The tool calls .claude/clients/rag_client.py, which calls POST /v1/search. Agents never access PostgreSQL or the embedding model directly.",
+      "methods": [
+        {
+          "name": "ready",
+          "description": "Check whether the local RAG service is ready"
+        },
+        {
+          "name": "search",
+          "description": "Search indexed knowledge with optional source type and source key filters"
+        }
+      ]
     }
   ],
   "orchestration": {

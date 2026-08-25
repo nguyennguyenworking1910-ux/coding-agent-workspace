@@ -49,6 +49,12 @@ This folder contains all system documentation, setup guides, and reference mater
 
 - **[EXAMPLES_GUIDE.md](./EXAMPLES_GUIDE.md)** — Reference implementations and usage patterns
 
+- **[RAG_INTEGRATION.md](./RAG_INTEGRATION.md)** — Local workspace knowledge retrieval
+  - Dependency boundary: agent → tool → client → RAG API
+  - Searching project documents and Claude history
+  - Source filters and CLI usage
+  - Retrieved-content trust and prompt-injection rules
+  - Runtime configuration and verification
 ---
 
 ## 🧭 Where things live

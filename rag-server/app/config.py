@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_FILE = PROJECT_ROOT / ".env.rag"
+ENV_FILE = PROJECT_ROOT / ".env"
 
 load_dotenv(ENV_FILE, override=False)
 

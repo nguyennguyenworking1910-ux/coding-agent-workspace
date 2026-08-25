@@ -62,7 +62,7 @@ gcloud auth application-default login --scopes=openid,https://www.googleapis.com
 
 The client bills and runs queries against a project. It uses, in order:
 
-1. `BIGQUERY_PROJECT` from the environment / `.claude/clients/.env`
+1. `BIGQUERY_PROJECT` from the environment / `root .env`
 2. the project gcloud ADC is configured with
 
 So this is usually enough:
@@ -94,8 +94,12 @@ one. ADC is tried first; the file does **not** need to exist.
 
 ## Environment variables
 
-All optional. Copy `.claude/clients/.env.example` to `.claude/clients/.env` and
+All optional. Copy `root .env.example` to `root .env` and
 uncomment what you need.
+
+All variables are optional. Copy the root `.env.example` to `.env` and set
+only what you need. The intent parser, RAG service, Calendar client,
+BigQuery client, and Docker Compose all read the same root `.env`.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -304,7 +308,7 @@ BigQuery refuses the job *before running it* if it would scan more, so a `SELECT
 over a huge table fails fast instead of arriving on the bill. To change it:
 
 ```powershell
-# .claude/clients/.env
+# .env
 BIGQUERY_MAX_BYTES_BILLED=53687091200   # 50 GiB
 ```
 
@@ -319,7 +323,7 @@ truncation is never silent. `--limit N` lowers the cap for one run; it cannot ra
 above `BIGQUERY_MAX_ROWS`.
 
 ```powershell
-# .claude/clients/.env
+# .env
 BIGQUERY_MAX_ROWS=5000
 ```
 
@@ -359,7 +363,7 @@ Credentials resolved but no project did. Either:
 gcloud config set project my-project-id
 ```
 
-or set `BIGQUERY_PROJECT=my-project-id` in `.claude/clients/.env`.
+or set `BIGQUERY_PROJECT=my-project-id` in `root .env`.
 
 ### `Permission denied on project '…' (403).`
 

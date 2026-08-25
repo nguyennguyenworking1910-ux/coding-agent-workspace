@@ -43,7 +43,7 @@ SECRET_FILES = {
 
 # Secret file patterns (case-insensitive)
 SECRET_PATTERNS = [
-    r"\.env\..*(?<!example)$",  # .env.* except .env.*.example
+    r"^\.env(?:\..+)?$",  # Reject every .env variant unless explicitly allowed
     r".*\.pem$",
     r".*\.key$",
     r"^id_rsa$",
@@ -53,7 +53,6 @@ SECRET_PATTERNS = [
 # Files explicitly allowed by name (safe example files)
 ALLOWED_EXAMPLE_FILES = {
     ".env.example",
-    ".env.rag.example",
 }
 
 # Extensions for documents

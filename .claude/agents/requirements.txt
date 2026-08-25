@@ -9,5 +9,5 @@ google-cloud-bigquery==3.25.0
 # Optional: for better date parsing
 python-dateutil==2.8.2
 
-# Optional: load .claude/clients/.env automatically (config.py degrades gracefully without it)
+# Optional: load the repository root .env automatically (config.py degrades gracefully without it)
 python-dotenv==1.0.1

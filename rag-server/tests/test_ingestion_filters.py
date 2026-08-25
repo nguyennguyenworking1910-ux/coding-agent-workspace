@@ -23,10 +23,15 @@ class TestSecretFileExclusion:
         path = Path("/repo/.env.prod")
         assert FileFilter.is_secret_file(path) is True
 
-    def test_env_rag_example_allowed(self) -> None:
-        """Test that .env.rag.example is allowed."""
-        path = Path("/repo/.env.rag.example")
+    def test_env_example_allowed(self) -> None:
+        """Test that the unified .env.example is allowed."""
+        path = Path("/repo/.env.example")
         assert FileFilter.is_secret_file(path) is False
+
+    def test_other_env_example_rejected(self) -> None:
+        """Test that only the canonical root template is allowed."""
+        path = Path("/repo/.env.custom.example")
+        assert FileFilter.is_secret_file(path) is True
 
     def test_credentials_json_rejected(self) -> None:
         """Test that credentials.json is rejected."""

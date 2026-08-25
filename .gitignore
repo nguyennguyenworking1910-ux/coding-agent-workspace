@@ -64,9 +64,7 @@ test_output.txt
 workflow_test.txt
 
 
-.env.rag
 chat-exports/
-!.env.rag.example
 rag-server/.model-cache/
 
 # Local RAG documents - never commit document contents
