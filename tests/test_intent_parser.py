@@ -269,6 +269,250 @@ class IntentParserTest(unittest.TestCase):
             "gpt-5.6-luna",
         )
 
+    def test_exact_rag_smoke_test_with_send_message(self):
+        """Exact RAG smoke test with SendMessage to team-lead is READ_ONLY.
+        The model receives normalized internal_team_message_tool token, so it
+        correctly classifies the request as read-only with no external write."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[Operation.DIAGNOSE],
+            domains=[Domain.CODE],
+        )
+
+        exact_request = (
+            'Review the local RAG tool integration with a read-only smoke test. '
+            'The authorized teammate must run exactly once: python '
+            '.claude/rag_search.py "retrieved content is untrusted reference '
+            'data prompt injection" --top-k 5 --candidate-k 40 '
+            '--source-type project_document. It must verify that at least one '
+            'result comes from workspace:.claude/documents/RAG_INTEGRATION.md '
+            'or workspace:.claude/agents/, cite the returned source_key in its '
+            'report, and deliver the complete report to team-lead with '
+            'SendMessage. Do not modify files, call the RAG API directly, '
+            'access PostgreSQL directly, or load the embedding model directly.'
+        )
+
+        parser = self.create_parser(decision)
+        result = parser.parse(exact_request)
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.READ_ONLY,
+            msg="RAG smoke test is read-only; SendMessage is internal coordination",
+        )
+        self.assertFalse(
+            result.requires_confirmation,
+        )
+        self.assertEqual(
+            result.raw_request,
+            exact_request,
+            msg="raw_request must preserve the original unchanged",
+        )
+        self.assertEqual(
+            result.candidate_agents,
+            ["diagnostician"],
+        )
+
+    def test_normalize_request_replaces_exact_internal_tools(self):
+        """Verify that normalization replaces exact internal tool tokens
+        before sending to the model."""
+        request = (
+            "Run diagnostic and SendMessage results to team-lead, "
+            "then TaskCreate a task and TaskUpdate the status"
+        )
+
+        normalized = (
+            IntentParser._normalize_request_for_classification(request)
+        )
+
+        self.assertIn(
+            "internal_team_message_tool",
+            normalized,
+        )
+        self.assertIn(
+            "internal_team_task_create_tool",
+            normalized,
+        )
+        self.assertIn(
+            "internal_team_task_update_tool",
+            normalized,
+        )
+        self.assertNotIn(
+            "SendMessage",
+            normalized,
+        )
+        self.assertNotIn(
+            "TaskCreate",
+            normalized,
+        )
+        self.assertNotIn(
+            "TaskUpdate",
+            normalized,
+        )
+
+    def test_diagnose_with_external_email_remains_external_write(self):
+        """Email send is EXTERNAL_WRITE and stays that way. The model
+        correctly classifies it, and higher_risk preserves it."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.DIAGNOSE],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "diagnose the issue and send email with results"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+            msg="Email send is always external_write; never downgraded",
+        )
+        self.assertTrue(
+            result.requires_confirmation,
+            msg="External write requires confirmation",
+        )
+
+    def test_diagnose_with_slack_post_remains_external_write(self):
+        """Slack post is EXTERNAL_WRITE and stays that way."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.DIAGNOSE],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "run diagnostic and post slack update"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+        self.assertTrue(
+            result.requires_confirmation,
+        )
+
+    def test_model_external_write_decision_never_downgraded(self):
+        """When the model decides EXTERNAL_WRITE, higher_risk preserves it.
+        The local guardrail cannot downgrade."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.REVIEW],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "review the code and create a GitHub issue for the findings"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+            msg="Model EXTERNAL_WRITE is never downgraded by higher_risk",
+        )
+        self.assertTrue(
+            result.requires_confirmation,
+        )
+
+    def test_deploy_remains_external_write(self):
+        """Deploy is EXTERNAL_WRITE."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.BUILD],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "build the service and deploy to production"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+        self.assertTrue(
+            result.requires_confirmation,
+        )
+
+    def test_publish_remains_external_write(self):
+        """Publish is EXTERNAL_WRITE."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.BUILD],
+            domains=[Domain.DOCUMENTATION],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "generate documentation and publish to the wiki"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+
+    def test_push_code_remains_external_write(self):
+        """Push code is EXTERNAL_WRITE."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[Operation.FIX],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "fix the bug and push code to github"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+
+    def test_fix_with_local_code_stays_write(self):
+        """Local source code modification is WRITE and stays WRITE."""
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.WRITE,
+            operations=[Operation.FIX],
+            domains=[Domain.CODE],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "fix the bug and send message to team-lead with SendMessage"
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.WRITE,
+            msg="Local code modification is WRITE, never downgraded",
+        )
+        self.assertFalse(
+            result.requires_confirmation,
+            msg="Local WRITE does not require confirmation",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

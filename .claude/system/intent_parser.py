@@ -142,6 +142,16 @@ Risk is independent from complexity:
 - destructive: delete data, drop or truncate tables, force push, reset --hard,
   or perform an irreversible operation
 
+Internal coordination is NOT an external write:
+
+- SendMessage to a team-lead or teammate is session-local coordination.
+- TaskCreate and TaskUpdate are session-local coordination.
+- These internal tool references alone do not elevate a request from read_only
+  to external_write.
+- Only classify as external_write if the request actually sends email, posts
+  to Slack, deploys, publishes, pushes code, uploads to external services, or
+  creates calendar events.
+
 Allowed operations:
 
 diagnose, fix, build, refactor, review, test, security,
@@ -557,10 +567,39 @@ class IntentParser:
             requires_confirmation=requires_confirmation,
         )
 
+    @staticmethod
+    def _normalize_request_for_classification(
+        request: str,
+    ) -> str:
+        normalized = request
+        normalized = re.sub(
+            r"\bSendMessage\b",
+            "internal_team_message_tool",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"\bTaskCreate\b",
+            "internal_team_task_create_tool",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"\bTaskUpdate\b",
+            "internal_team_task_update_tool",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        return normalized
+
     def _call_openai(
         self,
         request: str,
     ) -> OpenAIIntentDecision:
+        normalized_request = (
+            self._normalize_request_for_classification(request)
+        )
+
         try:
             response = self.client.responses.parse(
                 model=self.model,
@@ -574,7 +613,7 @@ class IntentParser:
                     },
                     {
                         "role": "user",
-                        "content": request,
+                        "content": normalized_request,
                     },
                 ],
                 text_format=OpenAIIntentDecision,
@@ -790,6 +829,8 @@ class IntentParser:
         external_write_patterns = (
             r"\bsend email\b",
             r"\bgui email\b",
+            r"\bpost to slack\b",
+            r"\bpost slack\b",
             r"\bcreate event\b",
             r"\bbook meeting\b",
             r"\bdat lich\b",
