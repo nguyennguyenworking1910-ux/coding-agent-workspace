@@ -167,7 +167,7 @@ class Settings:
                 "http://127.0.0.1:8200",
             ),
             api_timeout_seconds=_read_int(
-                "RAG_API_TIMEOUT_SECONDS",
+                "RAG_INGEST_API_TIMEOUT_SECONDS",
                 900,
             ),
             ingest_max_children_per_source=_read_int(

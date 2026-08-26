@@ -67,8 +67,15 @@ The client reads the unified repository-root `.env` through
 ```dotenv
 RAG_API_HOST=127.0.0.1
 RAG_API_PORT=8200
-RAG_API_TIMEOUT_SECONDS=30
+RAG_API_BASE_URL=
+RAG_CLIENT_TIMEOUT_SECONDS=30
+RAG_INGEST_API_TIMEOUT_SECONDS=900
 ```
+
+The `RAG_API_BASE_URL` is optional. If provided and non-empty, it takes precedence over
+`RAG_API_HOST` and `RAG_API_PORT`. If not provided, the client constructs the base URL from
+host and port. Use `RAG_CLIENT_TIMEOUT_SECONDS` for agent-side queries (default 30s) and
+`RAG_INGEST_API_TIMEOUT_SECONDS` for long-running ingestion operations (default 900s).
 
 Start the local service before using the CLI:
 

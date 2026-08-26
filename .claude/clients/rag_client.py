@@ -39,7 +39,7 @@ class RagClient:
         self.timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
-            else config.RAG_API_TIMEOUT_SECONDS
+            else config.RAG_CLIENT_TIMEOUT_SECONDS
         )
         self._opener = opener or urlopen
 

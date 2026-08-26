@@ -156,11 +156,23 @@ RAG_API_PORT = _resolve_int(
     8200,
 )
 
+# Resolve explicit base URL from environment, with precedence over host/port construction.
+# Normalize trailing slashes so API paths don't contain double slashes.
+_explicit_base_url = os.environ.get("RAG_API_BASE_URL", "").strip()
 RAG_API_BASE_URL = (
-    f"http://{RAG_API_HOST}:{RAG_API_PORT}"
+    _explicit_base_url.rstrip("/")
+    if _explicit_base_url
+    else f"http://{RAG_API_HOST}:{RAG_API_PORT}"
 )
 
-RAG_API_TIMEOUT_SECONDS = _resolve_float(
-    "RAG_API_TIMEOUT_SECONDS",
+# Client timeout for agent-side RAG requests (~30 seconds for typical queries)
+RAG_CLIENT_TIMEOUT_SECONDS = _resolve_float(
+    "RAG_CLIENT_TIMEOUT_SECONDS",
     30.0,
+)
+
+# Ingestion timeout for long-running ingestion operations (~900 seconds)
+RAG_INGEST_API_TIMEOUT_SECONDS = _resolve_float(
+    "RAG_INGEST_API_TIMEOUT_SECONDS",
+    900.0,
 )
