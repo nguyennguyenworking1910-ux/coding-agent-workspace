@@ -55,6 +55,15 @@ This folder contains all system documentation, setup guides, and reference mater
   - Source filters and CLI usage
   - Retrieved-content trust and prompt-injection rules
   - Runtime configuration and verification
+
+- **[MERCHANT_PROJECT_MANAGER.md](./MERCHANT_PROJECT_MANAGER.md)** — Phase 4 Merchant Project Manager architecture
+  - Authoritative design contract for merchant and project state management
+  - PostgreSQL schema design (merchants, projects, workflows, documents, procurement)
+  - Three project types with four workflow variants (Media Top-Up New/Existing, Opening New Cinema, Integration New Merchant)
+  - Document review and approval gates, UAT and Production separation, integration identifiers
+  - Agent response contracts, CLI boundaries, transaction and concurrency model
+  - Testing strategy, migration strategy, and implementation checkpoints
+
 ---
 
 ## 🧭 Where things live
@@ -116,4 +125,4 @@ When creating new documentation:
 
 ---
 
-**Last Updated:** August 13, 2026
+**Last Updated:** August 28, 2026
