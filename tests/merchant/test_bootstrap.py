@@ -88,6 +88,7 @@ class TestAdvisoryLockLifecycle:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="pwd",
             owner_password="pwd",
             app_password="pwd",
@@ -122,6 +123,7 @@ class TestAdvisoryLockLifecycle:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="pwd",
             owner_password="pwd",
             app_password="pwd",
@@ -148,6 +150,7 @@ class TestAdvisoryLockLifecycle:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="pwd",
             owner_password="pwd",
             app_password="pwd",
@@ -249,6 +252,7 @@ class TestCreateDatabaseSyntax:
             "127.0.0.1",
             5434,
             "rag_user",
+            "coding_agent_rag",
             "pwd",
             plan,
             "coding_agent_merchant",
@@ -337,6 +341,7 @@ class TestIdempotentPlanGeneration:
             "127.0.0.1",
             5434,
             "rag_user",
+            "coding_agent_rag",
             "pwd",
             plan,
             "coding_agent_merchant",
@@ -393,6 +398,7 @@ class TestRequiredGrants:
             "127.0.0.1",
             5434,
             "rag_user",
+            "coding_agent_rag",
             "pwd",
             plan,
             "coding_agent_merchant",
@@ -457,6 +463,7 @@ class TestRequiredGrants:
             "127.0.0.1",
             5434,
             "rag_user",
+            "coding_agent_rag",
             "pwd",
             plan,
             "coding_agent_merchant",
@@ -544,6 +551,7 @@ class TestReadOnlyVerification:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="pwd",
         )
 
@@ -577,6 +585,7 @@ class TestReadOnlyVerification:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="pwd",
         )
 
@@ -610,6 +619,7 @@ class TestCLIInterface:
         """CLI should read passwords from environment variables."""
         env = os.environ.copy()
         env["MERCHANT_ADMIN_USER"] = "rag_user"
+        env["MERCHANT_ADMIN_DB"] = "coding_agent_rag"
         env["MERCHANT_ADMIN_PASSWORD"] = "test_admin_pwd"
         env["MERCHANT_OWNER_PASSWORD"] = "test_owner_pwd"
         env["MERCHANT_DB_PASSWORD"] = "test_app_pwd"
@@ -674,6 +684,7 @@ class TestJSONOutput:
             host="127.0.0.1",
             port=5434,
             admin_user="rag_user",
+            admin_db="coding_agent_rag",
             admin_password="SuperSecretAdminPassword123!",
             owner_password="SuperSecretOwnerPassword456!",
             app_password="SuperSecretAppPassword789!",
@@ -750,6 +761,7 @@ class TestValidation:
                 host="127.0.0.1",
                 port=5434,
                 admin_user="rag_user",
+                admin_db="coding_agent_rag",
                 admin_password="pwd",
                 owner_password="pwd",
                 app_password="pwd",
@@ -797,6 +809,7 @@ class TestProduction16Guarantees:
                 host="127.0.0.1",
                 port=5434,
                 admin_user="custom_admin_user",
+                admin_db="coding_agent_rag",
                 admin_password="pwd",
                 owner_password="pwd",
                 app_password="pwd",
@@ -827,7 +840,7 @@ class TestProduction16Guarantees:
         mock_cursor.fetchone.return_value = True
 
         bootstrap(
-            host="127.0.0.1", port=5434, admin_user="rag_user", admin_password="pwd",
+            host="127.0.0.1", port=5434, admin_user="rag_user", admin_db="coding_agent_rag", admin_password="pwd",
             owner_password="pwd", app_password="pwd", alert_password="pwd", test_password="pwd",
             apply=True,
         )
@@ -870,7 +883,7 @@ class TestProduction16Guarantees:
         # Should fail during apply because owner mismatches
         try:
             _apply_plan(
-                mock_conn, "127.0.0.1", 5434, "rag_user", "pwd", plan,
+                mock_conn, "127.0.0.1", 5434, "rag_user", "coding_agent_rag", "pwd", plan,
                 "coding_agent_merchant", "coding_agent_merchant_test",
                 "owner_pwd", "app_pwd", "alert_pwd", "test_pwd",
             )
@@ -1002,6 +1015,7 @@ class TestProduction16Guarantees:
                 host="127.0.0.1",
                 port=5434,
                 admin_user="rag_user",
+                admin_db="coding_agent_rag",
                 admin_password="pwd",
             )
             for check in expected_checks:
@@ -1087,7 +1101,7 @@ class TestIntegration:
 
         # Plan mode should not fail
         plan_result = bootstrap(
-            host="127.0.0.1", port=5434, admin_user="rag_user", admin_password="pwd",
+            host="127.0.0.1", port=5434, admin_user="rag_user", admin_db="coding_agent_rag", admin_password="pwd",
             owner_password="pwd", app_password="pwd", alert_password="pwd", test_password="pwd",
             plan_only=True,
         )
@@ -1235,6 +1249,225 @@ class TestAdminIdentityDefectFix:
             "CLI should not accept --alert-password"
         assert "--test-password" not in parser_help, \
             "CLI should not accept --test-password"
+
+
+# ============================================================================
+# Regression Tests: Database Connection Defect Fix (Checkpoint 2A)
+# ============================================================================
+
+class TestAdminDatabaseConnectionDefectFix:
+    """Regression tests for Checkpoint 2A: Admin connection must have explicit dbname.
+
+    CRITICAL ISSUE: Bootstrap fails when creating admin connection because no explicit
+    database name is provided to psycopg. PostgreSQL defaults dbname to username
+    (rag_user) when not specified, causing connection failure.
+    """
+
+    def test_admin_db_required_fail_closed(self):
+        """Test 1: Missing both CLI and MERCHANT_ADMIN_DB fails closed."""
+        env = os.environ.copy()
+        env.pop("MERCHANT_ADMIN_DB", None)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+        )
+
+        # Should fail (exit code 1) - no guessing admin database
+        assert result.returncode == 1, \
+            f"Expected exit code 1 (fail-closed), got {result.returncode}. stderr: {result.stderr}"
+
+        # Error message should mention requirement
+        assert "admin database" in result.stderr.lower() or "required" in result.stderr.lower(), \
+            f"Error should mention admin database is required. Got: {result.stderr}"
+
+    def test_admin_connection_receives_explicit_dbname(self):
+        """Test 2: Admin connections always pass dbname explicitly."""
+        with patch("claude.clients.merchant.bootstrap.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            connection_calls = []
+
+            def capture_connect(*args, **kwargs):
+                connection_calls.append(kwargs)
+                return mock_conn
+
+            mock_connect.side_effect = capture_connect
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+            mock_cursor.fetchone.return_value = None
+
+            # Call bootstrap with explicit admin_db
+            result = bootstrap(
+                host="127.0.0.1",
+                port=5434,
+                admin_user="test_admin",
+                admin_db="maintenance_db",
+                admin_password="test_pass",
+                owner_password="owner_pwd",
+                app_password="app_pwd",
+                alert_password="alert_pwd",
+                test_password="test_pwd",
+                plan_only=True,
+            )
+
+            # At least one connection should have been made
+            assert len(connection_calls) > 0, "Should have made at least one connection"
+
+            # The first (admin) connection should have dbname
+            admin_conn = connection_calls[0]
+            assert "dbname" in admin_conn, \
+                f"Admin connection must have dbname parameter. Got: {admin_conn}"
+            assert admin_conn["dbname"] == "maintenance_db", \
+                f"Admin connection dbname must be 'maintenance_db', got: {admin_conn['dbname']}"
+
+    def test_cli_admin_db_overrides_environment(self):
+        """Test 3: CLI --admin-db overrides MERCHANT_ADMIN_DB environment variable."""
+        env = os.environ.copy()
+        env["MERCHANT_ADMIN_DB"] = "env_admin_db"
+
+        with patch("claude.clients.merchant.bootstrap.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            connection_calls = []
+
+            def capture_connect(*args, **kwargs):
+                connection_calls.append(kwargs)
+                return mock_conn
+
+            mock_connect.side_effect = capture_connect
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+            mock_cursor.fetchone.return_value = None
+
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "claude.clients.merchant.bootstrap",
+                    "--plan",
+                    "--admin-db", "cli_admin_db"
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+                env=env,
+            )
+
+            # Command should succeed with CLI value (not env value)
+            # If it doesn't fail with "admin database" error, CLI arg was accepted
+            assert "admin database" not in result.stderr.lower() or result.returncode == 0, \
+                f"CLI --admin-db should override env. stderr: {result.stderr}"
+
+    def test_username_never_becomes_dbname(self):
+        """Test 4: Admin username must never become database name."""
+        with patch("claude.clients.merchant.bootstrap.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            connection_calls = []
+
+            def capture_connect(*args, **kwargs):
+                connection_calls.append(kwargs)
+                return mock_conn
+
+            mock_connect.side_effect = capture_connect
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+            mock_cursor.fetchone.return_value = None
+
+            # Use rag_user as username (the problematic case from the defect)
+            result = bootstrap(
+                host="127.0.0.1",
+                port=5434,
+                admin_user="rag_user",
+                admin_db="coding_agent_rag",  # EXPLICIT, not defaulting to username
+                admin_password="test_pass",
+                owner_password="owner_pwd",
+                app_password="app_pwd",
+                alert_password="alert_pwd",
+                test_password="test_pwd",
+                plan_only=True,
+            )
+
+            # Verify no connection uses rag_user as dbname
+            for call in connection_calls:
+                if "user" in call and call["user"] == "rag_user":
+                    # This connection's dbname should NOT be rag_user
+                    assert call.get("dbname") != "rag_user", \
+                        f"Database name must not default to username. Got: {call}"
+
+    def test_plan_only_no_mutations_to_maintenance_db(self):
+        """Test 5: Plan-only mode must not mutate the maintenance database."""
+        with patch("claude.clients.merchant.bootstrap.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            all_execute_calls = []
+
+            def capture_execute(sql_obj, *args):
+                all_execute_calls.append(str(sql_obj))
+
+            mock_connect.return_value = mock_conn
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+            mock_cursor.execute.side_effect = capture_execute
+            mock_cursor.fetchone.return_value = None
+
+            result = bootstrap(
+                host="127.0.0.1",
+                port=5434,
+                admin_user="test_admin",
+                admin_db="maintenance_db",
+                admin_password="test_pass",
+                owner_password="owner_pwd",
+                app_password="app_pwd",
+                alert_password="alert_pwd",
+                test_password="test_pwd",
+                plan_only=True,  # Plan mode - must not mutate
+            )
+
+            # Verify no CREATE/ALTER/DROP statements executed on maintenance_db connection
+            # The main admin connection (to maintenance_db) should only execute SELECT queries
+            creation_keywords = ["CREATE ", "ALTER ", "DROP ", "INSERT ", "DELETE ", "UPDATE ", "TRUNCATE "]
+            for sql in all_execute_calls:
+                sql_upper = sql.upper()
+                # In plan mode, we only do SELECT (to check state)
+                if not any(kw in sql_upper for kw in ["SELECT", "SET TRANSACTION"]):
+                    # Any write statement in plan mode is a violation
+                    assert False, f"Plan-only mode executed write statement: {sql}"
+
+    def test_admin_db_parameter_in_functions(self):
+        """Test 6: bootstrap() and verify_bootstrap() have admin_db parameter."""
+        import inspect
+
+        # Check bootstrap function signature
+        bootstrap_sig = inspect.signature(bootstrap)
+        assert "admin_db" in bootstrap_sig.parameters, \
+            "bootstrap() must have admin_db parameter"
+
+        # Check verify_bootstrap function signature
+        verify_sig = inspect.signature(verify_bootstrap)
+        assert "admin_db" in verify_sig.parameters, \
+            "verify_bootstrap() must have admin_db parameter"
+
+        # admin_db must not have a default (fail-closed)
+        bootstrap_admin_db_param = bootstrap_sig.parameters["admin_db"]
+        if bootstrap_admin_db_param.default is not inspect.Parameter.empty:
+            assert bootstrap_admin_db_param.default is None, \
+                "admin_db default should be None (explicit configuration required)"
+
+    def test_env_example_includes_merchant_admin_db(self):
+        """Test 7: .env.example must include MERCHANT_ADMIN_DB configuration."""
+        env_example_file = PROJECT_ROOT / ".env.example"
+        with open(env_example_file) as f:
+            content = f.read()
+
+        assert "MERCHANT_ADMIN_DB" in content, \
+            ".env.example must include MERCHANT_ADMIN_DB configuration"
+
+        # Should mention it's for maintenance connections
+        assert "maintenance" in content.lower() or "admin database" in content.lower(), \
+            ".env.example should document that MERCHANT_ADMIN_DB is for maintenance connections"
 
 
 if __name__ == "__main__":

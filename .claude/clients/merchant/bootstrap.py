@@ -43,10 +43,16 @@ except ImportError:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5434
+DEFAULT_ADMIN_DB = None  # Must be explicitly configured - no guessing
 
 RUNTIME_DB_NAME = "coding_agent_merchant"
 TEST_DB_NAME = "coding_agent_merchant_test"
 SCHEMA_NAME = "merchant_ops"
+
+# Admin database is only for maintenance connections (role creation, database creation, etc.)
+# It is NOT a Merchant database and must not be modified by bootstrap
+# For local development: coding_agent_rag (the existing RAG database)
+# Must be explicitly provided - never inferred from username
 
 ROLE_OWNER = "merchant_owner"
 ROLE_APP = "merchant_app"
@@ -412,6 +418,7 @@ def bootstrap(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     admin_user: str = None,
+    admin_db: str = None,
     admin_password: str = "",
     owner_password: str = "",
     app_password: str = "",
@@ -431,6 +438,7 @@ def bootstrap(
         host: PostgreSQL server hostname (default: 127.0.0.1)
         port: PostgreSQL server port (default: 5434)
         admin_user: PostgreSQL admin user (required: no fallback)
+        admin_db: Admin database for maintenance connections (required: no fallback)
         admin_password: Password for admin user
         owner_password: Password for merchant_owner role
         app_password: Password for merchant_app role
@@ -458,6 +466,13 @@ def bootstrap(
     if not admin_user:
         raise ValueError(
             "admin_user is required (no fallback to postgres or rag_user)"
+        )
+
+    # Fail-closed: reject if admin_db is missing
+    if not admin_db:
+        raise ValueError(
+            "admin_db is required (the maintenance database for role/DB creation). "
+            "Do not infer from username."
         )
 
     # Fail-closed: reject if neither plan nor apply is explicit
@@ -496,6 +511,7 @@ def bootstrap(
         conn = psycopg.connect(
             host=host,
             port=port,
+            dbname=admin_db,
             user=admin_user,
             password=admin_password,
             autocommit=True,
@@ -518,14 +534,14 @@ def bootstrap(
             try:
                 # Generate the plan (after lock is acquired in apply mode)
                 plan = _generate_plan(
-                    conn, host, port, admin_user, admin_password, runtime_db, test_db
+                    conn, host, port, admin_user, admin_db, admin_password, runtime_db, test_db
                 )
 
                 result["plan"] = plan.to_dict()
 
                 # If apply, execute the plan
                 if not plan_only:
-                    _apply_plan(conn, host, port, admin_user, admin_password, plan, runtime_db, test_db, owner_password, app_password, alert_password, test_password)
+                    _apply_plan(conn, host, port, admin_user, admin_db, admin_password, plan, runtime_db, test_db, owner_password, app_password, alert_password, test_password)
                     result["message"] = f"Bootstrap applied successfully to {runtime_db} and {test_db}"
                 else:
                     result["message"] = f"Bootstrap plan for {runtime_db} and {test_db} (no changes made)"
@@ -561,6 +577,7 @@ def _generate_plan(
     host: str,
     port: int,
     admin_user: str,
+    admin_db: str,
     admin_password: str,
     runtime_db: str,
     test_db: str,
@@ -730,6 +747,7 @@ def _apply_plan(
     host: str,
     port: int,
     admin_user: str,
+    admin_db: str,
     admin_password: str,
     plan: BootstrapPlan,
     runtime_db: str,
@@ -1086,6 +1104,11 @@ def main() -> int:
         default=None,
         help="Admin user (required: --admin-user or MERCHANT_ADMIN_USER)",
     )
+    parser.add_argument(
+        "--admin-db",
+        default=None,
+        help="Admin database for maintenance connections (required: --admin-db or MERCHANT_ADMIN_DB)",
+    )
 
     # Database names
     parser.add_argument(
@@ -1117,6 +1140,17 @@ def main() -> int:
         print(json.dumps(error_result, indent=2), file=sys.stderr)
         return 1
 
+    # Resolve admin database (fail-closed - no guessing)
+    admin_db = args.admin_db or os.environ.get("MERCHANT_ADMIN_DB")
+    if not admin_db:
+        error_result = {
+            "success": False,
+            "error": "Admin database required. Either supply --admin-db or set MERCHANT_ADMIN_DB environment variable",
+            "mode": "error",
+        }
+        print(json.dumps(error_result, indent=2), file=sys.stderr)
+        return 1
+
     try:
         if verify_mode:
             # Verify mode (read-only)
@@ -1128,6 +1162,7 @@ def main() -> int:
                 host=args.host,
                 port=args.port,
                 admin_user=admin_user,
+                admin_db=admin_db,
                 admin_password=admin_password,
                 runtime_db=args.runtime_db,
                 test_db=args.test_db,
@@ -1147,6 +1182,7 @@ def main() -> int:
                 host=args.host,
                 port=args.port,
                 admin_user=admin_user,
+                admin_db=admin_db,
                 admin_password=admin_password,
                 owner_password=owner_password,
                 app_password=app_password,

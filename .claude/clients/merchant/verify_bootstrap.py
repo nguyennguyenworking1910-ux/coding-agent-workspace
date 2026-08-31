@@ -20,10 +20,16 @@ except ImportError:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5434
+DEFAULT_ADMIN_DB = None  # Must be explicitly configured - no guessing
 
 RUNTIME_DB_NAME = "coding_agent_merchant"
 TEST_DB_NAME = "coding_agent_merchant_test"
 SCHEMA_NAME = "merchant_ops"
+
+# Admin database is only for maintenance connections (role creation, database creation, etc.)
+# It is NOT a Merchant database and must not be modified by bootstrap
+# For local development: coding_agent_rag (the existing RAG database)
+# Must be explicitly provided - never inferred from username
 
 ROLE_OWNER = "merchant_owner"
 ROLE_APP = "merchant_app"
@@ -233,6 +239,7 @@ def verify_bootstrap(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     admin_user: str = None,
+    admin_db: str = None,
     admin_password: str = "",
     runtime_db: str = RUNTIME_DB_NAME,
     test_db: str = TEST_DB_NAME,
@@ -254,6 +261,7 @@ def verify_bootstrap(
         host: PostgreSQL server hostname (default: 127.0.0.1)
         port: PostgreSQL server port (default: 5434)
         admin_user: Admin user to connect as (required: no fallback)
+        admin_db: Admin database for maintenance connections (required: no fallback)
         admin_password: Password for admin user
         runtime_db: Runtime database name (default: coding_agent_merchant)
         test_db: Test database name (default: coding_agent_merchant_test)
@@ -306,6 +314,13 @@ def verify_bootstrap(
             "admin_user is required (no fallback to postgres or rag_user)"
         )
 
+    # Fail-closed: reject if admin_db is missing
+    if not admin_db:
+        raise ValueError(
+            "admin_db is required (the maintenance database for role/DB creation). "
+            "Do not infer from username."
+        )
+
     result = {
         "success": False,
         "connection": _redact_connection_string(host, port, admin_user),
@@ -348,6 +363,7 @@ def verify_bootstrap(
         conn = psycopg.connect(
             host=host,
             port=port,
+            dbname=admin_db,
             user=admin_user,
             password=admin_password,
             autocommit=False,
