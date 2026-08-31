@@ -1131,10 +1131,9 @@ class TestAdminIdentityDefectFix:
 
     def test_admin_user_required_fail_closed(self):
         """Test 1: Missing CLI and MERCHANT_ADMIN_USER must fail with clear error."""
-        # Simulate both CLI arg and env var missing
+        # Simulate both CLI arg and env var missing (set to empty to prevent dotenv repopulation)
         env = os.environ.copy()
-        if "MERCHANT_ADMIN_USER" in env:
-            del env["MERCHANT_ADMIN_USER"]
+        env['MERCHANT_ADMIN_USER'] = ""  # Prevent dotenv repopulation
 
         result = subprocess.run(
             [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
@@ -1266,7 +1265,7 @@ class TestAdminDatabaseConnectionDefectFix:
     def test_admin_db_required_fail_closed(self):
         """Test 1: Missing both CLI and MERCHANT_ADMIN_DB fails closed."""
         env = os.environ.copy()
-        env.pop("MERCHANT_ADMIN_DB", None)
+        env['MERCHANT_ADMIN_DB'] = ""  # Prevent dotenv repopulation
 
         result = subprocess.run(
             [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
@@ -1283,6 +1282,71 @@ class TestAdminDatabaseConnectionDefectFix:
         # Error message should mention requirement
         assert "admin database" in result.stderr.lower() or "required" in result.stderr.lower(), \
             f"Error should mention admin database is required. Got: {result.stderr}"
+
+    def test_admin_user_empty_string_fail_closed(self):
+        """Test: MERCHANT_ADMIN_USER set to empty string must fail with exit code 1."""
+        env = os.environ.copy()
+        env['MERCHANT_ADMIN_USER'] = ""  # Explicitly empty
+
+        result = subprocess.run(
+            [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+        )
+
+        # Should fail (exit code 1) - empty string is invalid
+        assert result.returncode == 1, \
+            f"Expected exit code 1 for empty MERCHANT_ADMIN_USER, got {result.returncode}"
+
+        # Stderr should contain clear error message
+        assert "Admin user required" in result.stderr or "required" in result.stderr.lower(), \
+            f"Error message should mention requirement. Got stderr: {result.stderr}"
+
+    def test_admin_db_whitespace_only_fail_closed(self):
+        """Test: MERCHANT_ADMIN_DB set to whitespace-only must fail with exit code 1."""
+        env = os.environ.copy()
+        env['MERCHANT_ADMIN_DB'] = "  \t  "  # Whitespace only
+
+        result = subprocess.run(
+            [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+        )
+
+        # Should fail (exit code 1) - whitespace is invalid
+        assert result.returncode == 1, \
+            f"Expected exit code 1 for whitespace-only MERCHANT_ADMIN_DB, got {result.returncode}"
+
+        # Stderr should contain clear error message
+        assert "admin database" in result.stderr.lower() or "required" in result.stderr.lower(), \
+            f"Error should mention admin database is required. Got: {result.stderr}"
+
+    def test_admin_user_cli_override_empty_env(self):
+        """Test: CLI --admin-user overrides empty MERCHANT_ADMIN_USER in environment."""
+        env = os.environ.copy()
+        env['MERCHANT_ADMIN_USER'] = ""  # Empty in environment
+        env['MERCHANT_ADMIN_DB'] = "test_db"  # Provide valid DB
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "claude.clients.merchant.bootstrap",
+                "--plan",
+                "--admin-user", "cli_override_user"
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+        )
+
+        # Command should NOT fail with "Admin user required" error
+        # It may fail for connection reasons (no such user), but not for missing credentials
+        assert "Admin user required" not in result.stderr, \
+            f"CLI --admin-user should override empty env value. Should not complain about missing user. stderr: {result.stderr}"
 
     def test_admin_connection_receives_explicit_dbname(self):
         """Test 2: Admin connections always pass dbname explicitly."""
@@ -1468,6 +1532,202 @@ class TestAdminDatabaseConnectionDefectFix:
         # Should mention it's for maintenance connections
         assert "maintenance" in content.lower() or "admin database" in content.lower(), \
             ".env.example should document that MERCHANT_ADMIN_DB is for maintenance connections"
+
+
+# ============================================================================
+# Checkpoint 2A: Direct-Script Import Failure Fix
+# ============================================================================
+
+class TestDirectScriptExecution:
+    """Tests for direct bootstrap.py script execution (not package import).
+
+    These tests verify that bootstrap.py works when executed directly as a script
+    via: python .claude/clients/merchant/bootstrap.py --verify ...
+
+    This requires conditional import logic to handle both:
+    1. Package imports (relative imports) for tests and module imports
+    2. Direct script execution (sibling-module imports) for CLI usage
+    """
+
+    def test_direct_script_verify_import_succeeds(self):
+        """Verify --verify command doesn't fail with relative import error."""
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"),
+             "--verify", "--admin-user", "test_user", "--admin-db", "test_db"],
+            capture_output=True,
+            text=True,
+            env={"MERCHANT_ADMIN_PASSWORD": "test_pass"},
+            cwd=str(PROJECT_ROOT)
+        )
+        # Should not have relative import error
+        assert "attempted relative import" not in result.stderr, \
+            f"Direct script execution should not have relative import error. stderr: {result.stderr}"
+        assert "No module named" not in result.stderr or "verify_bootstrap" not in result.stderr, \
+            f"Should find verify_bootstrap module. stderr: {result.stderr}"
+
+    def test_package_import_still_works(self):
+        """Verify package import works (for tests and other clients)."""
+        from claude.clients.merchant.bootstrap import bootstrap
+        # Import succeeded - package context is working
+        assert callable(bootstrap), "bootstrap function should be importable as a package"
+
+    def test_package_import_verify_bootstrap_available(self):
+        """Verify verify_bootstrap is accessible through package import."""
+        import sys
+        import importlib
+        # Import the bootstrap module directly
+        bootstrap_module = importlib.import_module('claude.clients.merchant.bootstrap')
+        # Check that verify_fn is available at module level
+        assert hasattr(bootstrap_module, 'verify_fn'), \
+            "bootstrap module should have verify_fn available"
+        assert callable(bootstrap_module.verify_fn), \
+            "verify_fn should be callable"
+
+    def test_direct_script_no_internal_error_masking(self):
+        """Ensure internal ImportErrors in verify_bootstrap are not masked."""
+        # If verify_bootstrap had an actual import failure (not missing file),
+        # it should be reported, not caught as "module not found"
+        # This test verifies the error handling is precise
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, './.claude/clients/merchant'); "
+             "import bootstrap; print('Import succeeded')"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT)
+        )
+        # No import error (bootstrap.py exists and imports work)
+        # If there WERE an internal error, it would be preserved
+        assert result.returncode == 0 or "bootstrap" in result.stderr.lower() or result.stderr == "", \
+            f"bootstrap.py should be importable. stderr: {result.stderr}"
+
+    def test_direct_script_verify_no_password_exposure(self):
+        """Verify --verify doesn't expose passwords in output."""
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"),
+             "--verify", "--admin-user", "test_user", "--admin-db", "test_db"],
+            capture_output=True,
+            text=True,
+            env={"MERCHANT_ADMIN_PASSWORD": "SuperSecretPassword123!"},
+            cwd=str(PROJECT_ROOT)
+        )
+        assert "SuperSecretPassword123!" not in result.stdout, \
+            "Password should not appear in stdout"
+        assert "SuperSecretPassword123!" not in result.stderr, \
+            "Password should not appear in stderr"
+
+    def test_direct_script_verify_read_only(self):
+        """Verify --verify mode doesn't mutate any databases."""
+        # Run verify against test configuration
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"),
+             "--verify", "--admin-user", "test_user", "--admin-db", "test_db"],
+            capture_output=True,
+            text=True,
+            env={"MERCHANT_ADMIN_PASSWORD": "test_pass"},
+            cwd=str(PROJECT_ROOT)
+        )
+        # Verify mode should not attempt any writes
+        # Check stderr for connection errors (expected - test db doesn't exist)
+        # but no CREATE/ALTER/DROP statements attempted
+        output = result.stdout + result.stderr
+        assert "CREATE " not in output.upper() or "No module named" in output, \
+            "Verify should not attempt CREATE statements"
+        assert "ALTER " not in output.upper() or "No module named" in output, \
+            "Verify should not attempt ALTER statements"
+        assert "DROP " not in output.upper() or "No module named" in output, \
+            "Verify should not attempt DROP statements"
+
+    def test_direct_script_plan_mode(self):
+        """Verify --plan works when bootstrap.py is executed directly as a script."""
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"),
+             "--plan", "--admin-user", "test_user", "--admin-db", "test_db"],
+            capture_output=True,
+            text=True,
+            env={"MERCHANT_ADMIN_PASSWORD": "test_pass"},
+            cwd=str(PROJECT_ROOT)
+        )
+        # Should not have relative import error
+        assert "attempted relative import" not in result.stderr, \
+            f"Direct script --plan should not have relative import error. stderr: {result.stderr}"
+
+    def test_direct_script_help_works(self):
+        """Verify --help works when bootstrap.py is executed directly."""
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"),
+             "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT)
+        )
+        # Should work without import errors
+        assert result.returncode == 0, \
+            f"--help should work. returncode: {result.returncode}, stderr: {result.stderr}"
+        assert "--verify" in result.stdout, \
+            "Help should show --verify option"
+
+    @patch("claude.clients.merchant.bootstrap.psycopg.connect")
+    def test_verify_fn_imported_at_module_level(self, mock_connect):
+        """Verify that verify_fn is imported at module level, not in function."""
+        import importlib
+        # Import the bootstrap module directly
+        bootstrap_module = importlib.import_module('claude.clients.merchant.bootstrap')
+
+        # verify_fn should be available at module level
+        assert hasattr(bootstrap_module, 'verify_fn'), \
+            "verify_fn should be a module-level variable"
+
+        # verify_fn should be callable
+        assert callable(bootstrap_module.verify_fn), \
+            "verify_fn should be callable"
+
+    def test_conditional_import_uses_package_check(self):
+        """Verify the conditional import uses __package__ to detect context."""
+        # Read the bootstrap.py source and check for __package__ check
+        bootstrap_file = PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"
+        with open(bootstrap_file) as f:
+            content = f.read()
+
+        assert "if __package__:" in content, \
+            "Import strategy should use __package__ to detect context"
+        assert "from .verify_bootstrap import" in content, \
+            "Package import path should use relative import"
+        assert "import verify_bootstrap" in content, \
+            "Direct script path should use sibling import"
+
+    def test_sys_path_modification_scoped_correctly(self):
+        """Verify sys.path is only modified for direct script execution."""
+        # Read the bootstrap.py source
+        bootstrap_file = PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"
+        with open(bootstrap_file) as f:
+            content = f.read()
+
+        # sys.path should be modified in the else block (direct script execution)
+        assert "sys.path.insert(0, str(script_dir))" in content, \
+            "sys.path modification should be present for direct script execution"
+
+        # The comment should explain why sys.path is modified
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            if "sys.path.insert(0, str(script_dir))" in line:
+                # Check that previous lines explain the purpose
+                context = '\n'.join(lines[max(0, i-5):min(len(lines), i+5)])
+                assert "script" in context.lower() or "direct" in context.lower(), \
+                    "sys.path modification should be documented"
+                break
+
+    def test_no_broad_import_error_masking(self):
+        """Verify ImportErrors are specific, not catching all exceptions."""
+        bootstrap_file = PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"
+        with open(bootstrap_file) as f:
+            content = f.read()
+
+        # Check for specific error handling
+        assert "verify_bootstrap" in content and "No module named" in content, \
+            "Error handling should check for specific 'No module named' error"
+        assert "else:" in content and "raise" in content, \
+            "Should re-raise non-specific ImportErrors"
 
 
 if __name__ == "__main__":

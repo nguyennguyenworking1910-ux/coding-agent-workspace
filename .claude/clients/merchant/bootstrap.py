@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 try:
@@ -35,6 +36,32 @@ except ImportError:
         "psycopg 3 is required for Merchant bootstrap. "
         "Install it with: pip install psycopg[binary]"
     )
+
+
+# Conditional import strategy for direct-script and package-import compatibility
+if __package__:
+    # Package import: use relative import (for tests, imports from other modules)
+    from .verify_bootstrap import verify_bootstrap as verify_fn
+else:
+    # Direct script execution: use sibling-module import
+    # When bootstrap.py is executed as: python bootstrap.py --verify ...
+    script_dir = Path(__file__).parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+
+    try:
+        import verify_bootstrap
+        verify_fn = verify_bootstrap.verify_bootstrap
+    except ImportError as e:
+        # Only catch the direct-import case, not internal import failures
+        if "verify_bootstrap" in str(e) and "No module named" in str(e):
+            raise ImportError(
+                f"Cannot find verify_bootstrap.py in {script_dir}. "
+                f"Ensure bootstrap.py and verify_bootstrap.py are in the same directory."
+            ) from e
+        else:
+            # Re-raise if it's an internal import error inside verify_bootstrap
+            raise
 
 
 # ============================================================================
@@ -462,14 +489,14 @@ def bootstrap(
         ValueError: If validation fails (fail-closed), including missing admin_user
         ImportError: If psycopg is not installed
     """
-    # Fail-closed: reject if admin_user is missing
-    if not admin_user:
+    # Fail-closed: reject if admin_user is missing or whitespace-only
+    if not admin_user or not admin_user.strip():
         raise ValueError(
             "admin_user is required (no fallback to postgres or rag_user)"
         )
 
-    # Fail-closed: reject if admin_db is missing
-    if not admin_db:
+    # Fail-closed: reject if admin_db is missing or whitespace-only
+    if not admin_db or not admin_db.strip():
         raise ValueError(
             "admin_db is required (the maintenance database for role/DB creation). "
             "Do not infer from username."
@@ -1131,7 +1158,7 @@ def main() -> int:
 
     # Resolve admin user (fail-closed)
     admin_user = args.admin_user or os.environ.get("MERCHANT_ADMIN_USER")
-    if not admin_user:
+    if not admin_user or not admin_user.strip():
         error_result = {
             "success": False,
             "error": "Admin user required. Either supply --admin-user or set MERCHANT_ADMIN_USER environment variable",
@@ -1142,7 +1169,7 @@ def main() -> int:
 
     # Resolve admin database (fail-closed - no guessing)
     admin_db = args.admin_db or os.environ.get("MERCHANT_ADMIN_DB")
-    if not admin_db:
+    if not admin_db or not admin_db.strip():
         error_result = {
             "success": False,
             "error": "Admin database required. Either supply --admin-db or set MERCHANT_ADMIN_DB environment variable",
@@ -1154,8 +1181,6 @@ def main() -> int:
     try:
         if verify_mode:
             # Verify mode (read-only)
-            from .verify_bootstrap import verify_bootstrap as verify_fn
-
             admin_password = os.environ.get("MERCHANT_ADMIN_PASSWORD", "")
 
             result = verify_fn(
