@@ -6,6 +6,9 @@ google-api-python-client==2.108.0
 # BigQuery Integration - .claude/clients/bigquery_client.py, .claude/bq_query.py
 google-cloud-bigquery==3.25.0
 
+# Merchant Database Bootstrap - PostgreSQL 3 client
+psycopg[binary]==3.1.18
+
 # Optional: for better date parsing
 python-dateutil==2.8.2
 
