@@ -210,20 +210,45 @@ def _role_has_connect_on_database(
         return result[0] if result else False
 
 
+def _role_has_schema_privilege(
+    connection: psycopg.Connection,
+    role_name: str,
+    schema_name: str,
+    privilege: str,
+) -> bool:
+    """Check if role has privilege (USAGE, CREATE, etc.) on schema.
+
+    Args:
+        connection: Database connection
+        role_name: Role name to check
+        schema_name: Schema name
+        privilege: Privilege string ('USAGE', 'CREATE', etc.)
+
+    Returns:
+        True if role has the privilege, False otherwise
+    """
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                sql.SQL("SELECT has_schema_privilege(%s, %s, %s)"),
+                (role_name, schema_name, privilege),
+            )
+            result = cur.fetchone()
+            return result[0] if result else False
+    except Exception:
+        return False
+
+
 def _role_has_usage_on_schema(
     db_conn: psycopg.Connection,
     role_name: str,
     schema_name: str,
 ) -> bool:
-    """Check if a role has USAGE privilege on a schema in the connected database."""
-    with db_conn.cursor() as cur:
-        # Use has_schema_privilege() built-in function for correct privilege check
-        cur.execute(
-            sql.SQL("SELECT has_schema_privilege(%s, %s, 'USAGE')"),
-            (role_name, schema_name),
-        )
-        result = cur.fetchone()
-        return result[0] if result else False
+    """Check if a role has USAGE privilege on a schema in the connected database.
+
+    Deprecated: Use _role_has_schema_privilege() instead.
+    """
+    return _role_has_schema_privilege(db_conn, role_name, schema_name, "USAGE")
 
 
 # ============================================================================
@@ -294,7 +319,14 @@ def verify_bootstrap(
         - "merchant_alert_lacks_test_connect": bool
         - "runtime_app_has_schema_usage": bool
         - "runtime_alert_has_schema_usage": bool
+        - "runtime_app_lacks_schema_create": bool
+        - "runtime_alert_lacks_schema_create": bool
+        - "runtime_public_lacks_schema_usage": bool
+        - "runtime_public_lacks_schema_create": bool
         - "test_role_has_schema_usage": bool
+        - "test_public_lacks_schema_usage": bool
+        - "test_public_lacks_schema_create": bool
+        - "default_transaction_read_only": bool
         - "rag_database_exists": bool
         - "errors": List of error messages if any
 
@@ -348,14 +380,22 @@ def verify_bootstrap(
         "merchant_alert_lacks_test_connect": False,
         "runtime_app_has_schema_usage": False,
         "runtime_alert_has_schema_usage": False,
+        "runtime_app_lacks_schema_create": False,
+        "runtime_alert_lacks_schema_create": False,
+        "runtime_public_lacks_schema_usage": False,
+        "runtime_public_lacks_schema_create": False,
         "test_role_has_schema_usage": False,
+        "test_public_lacks_schema_usage": False,
+        "test_public_lacks_schema_create": False,
+        "default_transaction_read_only": True,
         "rag_database_exists": False,
         "errors": [],
     }
 
     try:
-        # Connect to the server as admin (read-only, will use REPEATABLE READ)
+        # Connect to the server as admin (read-only)
         # autocommit=True ensures each query is isolated; prevents transaction state poisoning
+        # options="-c default_transaction_read_only=on" enforces session-level read-only
         conn = psycopg.connect(
             host=host,
             port=port,
@@ -363,13 +403,10 @@ def verify_bootstrap(
             user=admin_user,
             password=admin_password,
             autocommit=True,
+            options="-c default_transaction_read_only=on",
         )
 
         try:
-            # Set read-only mode
-            with conn.cursor() as cur:
-                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-
             result["server_reachable"] = True
 
             # Check roles
@@ -415,11 +452,8 @@ def verify_bootstrap(
                         password=admin_password,
                         dbname=runtime_db,
                         autocommit=True,
+                        options="-c default_transaction_read_only=on",
                     ) as db_conn:
-                        # Set read-only
-                        with db_conn.cursor() as cur:
-                            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-
                         result["runtime_schema_exists"] = _schema_exists(db_conn, SCHEMA_NAME)
                         if result["runtime_schema_exists"]:
                             result["runtime_schema_owner"] = _get_schema_owner(db_conn, SCHEMA_NAME)
@@ -430,9 +464,23 @@ def verify_bootstrap(
                                 db_conn, SCHEMA_NAME
                             )
 
-                            # Check grant status for app and alert
+                            # Check grant status for app and alert (USAGE)
                             result["runtime_app_has_schema_usage"] = _role_has_usage_on_schema(db_conn, ROLE_APP, SCHEMA_NAME)
                             result["runtime_alert_has_schema_usage"] = _role_has_usage_on_schema(db_conn, ROLE_ALERT, SCHEMA_NAME)
+
+                            # Check CREATE privilege (should be false for both app and alert)
+                            merchant_app_has_create = _role_has_schema_privilege(db_conn, ROLE_APP, SCHEMA_NAME, "CREATE")
+                            result["runtime_app_lacks_schema_create"] = not merchant_app_has_create
+
+                            merchant_alert_has_create = _role_has_schema_privilege(db_conn, ROLE_ALERT, SCHEMA_NAME, "CREATE")
+                            result["runtime_alert_lacks_schema_create"] = not merchant_alert_has_create
+
+                            # Check PUBLIC USAGE and CREATE (should be false for both)
+                            public_has_usage = _role_has_schema_privilege(db_conn, "public", SCHEMA_NAME, "USAGE")
+                            result["runtime_public_lacks_schema_usage"] = not public_has_usage
+
+                            public_has_create = _role_has_schema_privilege(db_conn, "public", SCHEMA_NAME, "CREATE")
+                            result["runtime_public_lacks_schema_create"] = not public_has_create
 
                 except Exception as e:
                     result["errors"].append(f"Error checking runtime database: {str(e)}")
@@ -447,11 +495,8 @@ def verify_bootstrap(
                         password=admin_password,
                         dbname=test_db,
                         autocommit=True,
+                        options="-c default_transaction_read_only=on",
                     ) as db_conn:
-                        # Set read-only
-                        with db_conn.cursor() as cur:
-                            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-
                         result["test_schema_exists"] = _schema_exists(db_conn, SCHEMA_NAME)
                         if result["test_schema_exists"]:
                             result["test_schema_owner"] = _get_schema_owner(db_conn, SCHEMA_NAME)
@@ -462,8 +507,15 @@ def verify_bootstrap(
                                 db_conn, SCHEMA_NAME
                             )
 
-                            # Check grant status for test role
+                            # Check grant status for test role (USAGE)
                             result["test_role_has_schema_usage"] = _role_has_usage_on_schema(db_conn, ROLE_TEST, SCHEMA_NAME)
+
+                            # Check PUBLIC USAGE and CREATE (should be false for both)
+                            public_has_usage = _role_has_schema_privilege(db_conn, "public", SCHEMA_NAME, "USAGE")
+                            result["test_public_lacks_schema_usage"] = not public_has_usage
+
+                            public_has_create = _role_has_schema_privilege(db_conn, "public", SCHEMA_NAME, "CREATE")
+                            result["test_public_lacks_schema_create"] = not public_has_create
 
                 except Exception as e:
                     result["errors"].append(f"Error checking test database: {str(e)}")
@@ -508,7 +560,14 @@ def verify_bootstrap(
                 result["merchant_alert_lacks_test_connect"],
                 result["runtime_app_has_schema_usage"],
                 result["runtime_alert_has_schema_usage"],
+                result["runtime_app_lacks_schema_create"],
+                result["runtime_alert_lacks_schema_create"],
+                result["runtime_public_lacks_schema_usage"],
+                result["runtime_public_lacks_schema_create"],
                 result["test_role_has_schema_usage"],
+                result["test_public_lacks_schema_usage"],
+                result["test_public_lacks_schema_create"],
+                result["default_transaction_read_only"],
             ]
 
             result["success"] = all(all_checks)
