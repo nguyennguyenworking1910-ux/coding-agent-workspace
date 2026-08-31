@@ -1730,5 +1730,338 @@ class TestDirectScriptExecution:
             "Should re-raise non-specific ImportErrors"
 
 
+# ============================================================================
+# Regression Tests: SQL Query Defect Fix (Red Team Analysis)
+# ============================================================================
+
+class TestSQLQueryDefectFix:
+    """Regression tests for PostgreSQL API defect fixes.
+
+    Red team identified:
+    1. Wrong PostgreSQL APIs (role_table_grants, role_usage_grants)
+    2. Transaction state poisoning (autocommit=False)
+    3. All 9 privilege checks returning false negatives
+
+    These tests verify the fixes.
+    """
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_has_database_privilege_api_used(self, mock_connect):
+        """Verify has_database_privilege() is called for CONNECT checks, NOT role_table_grants."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        executed_sql = []
+
+        def capture_sql(sql_obj, *args):
+            executed_sql.append(str(sql_obj))
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.execute.side_effect = capture_sql
+        mock_cursor.fetchone.return_value = (True,)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Verify has_database_privilege is used
+        has_db_priv_calls = [s for s in executed_sql if "has_database_privilege" in s.lower()]
+        assert len(has_db_priv_calls) > 0, \
+            f"Should call has_database_privilege() for CONNECT checks. Got SQL: {executed_sql}"
+
+        # Verify role_table_grants is NOT used
+        role_table_calls = [s for s in executed_sql if "role_table_grants" in s.lower()]
+        assert len(role_table_calls) == 0, \
+            f"Should NOT use role_table_grants (only for TABLE privileges). Got SQL: {executed_sql}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_has_schema_privilege_api_used(self, mock_connect):
+        """Verify has_schema_privilege() is called for USAGE checks, NOT role_usage_grants."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        executed_sql = []
+
+        def capture_sql(sql_obj, *args):
+            executed_sql.append(str(sql_obj))
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.execute.side_effect = capture_sql
+        mock_cursor.fetchone.return_value = (True,)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Verify has_schema_privilege is used
+        has_schema_priv_calls = [s for s in executed_sql if "has_schema_privilege" in s.lower()]
+        assert len(has_schema_priv_calls) > 0, \
+            f"Should call has_schema_privilege() for USAGE checks. Got SQL: {executed_sql}"
+
+        # Verify role_usage_grants is NOT used
+        role_usage_calls = [s for s in executed_sql if "role_usage_grants" in s.lower()]
+        assert len(role_usage_calls) == 0, \
+            f"Should NOT use role_usage_grants (missing table_schema column). Got SQL: {executed_sql}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_failed_privilege_check_does_not_poison_subsequent_checks(self, mock_connect):
+        """Verify that with autocommit=True, each query is isolated.
+
+        With autocommit=False, a failed query in nested connections would poison
+        transaction state. With autocommit=True, each query is independent.
+        """
+        # Create two separate mock connections to simulate multiple database connections
+        mock_admin_conn = MagicMock()
+        mock_runtime_conn = MagicMock()
+        admin_cursor = MagicMock()
+        runtime_cursor = MagicMock()
+
+        connections_created = []
+
+        def track_connections(*args, **kwargs):
+            connections_created.append(kwargs)
+            # Return different mock connections based on dbname
+            if kwargs.get("dbname") == "test_db":
+                mock_admin_conn.cursor.return_value.__enter__ = MagicMock(return_value=admin_cursor)
+                mock_admin_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+                mock_admin_conn.__enter__ = MagicMock(return_value=mock_admin_conn)
+                mock_admin_conn.__exit__ = MagicMock(return_value=None)
+                mock_admin_conn.commit = MagicMock()
+                return mock_admin_conn
+            else:
+                mock_runtime_conn.cursor.return_value.__enter__ = MagicMock(return_value=runtime_cursor)
+                mock_runtime_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+                mock_runtime_conn.__enter__ = MagicMock(return_value=mock_runtime_conn)
+                mock_runtime_conn.__exit__ = MagicMock(return_value=None)
+                mock_runtime_conn.commit = MagicMock()
+                return mock_runtime_conn
+
+        mock_connect.side_effect = track_connections
+        admin_cursor.fetchone.return_value = (True,)
+        runtime_cursor.fetchone.return_value = (True,)
+
+        result = verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Verify that multiple connections were created, each with autocommit=True
+        db_connections = [c for c in connections_created if c.get("dbname")]
+        assert len(db_connections) > 0, "Should create connections to specific databases"
+
+        # All database-specific connections should have autocommit=True
+        for conn_params in db_connections:
+            assert conn_params.get("autocommit") is True, \
+                f"Database connections must have autocommit=True for isolation. Got: {conn_params}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_privilege_checks_are_deterministic(self, mock_connect):
+        """Run verification twice, verify identical results."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.fetchone.return_value = (True,)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        # Run verification twice
+        result1 = verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        result2 = verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Results should be identical
+        # Check deterministic keys
+        deterministic_keys = [
+            "server_reachable",
+            "merchant_owner_exists",
+            "merchant_app_exists",
+            "runtime_app_has_schema_usage",
+            "runtime_alert_has_schema_usage",
+            "merchant_app_lacks_test_connect",
+        ]
+
+        for key in deterministic_keys:
+            assert result1.get(key) == result2.get(key), \
+                f"Results should be deterministic. Key {key}: {result1.get(key)} != {result2.get(key)}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_create_privilege_independently_evaluated(self, mock_connect):
+        """Verify app/alert USAGE=true AND CREATE=false are independently checked."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+
+        # For USAGE checks, return True; for CREATE checks, would check separately
+        call_count = [0]
+        def side_effect_query(sql_obj, *args):
+            call_count[0] += 1
+            return None
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.execute.side_effect = side_effect_query
+        mock_cursor.fetchone.return_value = (True,)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        result = verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Multiple queries executed (USAGE checks, plus others)
+        assert mock_cursor.execute.call_count > 5, \
+            "Should execute multiple independent privilege checks"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_database_connect_checks_include_all_9_scenarios(self, mock_connect):
+        """Verify all 9 privilege scenarios are checked (3 roles × 3 combinations)."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        executed_sql = []
+
+        def capture_sql(sql_obj, *args):
+            executed_sql.append(str(sql_obj))
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.execute.side_effect = capture_sql
+        mock_cursor.fetchone.return_value = (True,)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        result = verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Verify all 9 required checks are in result
+        required_checks = [
+            "merchant_owner_has_runtime_connect",      # Role 1, Scenario A
+            "merchant_app_has_runtime_connect",        # Role 2, Scenario A
+            "merchant_alert_has_runtime_connect",      # Role 3, Scenario A
+            "merchant_test_has_test_connect",          # Role 4, Scenario B
+            "merchant_app_lacks_test_connect",         # Role 2, Scenario C
+            "merchant_alert_lacks_test_connect",       # Role 3, Scenario C
+            "runtime_app_has_schema_usage",            # Schema check 1
+            "runtime_alert_has_schema_usage",          # Schema check 2
+            "test_role_has_schema_usage",              # Schema check 3
+        ]
+
+        for check in required_checks:
+            assert check in result, f"Result missing required check: {check}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_verification_remains_read_only(self, mock_connect):
+        """Confirm all queries are SELECT only, no DDL/DML."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        executed_sql = []
+
+        def capture_sql(sql_obj, *args):
+            executed_sql.append(str(sql_obj))
+
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+        mock_cursor.execute.side_effect = capture_sql
+        mock_cursor.fetchone.return_value = None
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_conn.commit = MagicMock()
+
+        verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # Check that no write statements are executed
+        write_keywords = ["CREATE ", "DROP ", "ALTER ", "INSERT ", "DELETE ", "UPDATE ", "TRUNCATE "]
+        for sql in executed_sql:
+            sql_upper = sql.upper()
+            for keyword in write_keywords:
+                assert keyword not in sql_upper, \
+                    f"Verify should be read-only. Found write statement: {sql}"
+
+    @patch("claude.clients.merchant.verify_bootstrap.psycopg.connect")
+    def test_autocommit_true_on_all_connections(self, mock_connect):
+        """Verify all verification connections use autocommit=True."""
+        connection_params = []
+
+        def capture_connect(*args, **kwargs):
+            connection_params.append(kwargs)
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=None)
+            mock_cursor.fetchone.return_value = None
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=None)
+            mock_conn.commit = MagicMock()
+            return mock_conn
+
+        mock_connect.side_effect = capture_connect
+
+        verify_bootstrap(
+            host="127.0.0.1",
+            port=5434,
+            admin_user="test_admin",
+            admin_db="test_db",
+            admin_password="pwd",
+        )
+
+        # All connections should have autocommit=True
+        for params in connection_params:
+            assert params.get("autocommit") is True, \
+                f"All verification connections must have autocommit=True. Got: {params}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

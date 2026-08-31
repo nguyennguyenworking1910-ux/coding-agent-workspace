@@ -201,16 +201,13 @@ def _role_has_connect_on_database(
 ) -> bool:
     """Check if a role has CONNECT privilege on a database."""
     with conn.cursor() as cur:
-        # Check if role has CONNECT privilege
+        # Use has_database_privilege() built-in function for correct privilege check
         cur.execute(
-            sql.SQL(
-                "SELECT 1 FROM information_schema.role_table_grants "
-                "WHERE grantee = %s AND table_catalog = %s AND privilege_type = 'CONNECT'"
-            ),
+            sql.SQL("SELECT has_database_privilege(%s, %s, 'CONNECT')"),
             (role_name, db_name),
         )
         result = cur.fetchone()
-        return result is not None
+        return result[0] if result else False
 
 
 def _role_has_usage_on_schema(
@@ -220,15 +217,13 @@ def _role_has_usage_on_schema(
 ) -> bool:
     """Check if a role has USAGE privilege on a schema in the connected database."""
     with db_conn.cursor() as cur:
+        # Use has_schema_privilege() built-in function for correct privilege check
         cur.execute(
-            sql.SQL(
-                "SELECT 1 FROM information_schema.role_usage_grants "
-                "WHERE grantee = %s AND table_schema = %s"
-            ),
+            sql.SQL("SELECT has_schema_privilege(%s, %s, 'USAGE')"),
             (role_name, schema_name),
         )
         result = cur.fetchone()
-        return result is not None
+        return result[0] if result else False
 
 
 # ============================================================================
@@ -360,13 +355,14 @@ def verify_bootstrap(
 
     try:
         # Connect to the server as admin (read-only, will use REPEATABLE READ)
+        # autocommit=True ensures each query is isolated; prevents transaction state poisoning
         conn = psycopg.connect(
             host=host,
             port=port,
             dbname=admin_db,
             user=admin_user,
             password=admin_password,
-            autocommit=False,
+            autocommit=True,
         )
 
         try:
@@ -418,7 +414,7 @@ def verify_bootstrap(
                         user=admin_user,
                         password=admin_password,
                         dbname=runtime_db,
-                        autocommit=False,
+                        autocommit=True,
                     ) as db_conn:
                         # Set read-only
                         with db_conn.cursor() as cur:
@@ -450,7 +446,7 @@ def verify_bootstrap(
                         user=admin_user,
                         password=admin_password,
                         dbname=test_db,
-                        autocommit=False,
+                        autocommit=True,
                     ) as db_conn:
                         # Set read-only
                         with db_conn.cursor() as cur:
