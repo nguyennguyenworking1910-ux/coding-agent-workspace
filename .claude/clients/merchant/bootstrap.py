@@ -43,7 +43,6 @@ except ImportError:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5434
-DEFAULT_ADMIN_USER = "rag_user"
 
 RUNTIME_DB_NAME = "coding_agent_merchant"
 TEST_DB_NAME = "coding_agent_merchant_test"
@@ -412,7 +411,7 @@ def _get_table_constraints(conn: psycopg.Connection, schema_name: str, table_nam
 def bootstrap(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    admin_user: str = DEFAULT_ADMIN_USER,
+    admin_user: str = None,
     admin_password: str = "",
     owner_password: str = "",
     app_password: str = "",
@@ -431,7 +430,7 @@ def bootstrap(
     Args:
         host: PostgreSQL server hostname (default: 127.0.0.1)
         port: PostgreSQL server port (default: 5434)
-        admin_user: PostgreSQL admin user (default: rag_user)
+        admin_user: PostgreSQL admin user (required: no fallback)
         admin_password: Password for admin user
         owner_password: Password for merchant_owner role
         app_password: Password for merchant_app role
@@ -452,9 +451,15 @@ def bootstrap(
         - "message": Human-readable summary
 
     Raises:
-        ValueError: If validation fails (fail-closed)
+        ValueError: If validation fails (fail-closed), including missing admin_user
         ImportError: If psycopg is not installed
     """
+    # Fail-closed: reject if admin_user is missing
+    if not admin_user:
+        raise ValueError(
+            "admin_user is required (no fallback to postgres or rag_user)"
+        )
+
     # Fail-closed: reject if neither plan nor apply is explicit
     if not plan_only and not apply:
         raise ValueError(
@@ -1079,7 +1084,7 @@ def main() -> int:
     parser.add_argument(
         "--admin-user",
         default=None,
-        help=f"Admin user (default: read from MERCHANT_ADMIN_USER env var or {DEFAULT_ADMIN_USER})",
+        help="Admin user (required: --admin-user or MERCHANT_ADMIN_USER)",
     )
 
     # Database names
@@ -1101,8 +1106,16 @@ def main() -> int:
     apply_mode = args.apply
     verify_mode = args.verify
 
-    # Resolve admin user
-    admin_user = args.admin_user or os.environ.get("MERCHANT_ADMIN_USER", DEFAULT_ADMIN_USER)
+    # Resolve admin user (fail-closed)
+    admin_user = args.admin_user or os.environ.get("MERCHANT_ADMIN_USER")
+    if not admin_user:
+        error_result = {
+            "success": False,
+            "error": "Admin user required. Either supply --admin-user or set MERCHANT_ADMIN_USER environment variable",
+            "mode": "error",
+        }
+        print(json.dumps(error_result, indent=2), file=sys.stderr)
+        return 1
 
     try:
         if verify_mode:

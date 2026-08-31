@@ -20,7 +20,6 @@ except ImportError:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5434
-DEFAULT_ADMIN_USER = "rag_user"
 
 RUNTIME_DB_NAME = "coding_agent_merchant"
 TEST_DB_NAME = "coding_agent_merchant_test"
@@ -233,7 +232,7 @@ def _role_has_usage_on_schema(
 def verify_bootstrap(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    admin_user: str = DEFAULT_ADMIN_USER,
+    admin_user: str = None,
     admin_password: str = "",
     runtime_db: str = RUNTIME_DB_NAME,
     test_db: str = TEST_DB_NAME,
@@ -254,7 +253,7 @@ def verify_bootstrap(
     Args:
         host: PostgreSQL server hostname (default: 127.0.0.1)
         port: PostgreSQL server port (default: 5434)
-        admin_user: Admin user to connect as (default: rag_user)
+        admin_user: Admin user to connect as (required: no fallback)
         admin_password: Password for admin user
         runtime_db: Runtime database name (default: coding_agent_merchant)
         test_db: Test database name (default: coding_agent_merchant_test)
@@ -296,8 +295,17 @@ def verify_bootstrap(
         - "rag_database_exists": bool
         - "errors": List of error messages if any
 
+    Raises:
+        ValueError: If admin_user is missing
+
     Note: This function is read-only and never modifies anything.
     """
+    # Fail-closed: reject if admin_user is missing
+    if not admin_user:
+        raise ValueError(
+            "admin_user is required (no fallback to postgres or rag_user)"
+        )
+
     result = {
         "success": False,
         "connection": _redact_connection_string(host, port, admin_user),

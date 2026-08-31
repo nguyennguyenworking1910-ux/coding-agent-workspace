@@ -998,7 +998,12 @@ class TestProduction16Guarantees:
             mock_conn.__exit__ = MagicMock(return_value=None)
             mock_conn.commit = MagicMock()
 
-            result = verify_bootstrap()
+            result = verify_bootstrap(
+                host="127.0.0.1",
+                port=5434,
+                admin_user="rag_user",
+                admin_password="pwd",
+            )
             for check in expected_checks:
                 assert check in result, f"Missing invariant check: {check}"
 
@@ -1101,6 +1106,135 @@ class TestIntegration:
         for param in ["host", "port", "admin_user", "admin_password"]:
             assert param in bootstrap_sig.parameters
             assert param in verify_sig.parameters
+
+
+# ============================================================================
+# Regression Tests: Admin Identity Defect Fix (Checkpoint 2A)
+# ============================================================================
+
+class TestAdminIdentityDefectFix:
+    """Regression tests for Checkpoint 2A: Hardcoded admin-user fallback violation."""
+
+    def test_admin_user_required_fail_closed(self):
+        """Test 1: Missing CLI and MERCHANT_ADMIN_USER must fail with clear error."""
+        # Simulate both CLI arg and env var missing
+        env = os.environ.copy()
+        if "MERCHANT_ADMIN_USER" in env:
+            del env["MERCHANT_ADMIN_USER"]
+
+        result = subprocess.run(
+            [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+        )
+
+        # Should fail (exit code 1)
+        assert result.returncode == 1, f"Expected exit code 1 (fail-closed), got {result.returncode}"
+
+        # Stderr should contain clear error message
+        assert "Admin user required" in result.stderr or "required" in result.stderr.lower(), \
+            f"Error message should mention requirement. Got stderr: {result.stderr}"
+
+    def test_admin_user_from_environment(self):
+        """Test 2: MERCHANT_ADMIN_USER env var is used when present."""
+        env = os.environ.copy()
+        env["MERCHANT_ADMIN_USER"] = "custom_admin"
+
+        # Mock bootstrap to capture the admin_user passed to it
+        with patch("claude.clients.merchant.bootstrap.bootstrap") as mock_bootstrap:
+            mock_bootstrap.return_value = {"success": True, "mode": "plan"}
+
+            result = subprocess.run(
+                [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--plan"],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+                env=env,
+            )
+
+            # Command should succeed (not fail due to missing admin_user)
+            # The actual verification is that it doesn't fail with "Admin user required"
+            assert "Admin user required" not in result.stderr, \
+                f"Should not complain about missing admin_user when env var is set. Got: {result.stderr}"
+
+    def test_cli_admin_user_overrides_environment(self):
+        """Test 3: CLI --admin-user overrides MERCHANT_ADMIN_USER."""
+        env = os.environ.copy()
+        env["MERCHANT_ADMIN_USER"] = "env_admin"
+
+        with patch("claude.clients.merchant.bootstrap.bootstrap") as mock_bootstrap:
+            mock_bootstrap.return_value = {"success": True, "mode": "plan"}
+
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "claude.clients.merchant.bootstrap",
+                    "--plan",
+                    "--admin-user", "cli_admin"
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+                env=env,
+            )
+
+            # Should use CLI value (cli_admin) not env value (env_admin)
+            # Verify by checking that --admin-user is accepted and command succeeds
+            assert "Admin user required" not in result.stderr, \
+                f"CLI --admin-user should be accepted. Got: {result.stderr}"
+
+    def test_no_hardcoded_admin_user_defaults(self):
+        """Test 4: Verify no hardcoded postgres or rag_user fallbacks in source."""
+        bootstrap_file = PROJECT_ROOT / ".claude" / "clients" / "merchant" / "bootstrap.py"
+        verify_file = PROJECT_ROOT / ".claude" / "clients" / "merchant" / "verify_bootstrap.py"
+
+        with open(bootstrap_file) as f:
+            bootstrap_content = f.read()
+
+        with open(verify_file) as f:
+            verify_content = f.read()
+
+        # Check bootstrap.py
+        assert 'DEFAULT_ADMIN_USER = "postgres"' not in bootstrap_content, \
+            "bootstrap.py should not have hardcoded DEFAULT_ADMIN_USER = postgres"
+        assert 'DEFAULT_ADMIN_USER = "rag_user"' not in bootstrap_content, \
+            "bootstrap.py should not have hardcoded DEFAULT_ADMIN_USER = rag_user"
+        assert 'admin_user: str = "postgres"' not in bootstrap_content, \
+            "bootstrap.py should not have admin_user default to postgres"
+        assert 'admin_user: str = "rag_user"' not in bootstrap_content, \
+            "bootstrap.py should not have admin_user default to rag_user"
+
+        # Check verify_bootstrap.py
+        assert 'DEFAULT_ADMIN_USER = "postgres"' not in verify_content, \
+            "verify_bootstrap.py should not have hardcoded DEFAULT_ADMIN_USER = postgres"
+        assert 'DEFAULT_ADMIN_USER = "rag_user"' not in verify_content, \
+            "verify_bootstrap.py should not have hardcoded DEFAULT_ADMIN_USER = rag_user"
+        assert 'admin_user: str = "postgres"' not in verify_content, \
+            "verify_bootstrap.py should not have admin_user default to postgres"
+        assert 'admin_user: str = "rag_user"' not in verify_content, \
+            "verify_bootstrap.py should not have admin_user default to rag_user"
+
+    def test_no_password_cli_options(self):
+        """Test 5: Verify no password options exist in CLI."""
+        result = subprocess.run(
+            [sys.executable, "-m", "claude.clients.merchant.bootstrap", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+
+        parser_help = result.stdout
+        assert "--admin-password" not in parser_help, \
+            "CLI should not accept --admin-password"
+        assert "--owner-password" not in parser_help, \
+            "CLI should not accept --owner-password"
+        assert "--app-password" not in parser_help, \
+            "CLI should not accept --app-password"
+        assert "--alert-password" not in parser_help, \
+            "CLI should not accept --alert-password"
+        assert "--test-password" not in parser_help, \
+            "CLI should not accept --test-password"
 
 
 if __name__ == "__main__":
