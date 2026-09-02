@@ -50,4 +50,4 @@ def search(
 RAG_TOOLS = {
     "ready": ready,
     "search": search,
-}
+}   
