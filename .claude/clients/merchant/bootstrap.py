@@ -655,6 +655,11 @@ def _generate_plan(
 
     plan.add_grant(f"GRANT USAGE on schema {SCHEMA_NAME} to {ROLE_APP} in {runtime_db}")
     plan.add_grant(f"GRANT USAGE on schema {SCHEMA_NAME} to {ROLE_ALERT} in {runtime_db}")
+    plan.add_grant(
+        f"GRANT SELECT on table "
+        f"{SCHEMA_NAME}.schema_migrations "
+        f"to {ROLE_APP} in {runtime_db}"
+    )
     plan.add_grant(f"GRANT USAGE on schema {SCHEMA_NAME} to {ROLE_TEST} in {test_db}")
 
     # Check schema in runtime database
@@ -982,6 +987,19 @@ def _apply_plan(
                         )
                     )
 
+            # Read-only migration status and plan use merchant_app.
+            # Grant only the migration-history access they require.
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL(
+                        "GRANT SELECT ON TABLE "
+                        "{}.schema_migrations TO {}"
+                    ).format(
+                        sql.Identifier(SCHEMA_NAME),
+                        sql.Identifier(ROLE_APP),
+                    )
+                )
+
             db_conn.commit()
         except Exception:
             db_conn.rollback()
@@ -1045,24 +1063,35 @@ def _apply_plan(
                 )
 
             # Create schema_migrations table if needed
-            if not plan.tables[f"{test_db}.{SCHEMA_NAME}.schema_migrations"]["exists"]:
+            if not plan.tables[
+                f"{test_db}.{SCHEMA_NAME}.schema_migrations"
+            ]["exists"]:
                 with db_conn.cursor() as cur:
-                    cur.execute(sql.SQL(
-                        """
-                        CREATE TABLE {}.schema_migrations (
-                            version INTEGER PRIMARY KEY CHECK (version > 0),
-                            checksum TEXT NOT NULL CHECK (btrim(checksum) <> ''),
-                            description TEXT NOT NULL CHECK (btrim(description) <> ''),
-                            executed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            execution_time_ms INTEGER NOT NULL CHECK (execution_time_ms >= 0)
-                        )
-                        """.strip()
-                    ).format(
-                        sql.Identifier(SCHEMA_NAME),
-                    ))
-                    # Set owner of table to merchant_test
                     cur.execute(
-                        sql.SQL("ALTER TABLE {}.schema_migrations OWNER TO {}").format(
+                        sql.SQL(
+                            """
+                            CREATE TABLE {}.schema_migrations (
+                                version INTEGER PRIMARY KEY
+                                    CHECK (version > 0),
+                                checksum TEXT NOT NULL
+                                    CHECK (btrim(checksum) <> ''),
+                                description TEXT NOT NULL
+                                    CHECK (btrim(description) <> ''),
+                                executed_at TIMESTAMPTZ NOT NULL
+                                    DEFAULT CURRENT_TIMESTAMP,
+                                execution_time_ms INTEGER NOT NULL
+                                    CHECK (execution_time_ms >= 0)
+                            )
+                            """.strip()
+                        ).format(
+                            sql.Identifier(SCHEMA_NAME),
+                        )
+                    )
+                    cur.execute(
+                        sql.SQL(
+                            "ALTER TABLE {}.schema_migrations "
+                            "OWNER TO {}"
+                        ).format(
                             sql.Identifier(SCHEMA_NAME),
                             sql.Identifier(ROLE_TEST),
                         )

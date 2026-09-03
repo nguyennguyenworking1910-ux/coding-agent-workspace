@@ -413,6 +413,126 @@ class TestRequiredGrants:
         owner_grants = [c for c in grant_calls if ROLE_OWNER in c and "coding_agent_merchant" in c]
         assert len(owner_grants) > 0, "Should execute GRANT CONNECT for merchant_owner"
 
+    @patch("claude.clients.merchant.bootstrap.psycopg.connect")
+    def test_existing_migration_table_grants_app_select(
+        self,
+        mock_connect,
+    ):
+        """Existing runtime history must remain readable by app."""
+        admin_connection = MagicMock()
+        admin_cursor = MagicMock()
+
+        admin_connection.cursor.return_value.__enter__ = MagicMock(
+            return_value=admin_cursor
+        )
+        admin_connection.cursor.return_value.__exit__ = MagicMock(
+            return_value=None
+        )
+
+        database_connection = MagicMock()
+        database_cursor = MagicMock()
+
+        database_connection.__enter__ = MagicMock(
+            return_value=database_connection
+        )
+        database_connection.__exit__ = MagicMock(
+            return_value=None
+        )
+        database_connection.cursor.return_value.__enter__ = (
+            MagicMock(return_value=database_cursor)
+        )
+        database_connection.cursor.return_value.__exit__ = (
+            MagicMock(return_value=None)
+        )
+
+        mock_connect.return_value = database_connection
+
+        plan = BootstrapPlan()
+
+        for role in (
+            ROLE_OWNER,
+            ROLE_APP,
+            ROLE_ALERT,
+            ROLE_TEST,
+        ):
+            plan.add_role(role, True)
+
+        plan.add_database(
+            "coding_agent_merchant",
+            ROLE_OWNER,
+            True,
+        )
+        plan.add_database(
+            "coding_agent_merchant_test",
+            ROLE_TEST,
+            True,
+        )
+        plan.add_schema(
+            "merchant_ops",
+            "coding_agent_merchant",
+            ROLE_OWNER,
+            True,
+        )
+        plan.add_schema(
+            "merchant_ops",
+            "coding_agent_merchant_test",
+            ROLE_TEST,
+            True,
+        )
+        plan.add_table(
+            "schema_migrations",
+            "coding_agent_merchant",
+            "merchant_ops",
+            True,
+        )
+        plan.add_table(
+            "schema_migrations",
+            "coding_agent_merchant_test",
+            "merchant_ops",
+            True,
+        )
+
+        _apply_plan(
+            admin_connection,
+            "127.0.0.1",
+            5434,
+            "rag_user",
+            "coding_agent_rag",
+            "admin-password",
+            plan,
+            "coding_agent_merchant",
+            "coding_agent_merchant_test",
+            "owner-password",
+            "app-password",
+            "alert-password",
+            "test-password",
+        )
+
+        executed_queries = [
+            str(call.args[0])
+            for call in database_cursor.execute.call_args_list
+        ]
+
+        migration_select_grants = [
+            query
+            for query in executed_queries
+            if "GRANT SELECT ON TABLE" in query.upper()
+        ]
+
+        # The table already existed, but the repair grant still ran.
+        assert len(migration_select_grants) == 1
+        assert (
+            "schema_migrations"
+            in migration_select_grants[0]
+        )
+        assert ROLE_APP in migration_select_grants[0]
+
+        # Existing migration tables must not be recreated.
+        assert not any(
+            "CREATE TABLE" in query.upper()
+            for query in executed_queries
+        )
+
     def test_plan_includes_app_alert_grants(self):
         """Plan should include GRANT CONNECT for app and alert roles."""
         plan = BootstrapPlan()

@@ -822,15 +822,75 @@ def main() -> int:
 
         # Resolve database configuration
         if args.database == "runtime":
-            dbname = _get_env_or_fail("MERCHANT_DB_NAME", "Runtime database name")
-            user = _get_env_or_fail("MERCHANT_DB_USER", "Runtime database user")
-            password = os.environ.get("MERCHANT_DB_PASSWORD", "")
+            dbname = _get_env_or_fail(
+                "MERCHANT_DB_NAME",
+                "Runtime database name",
+            )
             expected_db = RUNTIME_DB_NAME
-        else:  # test
-            dbname = _get_env_or_fail("MERCHANT_TEST_DB_NAME", "Test database name")
-            user = os.environ.get("MERCHANT_TEST_USER", "merchant_test")
-            password = os.environ.get("MERCHANT_TEST_PASSWORD", "")
+
+            if mode == "apply":
+                # Runtime schema changes require the object-owner role.
+                # merchant_app deliberately has no CREATE/ALTER/DROP rights.
+                user = os.environ.get(
+                    "MERCHANT_OWNER_USER",
+                    "merchant_owner",
+                ).strip()
+
+                if not user:
+                    raise ValueError(
+                        "Migration owner user is empty "
+                        "(env var: MERCHANT_OWNER_USER)"
+                    )
+
+                if user != "merchant_owner":
+                    raise ValueError(
+                        "Runtime migrations must execute as "
+                        "merchant_owner, not "
+                        f"{user}"
+                    )
+
+                password = _get_env_or_fail(
+                    "MERCHANT_OWNER_PASSWORD",
+                    "Migration owner password",
+                )
+
+            else:
+                # Status and plan are read-only and may use merchant_app.
+                user = _get_env_or_fail(
+                    "MERCHANT_DB_USER",
+                    "Runtime database user",
+                )
+                password = os.environ.get(
+                    "MERCHANT_DB_PASSWORD",
+                    "",
+                )
+
+        else:
+            dbname = _get_env_or_fail(
+                "MERCHANT_TEST_DB_NAME",
+                "Test database name",
+            )
+            user = os.environ.get(
+                "MERCHANT_TEST_USER",
+                "merchant_test",
+            ).strip()
+            password = os.environ.get(
+                "MERCHANT_TEST_PASSWORD",
+                "",
+            )
             expected_db = TEST_DB_NAME
+
+            if not user:
+                raise ValueError(
+                    "Test database user is empty "
+                    "(env var: MERCHANT_TEST_USER)"
+                )
+
+            if mode == "apply" and user != "merchant_test":
+                raise ValueError(
+                    "Test migrations must execute as merchant_test, "
+                    f"not {user}"
+                )
 
         # Get other configuration
         host = os.environ.get("MERCHANT_DB_HOST", DEFAULT_HOST)

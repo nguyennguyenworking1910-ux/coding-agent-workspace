@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.0,<2.0",
     "google-cloud-bigquery>=3.0,<4.0",
     "filelock>=3.0,<4.0",
+    "psycopg[binary]>=3.2,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -40,8 +41,16 @@ packages = [
     "claude.agents.tools.rag",
     "claude.clients",
     "claude.system",
+    "claude.agents.tools.merchant",
+    "claude.clients.merchant",
+    "claude.workers",
 ]
 package-dir = {"claude" = ".claude"}
 
 [tool.setuptools.package-data]
 claude = ["**/*.py"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests requiring live external services and explicit opt-in",
+]
