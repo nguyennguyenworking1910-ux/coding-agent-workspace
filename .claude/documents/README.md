@@ -64,6 +64,11 @@ This folder contains all system documentation, setup guides, and reference mater
   - Agent response contracts, CLI boundaries, transaction and concurrency model
   - Testing strategy, migration strategy, and implementation checkpoints
 
+- **[MERCHANT_CHECKPOINT_5_HANDOFF_2026-09-05.md](./MERCHANT_CHECKPOINT_5_HANDOFF_2026-09-05.md)** — Checkpoint 5 implementation handoff
+  - Completed read/write CLI, proposal binding, redaction, and repository adapters
+  - Migration 3 checksum, test-database state, and least-privilege proof
+  - Regression evidence, runtime boundary, and Checkpoint 6 continuation plan
+
 ---
 
 ## 🧭 Where things live
@@ -125,4 +130,4 @@ When creating new documentation:
 
 ---
 
-**Last Updated:** August 28, 2026
+**Last Updated:** September 5, 2026

@@ -70,6 +70,7 @@ def test_migrations_are_discovered_in_version_order():
     ] == [
         (1, "initial_schema"),
         (2, "add_project_payment_period"),
+        (3, "add_cli_write_grants"),
     ]
 
 
