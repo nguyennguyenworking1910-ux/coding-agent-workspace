@@ -18,8 +18,12 @@ from claude.agents.tools.merchant.engine import (
 from claude.agents.tools.merchant.gates import (
     GateValidationResult,
 )
+from claude.agents.tools.merchant.project_engine import (
+    propose_project_transition,
+)
 from claude.clients.merchant.repository import (
     MerchantRepository,
+    ProjectNotFoundError,
 )
 from claude.agents.tools.merchant.gate_resolver import (
     database_gate_kind,
@@ -33,6 +37,22 @@ class StepTransitionResult:
 
     project_id: str
     step_id: str
+    previous_status: str
+    current_status: str
+    previous_version: int
+    current_version: int
+    event_id: str
+    event_type: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTransitionResult:
+    """Summary of a committed project transition."""
+
+    project_id: str
     previous_status: str
     current_status: str
     previous_version: int
@@ -490,6 +510,218 @@ class MerchantStepTransitionRepository:
                 procurement.created_at,
                 procurement.id
             FOR SHARE OF procurement
+            """,
+            (project_id,),
+        )
+
+        return [
+            dict(record)
+            for record in cursor.fetchall()
+        ]
+
+
+class MerchantProjectTransitionRepository:
+    """Validate and persist one project transition atomically."""
+
+    def __init__(
+        self,
+        repository: MerchantRepository,
+    ) -> None:
+        self.repository = repository
+
+    def transition_project(
+        self,
+        *,
+        project_id: str,
+        target_status: str,
+        expected_version: int,
+        occurred_at: datetime | None = None,
+        triggered_by: str | None = None,
+        allow_reopen: bool = False,
+    ) -> ProjectTransitionResult:
+        """Lock project state, validate, update, and audit."""
+
+        normalized_project_id = _uuid(
+            project_id,
+            "project_id",
+        )
+        normalized_triggered_by = (
+            _uuid(triggered_by, "triggered_by")
+            if triggered_by is not None
+            else None
+        )
+
+        with self.repository.connection() as connection:
+            with connection.transaction():
+                with connection.cursor(
+                    row_factory=dict_row,
+                ) as cursor:
+                    project = self._lock_project(
+                        cursor,
+                        normalized_project_id,
+                    )
+                    steps = self._lock_project_steps(
+                        cursor,
+                        normalized_project_id,
+                    )
+
+                    transition_plan = (
+                        propose_project_transition(
+                            {
+                                "project": project,
+                                "steps": steps,
+                            },
+                            target_status,
+                            expected_version=(
+                                expected_version
+                            ),
+                            occurred_at=occurred_at,
+                            allow_reopen=allow_reopen,
+                        )
+                    )
+
+                    cursor.execute(
+                        """
+                        UPDATE merchant_ops.projects
+                        SET
+                            status = %s,
+                            started_at = %s,
+                            completed_at = %s,
+                            updated_at = CURRENT_TIMESTAMP,
+                            version = %s
+                        WHERE id = %s
+                          AND merchant_id = %s
+                          AND status = %s
+                          AND version = %s
+                        """,
+                        (
+                            transition_plan.target_status,
+                            transition_plan.started_at,
+                            transition_plan.completed_at,
+                            transition_plan.new_version,
+                            normalized_project_id,
+                            uuid.UUID(
+                                transition_plan.merchant_id
+                            ),
+                            transition_plan.current_status,
+                            transition_plan.expected_version,
+                        ),
+                    )
+
+                    if cursor.rowcount != 1:
+                        raise WorkflowVersionConflictError(
+                            "Project changed before transition "
+                            "could be applied"
+                        )
+
+                    event_id = uuid.uuid4()
+
+                    cursor.execute(
+                        """
+                        INSERT INTO merchant_ops.project_events (
+                            id,
+                            merchant_id,
+                            project_id,
+                            event_type,
+                            entity_type,
+                            entity_id,
+                            change_summary,
+                            old_values,
+                            new_values,
+                            triggered_by,
+                            created_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, 'PROJECT',
+                            %s, %s, %s, %s, %s,
+                            CURRENT_TIMESTAMP
+                        )
+                        """,
+                        (
+                            event_id,
+                            uuid.UUID(
+                                transition_plan.merchant_id
+                            ),
+                            normalized_project_id,
+                            transition_plan.event_type,
+                            normalized_project_id,
+                            (
+                                "Project status changed from "
+                                f"{transition_plan.current_status} "
+                                "to "
+                                f"{transition_plan.target_status}"
+                            ),
+                            Jsonb(
+                                transition_plan.old_values
+                            ),
+                            Jsonb(
+                                transition_plan.new_values
+                            ),
+                            normalized_triggered_by,
+                        ),
+                    )
+
+        return ProjectTransitionResult(
+            project_id=transition_plan.project_id,
+            previous_status=(
+                transition_plan.current_status
+            ),
+            current_status=(
+                transition_plan.target_status
+            ),
+            previous_version=(
+                transition_plan.expected_version
+            ),
+            current_version=transition_plan.new_version,
+            event_id=str(event_id),
+            event_type=transition_plan.event_type,
+        )
+
+    @staticmethod
+    def _lock_project(
+        cursor: Any,
+        project_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        cursor.execute(
+            """
+            SELECT
+                project.id,
+                project.merchant_id,
+                project.status,
+                project.started_at,
+                project.completed_at,
+                project.version
+            FROM merchant_ops.projects AS project
+            WHERE project.id = %s
+            FOR UPDATE OF project
+            """,
+            (project_id,),
+        )
+
+        project = cursor.fetchone()
+
+        if project is None:
+            raise ProjectNotFoundError(
+                f"Merchant project not found: {project_id}"
+            )
+
+        return dict(project)
+
+    @staticmethod
+    def _lock_project_steps(
+        cursor: Any,
+        project_id: uuid.UUID,
+    ) -> list[dict[str, Any]]:
+        cursor.execute(
+            """
+            SELECT
+                step.id,
+                step.project_id,
+                step.status
+            FROM merchant_ops.project_steps AS step
+            WHERE step.project_id = %s
+            ORDER BY step.sequence_number, step.id
+            FOR UPDATE OF step
             """,
             (project_id,),
         )
