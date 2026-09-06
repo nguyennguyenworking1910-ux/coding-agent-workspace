@@ -122,6 +122,52 @@
       }
     },
     {
+      "id": "merchant-manager",
+      "name": "Merchant Manager",
+      "runtime": {
+        "model": "haiku",
+        "max_turns": 12,
+        "max_run_budget_usd": {
+          "small_task": 1.0,
+          "medium_task": 2.0,
+          "complex_task": 4.0
+        }
+      },
+      "description": "Reads Merchant project state and prepares confirmation-ready Merchant updates through the allowlisted JSON CLI",
+      "enabled": true,
+      "type": "merchant_manager",
+      "definition": ".claude/agents/merchant-manager.md",
+      "tools": ["Read", "Bash", "SendMessage", "TaskUpdate"],
+      "permissions": "write-confirming",
+      "merchant_access": {
+        "enabled": true,
+        "entry_point": ".claude/agents/tools/merchant/agent_cli.py",
+        "database_target": "runtime",
+        "read_operations": [
+          "merchant list",
+          "project list",
+          "project show",
+          "project history",
+          "project blockers",
+          "project alerts"
+        ],
+        "write_operations": [
+          "merchant create",
+          "contact import",
+          "project create",
+          "project update",
+          "step update",
+          "document revision-create",
+          "document approve",
+          "procurement update",
+          "integration identifier-set"
+        ],
+        "checkpoint_6_write_mode": "propose_only",
+        "runtime_apply": "denied_until_trusted_checkpoint_7_authority",
+        "note": "The teammate invokes the checked-in CLI through Bash without reading or passing database credentials. PostgreSQL is authoritative for current state. Runtime apply remains fail-closed until the trusted intent/policy authorization handoff is implemented."
+      }
+    },
+    {
       "id": "scheduler",
       "name": "Scheduler",
       "runtime": {
@@ -173,6 +219,7 @@
         "reviewer",
         "red-team",
         "group-sales-manager",
+        "merchant-manager",
         "scheduler"
       ]
     },
@@ -217,6 +264,28 @@
         {"name": "list_datasets", "description": "List the datasets visible in the configured project"},
         {"name": "list_tables", "description": "List the tables and views in a dataset"},
         {"name": "get_table_schema", "description": "Describe the columns of a table or view"}
+      ]
+    },
+    {
+      "id": "merchant_cli",
+      "name": "Merchant Manager CLI",
+      "description": "Credential-safe operational adapter that fixes the Merchant target to runtime, permits reads and redacted write proposals, and denies runtime apply",
+      "type": "operational_data_access",
+      "enabled": true,
+      "module": "claude.agents.tools.merchant.agent_cli",
+      "entry_point": ".claude/agents/tools/merchant/agent_cli.py",
+      "database_target": "runtime",
+      "credential_arguments": "forbidden",
+      "runtime_apply": "denied_until_trusted_checkpoint_7_authority",
+      "methods": [
+        {
+          "name": "prepare_agent_cli_argv",
+          "description": "Validate one allowlisted operational request and prepend the fixed runtime target"
+        },
+        {
+          "name": "invoke_agent_cli",
+          "description": "Invoke the existing Merchant JSON CLI with runtime_authorized fixed to false"
+        }
       ]
     },
     {

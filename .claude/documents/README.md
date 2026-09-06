@@ -69,6 +69,11 @@ This folder contains all system documentation, setup guides, and reference mater
   - Migration 3 checksum, test-database state, and least-privilege proof
   - Regression evidence, runtime boundary, and Checkpoint 6 continuation plan
 
+- **[MERCHANT_CHECKPOINT_6_HANDOFF_2026-09-06.md](./MERCHANT_CHECKPOINT_6_HANDOFF_2026-09-06.md)** — Checkpoint 6 implementation handoff
+  - Registered `merchant-manager` teammate and `/solve` routing boundary
+  - Credential-safe runtime adapter, proposal-only writes, and authority denial
+  - Agent Team result-delivery contract and Checkpoint 7 continuation plan
+
 ---
 
 ## 🧭 Where things live
@@ -79,7 +84,7 @@ configuration**, and the harness only finds them there:
 | Markdown | Location | What it is |
 |---|---|---|
 | Documentation | `.claude/documents/` | What you are reading |
-| Subagent definitions | `.claude/agents/*.md` | The seven specialists |
+| Subagent definitions | `.claude/agents/*.md` | The eight specialists |
 | Slash commands | `.claude/commands/*.md` | `/solve`, `/schedule-agent` |
 
 Moving a subagent or command into this folder silently stops it from existing. See the

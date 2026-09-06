@@ -14,6 +14,7 @@ RAG_AGENTS = (
     "reviewer",
     "red-team",
     "group-sales-manager",
+    "merchant-manager",
 )
 
 

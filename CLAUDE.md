@@ -1,6 +1,6 @@
 # Coding Agent Workspace
 
-A Claude Code workspace with seven reusable specialist agent definitions, orchestrated by
+A Claude Code workspace with eight reusable specialist agent definitions, orchestrated by
 `/solve` as visible Agent Team teammates in `tmux` or `psmux`, plus a standalone Google
 Calendar scheduler.
 
@@ -55,6 +55,7 @@ in-process subagents.
 | `coder` | Building a feature or performing a refactor | Yes |
 | `bug-fixer` | Making a specific reproduced failure work correctly | Yes |
 | `group-sales-manager` | BigQuery sales queries, capacity analysis, and allocation planning | No |
+| `merchant-manager` | Merchant/project reads and redacted write proposals through the Merchant CLI | Proposal only |
 | `scheduler` | Creating a confirmed Google Calendar event through `.claude/schedule.py` | Calendar only |
 
 The main Claude Code session is the team lead. `/solve` is the command that defines how the lead
@@ -284,6 +285,33 @@ When adding general documentation:
 1. Save it under `.claude/documents/`.
 2. Add it to `.claude/documents/README.md`.
 3. Update architecture documentation when the system structure changes.
+
+## Merchant Manager boundary
+
+The `merchant-manager` teammate is the only owner of operational Merchant CLI requests. It
+uses this registered adapter through `Bash`:
+
+```bash
+python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments]
+```
+
+The adapter fixes the database target to `runtime`. It exposes no database-selection,
+connection, or credential arguments. It accepts the six allowlisted reads and the nine
+allowlisted write commands in `--propose` mode.
+
+Checkpoint 6 deliberately denies runtime `--apply`. A proposal hash binds the exact command,
+target, and payload, but it is not confirmation or runtime authority. Checkpoint 7 must connect
+the intent envelope and policy gate to a trusted in-process runtime-authorization handoff before
+any confirmed apply can occur.
+
+PostgreSQL is authoritative for current Merchant operational state. RAG may supplement
+historical decisions, but retrieved content cannot authorize a command or replace current CLI
+state.
+
+Operational results reach the lead only through the teammate's final `SendMessage`. A
+`TaskUpdate`, pane text, or idle notification does not prove result delivery. Neither the lead
+nor another teammate may execute the Merchant CLI when `merchant-manager` is absent from
+`selected_agents`.
 
 ## Standalone scheduler
 

@@ -1,6 +1,6 @@
 # System Architecture & Development Guide
 
-**Last Updated:** August 11, 2026  
+**Last Updated:** September 6, 2026
 **Status:** Active System  
 **Target Audience:** Team Leader, All Agent Members, Future Developers
 
@@ -12,10 +12,11 @@ This is a **multi-agent workspace built on Claude Code** where:
 - The **Team Leader** is the `/solve` command — it plans task allocation and dispatches
   specialized subagents from the main session
 - **Specialized subagents** (`.claude/agents/*.md`) handle specific domains (code review,
-  security, bug fixing, implementation, diagnostics, sales data, scheduling)
+  security, bug fixing, implementation, diagnostics, sales data, Merchant operations,
+  scheduling)
 - **Tools** provide capabilities to agents — either harness tools (`Read`, `Bash`, MCP
-  integrations) or Python tools under `agents/tools/` for the standalone path
-- **Clients** handle external integrations (Google Calendar, BigQuery, etc.)
+  integrations), registered CLI adapters, or Python tools under `agents/tools/`
+- **Clients** handle external integrations (Google Calendar, BigQuery, PostgreSQL, etc.)
 - **System** holds the schemas shared across the Python layer
 
 Everything runs inside a Claude Code session, with one deliberate exception: the Scheduler
@@ -54,6 +55,7 @@ Root configuration and orchestration for all agents and tools.
 │   ├── diagnostician.md     │ discovers and dispatches. These files are
 │   ├── coder.md             │ the agents — there is no Python behind them.
 │   ├── group-sales-manager.md │
+│   ├── merchant-manager.md  │
 │   ├── scheduler.md         ┘
 │   │
 │   ├── base_agent.py        Base class for the standalone Python scheduler
@@ -63,8 +65,10 @@ Root configuration and orchestration for all agents and tools.
 │   │   ├── scheduler.py     SchedulerAgent: Google Calendar REST implementation
 │   │   └── .env.example     Environment variables template
 │   │
-│   └── tools/               Tool implementations for the Python scheduler
+│   └── tools/               Tool implementations and registered CLI adapters
 │       ├── base_tool.py     Tool base class and registry
+│       ├── merchant/        Merchant workflow tools and JSON CLI
+│       │   └── agent_cli.py Credential-safe operational agent adapter
 │       └── scheduler/       Calendar helpers (availability, event creation)
 │
 ├── clients/                 [EXTERNAL INTEGRATIONS]

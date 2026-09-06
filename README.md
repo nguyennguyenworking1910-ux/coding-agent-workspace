@@ -11,7 +11,7 @@ automatically.
 
 Two things live in this repo:
 
-1. **Subagent definitions** (`.claude/agents/*.md`) — seven specialists that Claude Code
+1. **Subagent definitions** (`.claude/agents/*.md`) — eight specialists that Claude Code
    discovers and dispatches, orchestrated by the `/solve` command.
 2. **The standalone scheduler** (`.claude/schedule.py`) — the one piece of Python that runs
    outside a session, for scripting or cron. It talks to the Google Calendar REST API and
@@ -34,6 +34,7 @@ file to change how the agents behave; it previously lived inside `.claude/settin
 | `coder` | Building a feature, doing a refactor | Yes |
 | `bug-fixer` | Making a specific broken thing work | Yes |
 | `group-sales-manager` | Sales data queries, capacity and allocation analysis | No |
+| `merchant-manager` | Merchant/project reads and redacted write proposals | Proposal only |
 | `scheduler` | Putting something on the calendar | Calendar only |
 
 Writing agents edit the working tree and **never commit** — you review the diff and commit
@@ -103,17 +104,19 @@ gcloud auth application-default login \
 ├── settings.local.json   # Local permission grants — not committed
 │
 ├── agents/
-│   ├── reviewer.md              # ← the seven subagent definitions
+│   ├── reviewer.md              # ← the eight subagent definitions
 │   ├── red-team.md              #   (markdown + YAML frontmatter is the
 │   ├── bug-fixer.md             #    only form Claude Code dispatches)
 │   ├── diagnostician.md
 │   ├── coder.md
 │   ├── group-sales-manager.md
+│   ├── merchant-manager.md
 │   ├── scheduler.md
 │   │
 │   ├── base_agent.py            # Python: base class for the standalone scheduler
 │   ├── system_init.py           # Python: the ARCHITECTURE.md reading requirement
 │   ├── team/scheduler.py        # Python: SchedulerAgent implementation
+│   ├── tools/merchant/          # Merchant CLI and credential-safe agent adapter
 │   └── tools/scheduler/         # Python: calendar helpers
 │
 ├── commands/
@@ -188,7 +191,7 @@ python .claude/system_test.py
 ```
 
 Checks folder structure, that every `.md` is in a valid location, that `agents.json` parses,
-that all seven subagents have frontmatter and the ARCHITECTURE.md requirement, that each
+that all eight subagents have frontmatter and the ARCHITECTURE.md requirement, that each
 registry entry has a matching definition whose `name`, `model`, and `maxTurns` agree with it,
 that `AGENTS_BY_OPERATION` in the intent parser names only enabled agents, and that the
 documentation index is complete. It exits non-zero on failure.

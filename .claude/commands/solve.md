@@ -211,9 +211,56 @@ type, but its presence does not authorize dispatch; only `selected_agents` does.
 | `coder` | Feature implementation and refactoring from a specification | Yes |
 | `bug-fixer` | Repairing a specific reproduced failure or defect | Yes |
 | `group-sales-manager` | Sales-data queries, capacity analysis, and allocation planning | No |
+| `merchant-manager` | Merchant/project reads and redacted write proposals through the Merchant CLI | Proposal only; runtime apply blocked |
 | `scheduler` | Creating a confirmed calendar event | Calendar only |
 
 Never invent an unregistered teammate type.
+
+### Merchant routing contract
+
+Merchant operational work has one owner: `merchant-manager`. Apply all of these rules in
+addition to the envelope gate and normal dispatch contract:
+
+- A Merchant-state read may be assigned only to `merchant-manager`, and only when
+  `merchant-manager` appears in `selected_agents`.
+- A Merchant write-intent proposal may be assigned only to `merchant-manager`, and only when
+  the envelope authorizes that teammate. The assignment must say that the requested outcome is
+  a redacted `--propose` result and that no change may be applied.
+- Do not route Merchant operations to `coder`, `bug-fixer`, `diagnostician`, another business
+  teammate, or the lead session. Those roles may work on Merchant source code when separately
+  selected for a development task, but they may not execute operational Merchant CLI commands.
+- The lead must never run the Merchant CLI on a teammate's behalf or move an unauthorized
+  Merchant operation into its own pane.
+- If a Merchant operation is requested but `merchant-manager` is absent from
+  `selected_agents`, report the authorization mismatch and stop. Do not add the teammate,
+  substitute another role, reconstruct the envelope, or execute the command in the lead.
+- Runtime `--apply` remains unavailable in Checkpoint 6. Even if a request contains approval or
+  a proposal hash, dispatch must not claim or imply trusted runtime authority. Report that the
+  Checkpoint 7 intent/policy authorization handoff is required.
+- The proposal hash binds a command, runtime target, and payload. It is not permission, a
+  credential, or a substitute for confirmation.
+
+For an authorized Merchant assignment, require the teammate to use only the registered
+credential-free Merchant CLI interface and to include the redacted CLI JSON, exit outcome,
+confirmation state, failures, and unresolved work in its final `SendMessage` report.
+
+Every Merchant assignment must explicitly declare all of these fields in its prompt:
+
+- `database_target: runtime`;
+- `authorized_mode: READ` or `authorized_mode: PROPOSE`;
+- the exact allowlisted Merchant operation and the identifiers or filters supplied by the
+  request;
+- that database and credential arguments are forbidden;
+- that runtime `--apply` is outside Checkpoint 6 authority;
+- that `TaskUpdate` is a status signal only and final result delivery requires `SendMessage`.
+
+If any required field is missing or conflicts with the envelope, do not improvise it. Stop the
+Merchant dispatch and report the incomplete assignment contract.
+
+For the Merchant report ledger, accept delivery only when `SendMessage` from the named
+`merchant-manager` teammate carries the operation, runtime target, authorized mode, redacted
+CLI JSON, exit outcome, confirmation state, failures, and unresolved work. `TaskUpdate`, pane
+text, and idle notifications do not establish Merchant result delivery.
 
 ## 7. Limits are hard boundaries
 

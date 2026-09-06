@@ -156,6 +156,7 @@ class SystemTest:
             '.claude/agents/diagnostician.md',
             '.claude/agents/coder.md',
             '.claude/agents/group-sales-manager.md',
+            '.claude/agents/merchant-manager.md',
             '.claude/agents/scheduler.md',
         ]
 
