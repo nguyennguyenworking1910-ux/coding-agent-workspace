@@ -3,8 +3,9 @@
 **Date:** September 6, 2026
 **Branch:** `feat/workspace-rag`
 **Base commit:** `29733fd` (`Checkpoint 5 completed`)
+**Completion commit:** `ba16daa` (`Complete Checkpoint 6 merchant manager agent`)
 **Checkpoint:** 6 — Merchant Manager Agent Registration
-**Status:** Implementation and verification complete; staging review pending
+**Status:** Complete, committed, and pushed to `feat/workspace-rag`
 
 ## 1. Outcome
 
@@ -174,6 +175,7 @@ Completed gates:
 | Complete Merchant non-integration regression | 1,036 passed, 8 deselected, 97 subtests passed |
 | Root workspace non-integration regression | 1,107 passed, 8 deselected, 118 subtests passed |
 | Final structural system validation | 80/80 passed |
+| Post-commit clean-checkout system validation | 81/81 passed |
 | `git diff --check` | Passed after every gate |
 
 The final Windows regressions ran with Python 3.11.9 and pytest 9.1.1. Live integration tests
@@ -223,12 +225,18 @@ Checkpoint 7 integrates Merchant intent and policy in this order:
 Migration 3 remains unapplied to the runtime database. Any future runtime migration requires a
 fresh read-only plan, checksum review, backup/readiness review, and explicit authorization.
 
-## 12. Commit boundary
+## 12. Commit record
 
-Before committing Checkpoint 6:
+Checkpoint 6 was committed and pushed to `feat/workspace-rag` as:
 
-1. Review the exact changed and untracked file list.
-2. Confirm no `.env`, credential, cache, archive, or real Merchant data is staged.
-3. Run `git diff --cached --check` after staging the intended files.
-4. Commit the complete Checkpoint 6 implementation and finalized handoff together.
-5. Push only to `feat/workspace-rag` after confirming the branch and remote.
+```text
+ba16daa Complete Checkpoint 6 merchant manager agent
+```
+
+Post-commit verification confirmed:
+
+1. The remote branch head matches `ba16daa`.
+2. The clean checkout has no modified or untracked files.
+3. No `.env`, credential, cache, archive, or real Merchant data was committed.
+4. `git show --check ba16daa` reports no whitespace errors.
+5. The structural system validation passes 81/81 from the clean checkout.

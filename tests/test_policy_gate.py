@@ -136,6 +136,7 @@ class TeammateToolGrantTests(unittest.TestCase):
         "bug-fixer",
         "group-sales-manager",
         "scheduler",
+        "merchant-manager",
     )
 
     REQUIRED_TOOLS = ("SendMessage", "TaskUpdate")

@@ -10,6 +10,7 @@ from claude.agents.tools.merchant.cli_contract import (
     MerchantCliContractError,
     ProposalHashError,
     RuntimeWriteDeniedError,
+    issue_runtime_apply_authorization,
     proposal_hash,
 )
 from claude.agents.tools.merchant.write_commands import (
@@ -33,6 +34,21 @@ class RecordingHandler:
     def __call__(self, payload):
         self.calls.append(payload)
         return self.result
+
+
+def _runtime_authorization(proposal):
+    confirmation = proposal["confirmation"]
+    return issue_runtime_apply_authorization(
+        confirmation,
+        {
+            "operation": "merchant_apply",
+            "subagent_type": "merchant-manager",
+            "teammate_name": "merchant-manager",
+            "confirmation_hash": confirmation[
+                "confirmation_hash"
+            ],
+        },
+    )
 
 
 def test_propose_never_calls_mutation_handler():
@@ -256,7 +272,7 @@ def test_runtime_authority_is_checked_before_handler():
     assert handler.calls == []
 
 
-def test_trusted_runtime_apply_uses_exact_proposal():
+def test_trusted_runtime_capability_uses_exact_proposal():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"merchant create": handler}
@@ -276,7 +292,9 @@ def test_trusted_runtime_apply_uses_exact_proposal():
         "runtime",
         payload,
         proposal_hash=proposal["proposal_hash"],
-        runtime_authorized=True,
+        runtime_authorization=_runtime_authorization(
+            proposal
+        ),
     )
 
     assert result["database"] == "runtime"

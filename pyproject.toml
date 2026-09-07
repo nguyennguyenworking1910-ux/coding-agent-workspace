@@ -40,6 +40,7 @@ packages = [
     "claude.agents.tools.scheduler",
     "claude.agents.tools.rag",
     "claude.clients",
+    "claude.hooks",
     "claude.system",
     "claude.agents.tools.merchant",
     "claude.clients.merchant",

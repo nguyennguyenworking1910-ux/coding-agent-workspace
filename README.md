@@ -34,8 +34,11 @@ file to change how the agents behave; it previously lived inside `.claude/settin
 | `coder` | Building a feature, doing a refactor | Yes |
 | `bug-fixer` | Making a specific broken thing work | Yes |
 | `group-sales-manager` | Sales data queries, capacity and allocation analysis | No |
-| `merchant-manager` | Merchant/project reads and redacted write proposals | Proposal only |
+| `merchant-manager` | Merchant/project reads, redacted proposals, and exact confirmed-apply handoff | Ordinary CLI read/propose only; trusted in-process apply |
 | `scheduler` | Putting something on the calendar | Calendar only |
+
+The ordinary CLI remains read/propose-only. A Merchant mutation can run only through the
+policy-accepted, one-use, in-process session handoff documented in the Checkpoint 7 handoff.
 
 Writing agents edit the working tree and **never commit** — you review the diff and commit
 yourself.
@@ -124,7 +127,10 @@ gcloud auth application-default login \
 │   └── schedule-agent.md # /schedule-agent — dispatches the scheduler
 │
 ├── clients/              # Google Calendar API wrapper + credential resolution
-├── system/schemas.py     # TaskResult, shared by the Python scheduler path
+├── hooks/                # Intent/policy gates and locked per-session run state
+├── system/
+│   ├── schemas.py                 # TaskResult, shared by the scheduler path
+│   └── merchant_runtime_handoff.py # One-use confirmed Merchant apply bridge
 ├── documents/            # ALL markdown documentation lives here
 └── schedule.py           # Standalone scheduler entry point
 ```
@@ -143,6 +149,8 @@ Read in this order:
    from a session or a shell, and credential troubleshooting
 5. **[.claude/documents/BIGQUERY_INTEGRATION.md](./.claude/documents/BIGQUERY_INTEGRATION.md)** —
    adding and running `.sql` query templates
+6. **[.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md)** —
+   Merchant intent, confirmation, dispatch, and trusted runtime-apply boundary
 
 Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 

@@ -411,19 +411,18 @@ def test_runtime_apply_fails_closed_without_trusted_authority():
         )
 
 
-def test_runtime_apply_accepts_only_literal_true_authority():
+def test_runtime_apply_rejects_boolean_authority():
     with pytest.raises(RuntimeWriteDeniedError):
         require_apply_authorization(
             "merchant create",
             "runtime",
-            runtime_authorized=1,
+            runtime_authorization=True,
+            payload={
+                "code": "BETA",
+                "name": "Beta Media",
+            },
+            proposal_hash="0" * 64,
         )
-
-    assert require_apply_authorization(
-        "merchant create",
-        "runtime",
-        runtime_authorized=True,
-    ) is None
 
 
 def test_read_command_cannot_enter_apply_mode():

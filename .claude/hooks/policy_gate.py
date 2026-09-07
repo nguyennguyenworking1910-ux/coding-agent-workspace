@@ -16,6 +16,8 @@ top-level `decision` field, which PreToolUse no longer reads.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 import sys
@@ -24,8 +26,9 @@ from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from runtime_state import locked_state  # noqa: E402  (path shim must run first)
+    from runtime_state import locked_state  # noqa: E402
+else:
+    from .runtime_state import locked_state
 
 HOOK_EVENT_NAME = "PreToolUse"
 
@@ -43,6 +46,60 @@ RISK_READ_ONLY = "read_only"
 RISK_WRITE = "write"
 RISK_EXTERNAL_WRITE = "external_write"
 RISK_DESTRUCTIVE = "destructive"
+
+MERCHANT_MANAGER_AGENT = "merchant-manager"
+MERCHANT_OPERATIONS = frozenset(
+    {"merchant_read", "merchant_propose", "merchant_apply"}
+)
+MERCHANT_WRITE_COMMANDS = frozenset(
+    {
+        "contact import",
+        "document approve",
+        "document revision-create",
+        "integration identifier-set",
+        "merchant create",
+        "procurement update",
+        "project create",
+        "project update",
+        "step update",
+    }
+)
+MERCHANT_APPLY_OPERATION = "merchant_apply"
+MERCHANT_DISPATCH_MARKER = (
+    "MERCHANT_DISPATCH_AUTHORIZATION_JSON"
+)
+MERCHANT_DISPATCH_MODE = (
+    "CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY"
+)
+MERCHANT_CONFIRMATION_FIELDS = frozenset(
+    {
+        "contract_version",
+        "confirmation_version",
+        "operation",
+        "command",
+        "database_target",
+        "expected_version",
+        "payload_hash",
+        "proposal_hash",
+        "confirmation_hash",
+    }
+)
+MERCHANT_DISPATCH_FIELDS = (
+    MERCHANT_CONFIRMATION_FIELDS | {"authorized_mode"}
+)
+MERCHANT_HASH_FIELDS = (
+    "payload_hash",
+    "proposal_hash",
+    "confirmation_hash",
+)
+
+_MERCHANT_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_MERCHANT_DISPATCH_BLOCK_PATTERN = re.compile(
+    r"(?ms)^MERCHANT_DISPATCH_AUTHORIZATION_JSON[ \t]*\r?\n"
+    r"```json[ \t]*\r?\n"
+    r"(?P<payload>\{.*?\})\r?\n"
+    r"```[ \t]*$"
+)
 
 # Verbs that mark a tool as mutating something outside this machine.
 EXTERNAL_MUTATION_VERBS = ("create", "update", "delete", "send", "publish", "upload")
@@ -407,6 +464,16 @@ def _check_agent_dispatch(
             "unique name. Provide it via the `name` parameter."
         )
 
+    merchant_decision = _check_merchant_dispatch(
+        state,
+        subagent_type,
+        teammate_name,
+        tool_input,
+    )
+
+    if merchant_decision is not None:
+        return merchant_decision
+
     max_rounds = _limit(state, "max_tool_rounds")
     agent_rounds = int(state.get("agent_rounds", 0))
 
@@ -433,7 +500,261 @@ def _check_agent_dispatch(
         members_used.append(teammate_name)
         state["members_used"] = members_used
 
+    if MERCHANT_APPLY_OPERATION in {
+        str(operation)
+        for operation in state.get("operations") or []
+    }:
+        confirmation = state["merchant_confirmation"]
+        state["merchant_dispatch_spent"] = True
+        state["merchant_dispatch"] = {
+            "operation": MERCHANT_APPLY_OPERATION,
+            "subagent_type": subagent_type,
+            "teammate_name": teammate_name,
+            "confirmation_hash": confirmation[
+                "confirmation_hash"
+            ],
+        }
+
     return None
+
+
+def _check_merchant_dispatch(
+    state: dict[str, Any],
+    subagent_type: str,
+    teammate_name: str,
+    tool_input: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Bind Merchant operational dispatch to the classified operation.
+
+    A confirmed apply carries hashes rather than raw payload. Gate 7.4 will
+    compare those hashes with the actual in-process CLI payload before it can
+    authorize a runtime mutation; this gate only authorizes the one teammate
+    dispatch that may receive that future handoff.
+    """
+
+    operations = {
+        str(operation)
+        for operation in state.get("operations") or []
+    }
+    merchant_operations = operations & MERCHANT_OPERATIONS
+    confirmation = state.get("merchant_confirmation")
+    prompt = (
+        str(tool_input.get("prompt"))
+        if isinstance(tool_input.get("prompt"), str)
+        else ""
+    )
+    has_dispatch_marker = MERCHANT_DISPATCH_MARKER in prompt
+
+    if not merchant_operations:
+        if confirmation is not None or has_dispatch_marker:
+            return deny(
+                "Blocked: Merchant confirmation or dispatch authority appeared "
+                "outside a classified Merchant operation. Request a fresh "
+                "matching envelope and stop."
+            )
+
+        return None
+
+    if len(merchant_operations) != 1:
+        return deny(
+            "Blocked: a Merchant dispatch must carry exactly one classified "
+            "Merchant operation. Request a narrower envelope and stop."
+        )
+
+    if operations != merchant_operations:
+        return deny(
+            "Blocked: a Merchant operational dispatch cannot combine Merchant "
+            "and non-Merchant operations. Request a single-operation envelope "
+            "and stop."
+        )
+
+    if selected_agents := [
+        str(agent)
+        for agent in state.get("selected_agents") or []
+    ]:
+        if selected_agents != [MERCHANT_MANAGER_AGENT]:
+            return deny(
+                "Blocked: Merchant operations require exclusive "
+                "merchant-manager authority in selected_agents. Do not "
+                "substitute or add a teammate."
+            )
+    else:
+        return deny(
+            "Blocked: the Merchant operation has no selected merchant-manager "
+            "authority. Nothing was dispatched."
+        )
+
+    if subagent_type != MERCHANT_MANAGER_AGENT:
+        return deny(
+            "Blocked: only merchant-manager may receive a Merchant operational "
+            "assignment. Nothing was dispatched."
+        )
+
+    if merchant_operations != {MERCHANT_APPLY_OPERATION}:
+        if confirmation is not None or has_dispatch_marker:
+            return deny(
+                "Blocked: read and proposal dispatches cannot carry Merchant "
+                "apply confirmation authority. Nothing was dispatched."
+            )
+
+        return None
+
+    if state.get("risk_level") not in {
+        RISK_EXTERNAL_WRITE,
+        RISK_DESTRUCTIVE,
+    }:
+        return deny(
+            "Blocked: Merchant apply dispatch requires an external_write or "
+            "destructive envelope. Nothing was dispatched."
+        )
+
+    if state.get("confirmed") is not True:
+        return deny(
+            "Blocked: Merchant apply dispatch requires exact confirmed state. "
+            "Generate and confirm a fresh proposal."
+        )
+
+    if state.get("merchant_dispatch_spent") is True:
+        return deny(
+            "Blocked: this Merchant confirmation has already authorized one "
+            "dispatch attempt. Generate and confirm a fresh proposal."
+        )
+
+    confirmation_error = _merchant_confirmation_error(
+        confirmation
+    )
+
+    if confirmation_error is not None:
+        return deny(
+            "Blocked: Merchant confirmation state is missing or malformed "
+            f"({confirmation_error}). Generate and confirm a fresh proposal."
+        )
+
+    dispatch, dispatch_error = _merchant_dispatch_payload(prompt)
+
+    if dispatch_error is not None:
+        return deny(
+            "Blocked: Merchant apply assignment has no exact dispatch binding "
+            f"({dispatch_error}). Nothing was dispatched."
+        )
+
+    expected_dispatch = dict(confirmation)
+    expected_dispatch["authorized_mode"] = (
+        MERCHANT_DISPATCH_MODE
+    )
+
+    if dispatch != expected_dispatch:
+        return deny(
+            "Blocked: Merchant apply assignment does not match the confirmed "
+            "command, target, payload hash, expected version, or proposal. "
+            "Nothing was dispatched; generate a fresh proposal if the action "
+            "changed."
+        )
+
+    return None
+
+
+def _merchant_confirmation_error(
+    confirmation: Any,
+) -> str | None:
+    if not isinstance(confirmation, dict):
+        return "confirmation object is absent"
+
+    if set(confirmation) != MERCHANT_CONFIRMATION_FIELDS:
+        return "confirmation fields are incomplete or unexpected"
+
+    if (
+        isinstance(confirmation.get("contract_version"), bool)
+        or confirmation.get("contract_version") != 1
+    ):
+        return "contract version is unsupported"
+
+    if (
+        isinstance(confirmation.get("confirmation_version"), bool)
+        or confirmation.get("confirmation_version") != 1
+    ):
+        return "confirmation version is unsupported"
+
+    if confirmation.get("operation") != MERCHANT_APPLY_OPERATION:
+        return "operation is not merchant_apply"
+
+    if confirmation.get("database_target") != "runtime":
+        return "database target is not runtime"
+
+    command = confirmation.get("command")
+
+    if (
+        not isinstance(command, str)
+        or command not in MERCHANT_WRITE_COMMANDS
+    ):
+        return "command is not an allowlisted normalized write"
+
+    expected_version = confirmation.get("expected_version")
+
+    if expected_version is not None and (
+        isinstance(expected_version, bool)
+        or not isinstance(expected_version, int)
+        or expected_version <= 0
+    ):
+        return "expected version is invalid"
+
+    for field in MERCHANT_HASH_FIELDS:
+        value = confirmation.get(field)
+
+        if (
+            not isinstance(value, str)
+            or _MERCHANT_HASH_PATTERN.fullmatch(value) is None
+        ):
+            return f"{field} is invalid"
+
+    canonical = json.dumps(
+        {
+            key: confirmation[key]
+            for key in MERCHANT_CONFIRMATION_FIELDS
+            if key != "confirmation_hash"
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    expected_confirmation_hash = hashlib.sha256(
+        canonical
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        confirmation["confirmation_hash"],
+        expected_confirmation_hash,
+    ):
+        return "confirmation hash does not match its binding"
+
+    return None
+
+
+def _merchant_dispatch_payload(
+    prompt: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if prompt.count(MERCHANT_DISPATCH_MARKER) != 1:
+        return None, "authorization marker must appear exactly once"
+
+    matches = list(
+        _MERCHANT_DISPATCH_BLOCK_PATTERN.finditer(prompt)
+    )
+
+    if len(matches) != 1:
+        return None, "authorization block is missing or duplicated"
+
+    try:
+        payload = json.loads(matches[0].group("payload"))
+    except (json.JSONDecodeError, ValueError):
+        return None, "authorization block is not valid JSON"
+
+    if not isinstance(payload, dict):
+        return None, "authorization block must be a JSON object"
+
+    if set(payload) != MERCHANT_DISPATCH_FIELDS:
+        return None, "authorization fields are incomplete or unexpected"
+
+    return payload, None
 
 
 def main() -> int:

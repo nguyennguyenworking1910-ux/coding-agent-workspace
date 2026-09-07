@@ -74,6 +74,11 @@ This folder contains all system documentation, setup guides, and reference mater
   - Credential-safe runtime adapter, proposal-only writes, and authority denial
   - Agent Team result-delivery contract and Checkpoint 7 continuation plan
 
+- **[MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md](./MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md)** — Checkpoint 7 implementation handoff
+  - Merchant read, proposal, and confirmed-apply intent routing
+  - Exact redacted confirmation and single-dispatch policy enforcement
+  - Opaque one-use runtime authorization, persisted session bridge, and Checkpoint 8 plan
+
 ---
 
 ## 🧭 Where things live
@@ -135,4 +140,4 @@ When creating new documentation:
 
 ---
 
-**Last Updated:** September 5, 2026
+**Last Updated:** September 7, 2026

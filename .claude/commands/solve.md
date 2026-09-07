@@ -122,6 +122,26 @@ destructive action that would occur.
 A generic or earlier approval does not authorize a different action. External and destructive
 mutations receive one attempt only; an uncertain or failed result must be reported, not retried.
 
+For `merchant_apply`, the general `--confirm` flag is never sufficient. The intent hook must
+validate the exact `--merchant-confirmation` token emitted by the prior proposal and inject a
+`merchant_confirmation` object containing the command, runtime target, expected version,
+payload hash, proposal hash, and confirmation hash. The token itself and raw proposal payload
+must not appear in the envelope or persisted run state. A missing, malformed, changed,
+non-runtime, or non-canonical token stops the run before team creation.
+
+The structured confirmation records exactly what the user approved, but it does not by itself
+grant the Merchant CLI runtime-write authority. Gate 7.3 permits one policy-validated
+`merchant-manager` dispatch only when its redacted authorization block matches that confirmation
+exactly. Runtime `--apply` remains unavailable in Checkpoint 6, and Gate 7.3 does not weaken
+that inherited boundary: runtime `--apply` remains fail-closed until the trusted in-process
+handoff in Gate 7.4.
+
+Runtime `--apply` remains fail-closed throughout Gate 7.3.
+
+The Checkpoint 7 intent/policy authorization handoff is therefore split across two boundaries:
+Gate 7.3 authorizes the exact teammate dispatch, while Gate 7.4 must authorize the exact
+in-process runtime mutation.
+
 ## 4. Required Agent Team and pane mode
 
 This command requires all of the following runtime conditions:
@@ -211,7 +231,7 @@ type, but its presence does not authorize dispatch; only `selected_agents` does.
 | `coder` | Feature implementation and refactoring from a specification | Yes |
 | `bug-fixer` | Repairing a specific reproduced failure or defect | Yes |
 | `group-sales-manager` | Sales-data queries, capacity analysis, and allocation planning | No |
-| `merchant-manager` | Merchant/project reads and redacted write proposals through the Merchant CLI | Proposal only; runtime apply blocked |
+| `merchant-manager` | Merchant/project reads, redacted proposals, and confirmed-apply handoff through the Merchant CLI | Proposal only; runtime apply blocked through the ordinary CLI; Gate 7.4 in-process handoff only |
 | `scheduler` | Creating a confirmed calendar event | Calendar only |
 
 Never invent an unregistered teammate type.
@@ -234,11 +254,72 @@ addition to the envelope gate and normal dispatch contract:
 - If a Merchant operation is requested but `merchant-manager` is absent from
   `selected_agents`, report the authorization mismatch and stop. Do not add the teammate,
   substitute another role, reconstruct the envelope, or execute the command in the lead.
-- Runtime `--apply` remains unavailable in Checkpoint 6. Even if a request contains approval or
-  a proposal hash, dispatch must not claim or imply trusted runtime authority. Report that the
-  Checkpoint 7 intent/policy authorization handoff is required.
+- A confirmed Merchant apply may be dispatched once only when the saved operation is exactly
+  `merchant_apply`, the roster is exactly `merchant-manager`, the risk is `external_write` or
+  `destructive`, and the assignment contains the exact redacted block defined below.
+- Gate 7.3 dispatch authorization is not Merchant CLI runtime authority. The assignment must
+  state that runtime `--apply` remains unavailable until Gate 7.4 and must not ask the teammate
+  to bypass the adapter.
+- Preserve the earlier safety boundary in every assignment: runtime `--apply` is outside Checkpoint 6 authority.
+  Gate 7.3 authorizes only the redacted teammate dispatch, not the database mutation.
 - The proposal hash binds a command, runtime target, and payload. It is not permission, a
   credential, or a substitute for confirmation.
+
+For a confirmed apply assignment, include exactly one block in this form, copying every value
+from the injected `merchant_confirmation` object without reconstructing or changing it:
+
+````text
+MERCHANT_DISPATCH_AUTHORIZATION_JSON
+```json
+{
+  "contract_version": 1,
+  "confirmation_version": 1,
+  "operation": "merchant_apply",
+  "command": "<confirmed allowlisted command>",
+  "database_target": "runtime",
+  "expected_version": null,
+  "payload_hash": "<confirmed hash>",
+  "proposal_hash": "<confirmed hash>",
+  "confirmation_hash": "<confirmed hash>",
+  "authorized_mode": "CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY"
+}
+```
+````
+
+The outer `text` fence above is documentation only; the actual assignment contains the marker,
+the single `json` fence, and the JSON object. Never include the confirmation token or raw
+proposal payload in this block. The policy hook compares every field immediately before Agent
+dispatch, rejects missing, extra, malformed, stale, or changed data, and consumes the binding
+after one accepted dispatch attempt. Copy the exact confirmed positive integer into
+`expected_version` when present; retain JSON `null` only when the confirmation carries `null`.
+
+### Gate 7.4 runtime handoff
+
+After Gate 7.3 accepts the dispatch, controlled orchestration may call
+`claude.system.merchant_runtime_handoff.invoke_confirmed_merchant_apply` in the same Python
+process with the persisted run-state object and the exact allowlisted apply arguments. This is
+the only runtime-write path. It verifies the accepted dispatch receipt, issues an opaque
+capability with a 60-second default and 300-second hard maximum lifetime, and consumes both the
+run-state issuance slot and capability before the repository handler runs.
+
+The capability is bound to the exact command, `runtime` target, payload, expected version,
+proposal hash, and confirmation hash. A mismatched, expired, failed, concurrent, or successful
+attempt spends it. Never retry an uncertain result; generate a fresh proposal, confirmation,
+envelope, and dispatch instead.
+
+The ordinary `agent_cli.py` command remains read/propose-only. A boolean such as the legacy
+`runtime_authorized=True`, a CLI flag, environment variable, confirmation token, JSON object,
+copied capability, or reconstructed run state is not runtime authority. If the installed
+orchestration runtime cannot perform the in-process handoff, report that limitation and do not
+fall back to shell apply, direct repository access, or another database target.
+
+Gate 7.5 connects that handoff to the actual persisted hook state through
+`invoke_confirmed_merchant_session_apply`. Controlled orchestration supplies the current session
+ID and exact apply arguments; it does not copy state into a prompt or CLI option. The function
+locks the session document, verifies the Gate 7.3 receipt, permanently reserves its single
+runtime-authorization slot, and saves that reservation before capability issuance or repository
+dispatch. This is deliberately at-most-once: after an uncertain interruption, failure, or
+successful call, a fresh proposal and confirmation are required instead of a retry.
 
 For an authorized Merchant assignment, require the teammate to use only the registered
 credential-free Merchant CLI interface and to include the redacted CLI JSON, exit outcome,
@@ -247,11 +328,13 @@ confirmation state, failures, and unresolved work in its final `SendMessage` rep
 Every Merchant assignment must explicitly declare all of these fields in its prompt:
 
 - `database_target: runtime`;
-- `authorized_mode: READ` or `authorized_mode: PROPOSE`;
+- `authorized_mode: READ`, `authorized_mode: PROPOSE`, or, only for an exact confirmed apply,
+  `authorized_mode: CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY`;
 - the exact allowlisted Merchant operation and the identifiers or filters supplied by the
   request;
 - that database and credential arguments are forbidden;
-- that runtime `--apply` is outside Checkpoint 6 authority;
+- that runtime `--apply` is outside Checkpoint 6 authority and remains blocked until the Gate 7.4
+  trusted in-process handoff;
 - that `TaskUpdate` is a status signal only and final result delivery requires `SendMessage`.
 
 If any required field is missing or conflicts with the envelope, do not improvise it. Stop the

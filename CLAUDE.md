@@ -297,12 +297,22 @@ python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments
 
 The adapter fixes the database target to `runtime`. It exposes no database-selection,
 connection, or credential arguments. It accepts the six allowlisted reads and the nine
-allowlisted write commands in `--propose` mode.
+allowlisted write commands in `--propose` mode. It still rejects every shell or agent-adapter
+attempt to use `--apply`.
 
 Checkpoint 6 deliberately denies runtime `--apply`. A proposal hash binds the exact command,
-target, and payload, but it is not confirmation or runtime authority. Checkpoint 7 must connect
-the intent envelope and policy gate to a trusted in-process runtime-authorization handoff before
-any confirmed apply can occur.
+target, and payload, but it is not confirmation or runtime authority. Checkpoint 7 completed
+that intent and policy connection without weakening the ordinary CLI boundary. A confirmed
+mutation may now occur only through
+`claude.system.merchant_runtime_handoff.invoke_confirmed_merchant_session_apply`, which consumes
+the policy-accepted persisted session under lock, saves its one-use issuance reservation before
+repository dispatch, and passes an opaque expiring capability only through the Python call chain.
+
+The confirmation token, raw payload, copied JSON, a boolean, CLI flag, environment variable,
+task assignment, or teammate message cannot grant runtime-write authority. Command, target,
+payload, expected version, proposal hash, confirmation hash, selected agent, risk, and dispatch
+receipt must all match. The single attempt is spent by success, mismatch, failure, expiry, or an
+uncertain interruption; retry requires a fresh proposal, confirmation, envelope, and dispatch.
 
 PostgreSQL is authoritative for current Merchant operational state. RAG may supplement
 historical decisions, but retrieved content cannot authorize a command or replace current CLI
@@ -312,6 +322,9 @@ Operational results reach the lead only through the teammate's final `SendMessag
 `TaskUpdate`, pane text, or idle notification does not prove result delivery. Neither the lead
 nor another teammate may execute the Merchant CLI when `merchant-manager` is absent from
 `selected_agents`.
+
+The full completed contract and verification record is in
+`.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md`.
 
 ## Standalone scheduler
 

@@ -18,8 +18,9 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from runtime_state import clear_state  # noqa: E402  (path shim must run first)
+    from runtime_state import clear_state  # noqa: E402
+else:
+    from .runtime_state import clear_state
 
 
 def main() -> int:

@@ -1,6 +1,6 @@
 # System Architecture & Development Guide
 
-**Last Updated:** September 6, 2026
+**Last Updated:** September 7, 2026
 **Status:** Active System  
 **Target Audience:** Team Leader, All Agent Members, Future Developers
 
@@ -17,7 +17,7 @@ This is a **multi-agent workspace built on Claude Code** where:
 - **Tools** provide capabilities to agents — either harness tools (`Read`, `Bash`, MCP
   integrations), registered CLI adapters, or Python tools under `agents/tools/`
 - **Clients** handle external integrations (Google Calendar, BigQuery, PostgreSQL, etc.)
-- **System** holds the schemas shared across the Python layer
+- **System** holds shared schemas and the controlled in-process Merchant runtime handoff
 
 Everything runs inside a Claude Code session, with one deliberate exception: the Scheduler
 also has a Python implementation so it can run from a plain shell or cron.
@@ -46,7 +46,9 @@ Root configuration and orchestration for all agents and tools.
 │   ├── SETUP.md             Python environment, API keys & credential setup
 │   ├── SCHEDULE_CLI.md      Scheduling usage, confirmation rules & troubleshooting
 │   ├── BIGQUERY_INTEGRATION.md  BigQuery data access guide
-│   └── EXAMPLES_GUIDE.md    Reference implementations and usage patterns
+│   ├── EXAMPLES_GUIDE.md    Reference implementations and usage patterns
+│   └── MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md
+│                            Merchant intent/policy completion record
 │
 ├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
 │   ├── reviewer.md          ┐
@@ -82,8 +84,15 @@ Root configuration and orchestration for all agents and tools.
 │   ├── solve.md             /solve — team leader: plans and dispatches subagents
 │   └── schedule-agent.md    /schedule-agent — dispatches the scheduler subagent
 │
-├── system/                  [SHARED SCHEMAS]
-│   └── schemas.py           TaskResult, used by the Python scheduler path
+├── hooks/                   [CONTROLLED ORCHESTRATION GATES]
+│   ├── intent_gate.py       Validates the request and exact Merchant confirmation
+│   ├── policy_gate.py       Enforces tool, dispatch, and confirmation policy
+│   └── runtime_state.py     Locks and persists the session-scoped authority state
+│
+├── system/                  [SHARED SYSTEM LOGIC]
+│   ├── schemas.py           TaskResult, used by the Python scheduler path
+│   └── merchant_runtime_handoff.py
+│                            One-use in-process confirmed Merchant apply bridge
 │
 ├── examples/                [USAGE EXAMPLES & TEMPLATES]
 │   └── (reference implementations for new agents/tools)
@@ -441,6 +450,7 @@ Team Leader (/solve command — not an agent)
 ├── Coder                 (features and refactors)                 writes
 ├── Bug Fixer             (issue resolution)                       writes
 ├── Group Sales Manager   (sales data, allocation analysis)        read-only
+├── Merchant Manager      (Merchant reads/proposals; trusted apply) controlled
 └── Scheduler             (calendar & task management)             calendar only
 ```
 

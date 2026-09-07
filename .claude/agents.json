@@ -133,7 +133,7 @@
           "complex_task": 4.0
         }
       },
-      "description": "Reads Merchant project state and prepares confirmation-ready Merchant updates through the allowlisted JSON CLI",
+      "description": "Reads Merchant project state, prepares confirmation-ready updates, and participates in exact confirmed applies through the orchestration-only in-process handoff",
       "enabled": true,
       "type": "merchant_manager",
       "definition": ".claude/agents/merchant-manager.md",
@@ -163,8 +163,10 @@
           "integration identifier-set"
         ],
         "checkpoint_6_write_mode": "propose_only",
-        "runtime_apply": "denied_until_trusted_checkpoint_7_authority",
-        "note": "The teammate invokes the checked-in CLI through Bash without reading or passing database credentials. PostgreSQL is authoritative for current state. Runtime apply remains fail-closed until the trusted intent/policy authorization handoff is implemented."
+        "runtime_apply": "trusted_in_process_handoff_only",
+        "runtime_handoff": ".claude/system/merchant_runtime_handoff.py",
+        "runtime_handoff_method": "invoke_confirmed_merchant_session_apply",
+        "note": "The teammate invokes the checked-in agent CLI through Bash without reading or passing database credentials; that ordinary CLI remains read/propose-only. Controlled orchestration may reserve one accepted persisted session and perform one exact confirmed apply only through the opaque in-process handoff. PostgreSQL is authoritative for current state."
       }
     },
     {
@@ -276,7 +278,7 @@
       "entry_point": ".claude/agents/tools/merchant/agent_cli.py",
       "database_target": "runtime",
       "credential_arguments": "forbidden",
-      "runtime_apply": "denied_until_trusted_checkpoint_7_authority",
+      "runtime_apply": "denied_in_ordinary_agent_cli",
       "methods": [
         {
           "name": "prepare_agent_cli_argv",
@@ -284,7 +286,7 @@
         },
         {
           "name": "invoke_agent_cli",
-          "description": "Invoke the existing Merchant JSON CLI with runtime_authorized fixed to false"
+          "description": "Invoke the existing Merchant JSON CLI with runtime_authorization fixed to none"
         }
       ]
     },

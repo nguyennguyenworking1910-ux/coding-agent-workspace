@@ -20,8 +20,9 @@ from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from runtime_state import locked_state  # noqa: E402  (path shim must run first)
+    from runtime_state import locked_state  # noqa: E402
+else:
+    from .runtime_state import locked_state
 
 AGENT_TOOL_NAMES = frozenset({"Agent", "Task"})
 

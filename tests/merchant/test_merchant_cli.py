@@ -71,7 +71,7 @@ class RecordingWriteCommands:
         payload,
         *,
         proposal_hash,
-        runtime_authorized,
+        runtime_authorization,
     ):
         self.calls.append(
             (
@@ -80,7 +80,7 @@ class RecordingWriteCommands:
                 database,
                 payload,
                 proposal_hash,
-                runtime_authorized,
+                runtime_authorization,
             )
         )
         return {
@@ -489,7 +489,7 @@ def test_contact_import_reads_utf8_csv(tmp_path):
     ]
 
 
-def test_write_apply_dispatches_hash_and_authority():
+def test_write_apply_dispatches_hash_and_in_process_authority():
     proposal = "a" * 64
     args = build_argument_parser().parse_args(
         [
@@ -506,12 +506,13 @@ def test_write_apply_dispatches_hash_and_authority():
         ]
     )
     commands = RecordingWriteCommands()
+    authorization = object()
 
     result = dispatch_write_command(
         args,
         commands,
         database="runtime",
-        runtime_authorized=True,
+        runtime_authorization=authorization,
     )
 
     assert result["mode"] == "APPLY"
@@ -520,7 +521,7 @@ def test_write_apply_dispatches_hash_and_authority():
     assert call[1] == "project update"
     assert call[2] == "runtime"
     assert call[4] == proposal
-    assert call[5] is True
+    assert call[5] is authorization
 
 
 def test_propose_rejects_proposal_hash():

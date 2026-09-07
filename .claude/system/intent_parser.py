@@ -55,6 +55,9 @@ class Operation(str, Enum):
     SECURITY = "security"
     SALES_QUERY = "sales_query"
     SCHEDULE = "schedule"
+    MERCHANT_READ = "merchant_read"
+    MERCHANT_PROPOSE = "merchant_propose"
+    MERCHANT_APPLY = "merchant_apply"
 
 
 class Domain(str, Enum):
@@ -64,6 +67,7 @@ class Domain(str, Enum):
     SALES = "sales"
     DOCUMENTATION = "documentation"
     SECURITY = "security"
+    MERCHANT = "merchant"
     GENERAL = "general"
 
 
@@ -136,9 +140,11 @@ The complexity score is the sum:
 
 Risk is independent from complexity:
 
-- read_only: explain, inspect, search, analyze, or review
+- read_only: explain, inspect, search, analyze, review, read Merchant state,
+  or prepare a non-mutating Merchant write proposal
 - write: modify local source code or local files
-- external_write: send, deploy, publish, push, upload, or create an event
+- external_write: send, deploy, publish, push, upload, create an event, or
+  explicitly request application of a prior Merchant proposal to runtime state
 - destructive: delete data, drop or truncate tables, force push, reset --hard,
   or perform an irreversible operation
 
@@ -155,11 +161,27 @@ Internal coordination is NOT an external write:
 Allowed operations:
 
 diagnose, fix, build, refactor, review, test, security,
-sales_query, schedule
+sales_query, schedule, merchant_read, merchant_propose, merchant_apply
 
 Allowed domains:
 
-code, data, calendar, sales, documentation, security, general
+code, data, calendar, sales, documentation, security, merchant, general
+
+Merchant operational classification:
+
+- merchant_read: read current Merchant or Merchant-project state through the
+  operational Merchant interface.
+- merchant_propose: normalize and prepare a proposal for a Merchant-state
+  change. This mode does not apply a change and is read_only.
+- merchant_apply: explicitly apply or execute a previously generated Merchant
+  proposal. This is external_write and requires confirmation.
+- A Merchant write request without an explicit request to apply a prior
+  proposal is merchant_propose, including create, import, update, set, and
+  approve operations.
+- Work on Merchant source code, tests, modules, repositories, or CLI
+  implementation remains a normal code operation such as fix, build,
+  refactor, review, or test. Do not classify source-code work as a Merchant
+  operational request.
 
 Set requires_clarification to true only when missing information would
 materially change the execution target or expected outcome.
@@ -182,10 +204,16 @@ AGENTS_BY_OPERATION: dict[str, tuple[str, ...]] = {
     "security": ("red-team",),
     "sales_query": ("group-sales-manager",),
     "schedule": ("scheduler",),
+    "merchant_read": ("merchant-manager",),
+    "merchant_propose": ("merchant-manager",),
+    "merchant_apply": ("merchant-manager",),
 }
 
 
 OPERATION_PRIORITY: dict[str, int] = {
+    "merchant_apply": 115,
+    "merchant_propose": 110,
+    "merchant_read": 105,
     "schedule": 100,
     "sales_query": 95,
     "security": 90,
@@ -196,6 +224,22 @@ OPERATION_PRIORITY: dict[str, int] = {
     "review": 65,
     "diagnose": 60,
 }
+
+
+MERCHANT_OPERATIONS = frozenset(
+    {
+        Operation.MERCHANT_READ.value,
+        Operation.MERCHANT_PROPOSE.value,
+        Operation.MERCHANT_APPLY.value,
+    }
+)
+
+MERCHANT_NON_MUTATING_OPERATIONS = frozenset(
+    {
+        Operation.MERCHANT_READ.value,
+        Operation.MERCHANT_PROPOSE.value,
+    }
+)
 
 
 TASK_CLASS_ORDER: dict[TaskClass, int] = {
@@ -245,6 +289,10 @@ def normalize_text(value: str) -> str:
         for character in normalized
         if unicodedata.category(character) != "Mn"
     )
+
+    # Vietnamese đ/Đ is a distinct code point rather than a base letter plus
+    # combining mark, so NFD alone does not make it ASCII-comparable.
+    without_accents = without_accents.replace("đ", "d")
 
     return " ".join(without_accents.split())
 
@@ -492,6 +540,17 @@ class IntentParser:
             for domain in decision.domains
         )
 
+        (
+            operations,
+            domains,
+            merchant_operation,
+            merchant_reconciliation_reason,
+        ) = self._reconcile_merchant_intent(
+            normalize_text(raw_request),
+            operations,
+            domains,
+        )
+
         candidate_agents = self._candidate_agents(
             operations,
             domains,
@@ -506,10 +565,23 @@ class IntentParser:
             operations,
         )
 
-        risk_level = higher_risk(
-            decision.risk_level,
-            local_risk,
+        merchant_risk_reconciled = (
+            merchant_operation
+            in MERCHANT_NON_MUTATING_OPERATIONS
+            and decision.risk_level
+            == RiskLevel.WRITE
         )
+
+        if merchant_risk_reconciled:
+            # WRITE means local file/source modification. Merchant reads and
+            # proposals do not mutate either local files or runtime state.
+            # External/destructive model decisions are never downgraded.
+            risk_level = local_risk
+        else:
+            risk_level = higher_risk(
+                decision.risk_level,
+                local_risk,
+            )
 
         requires_confirmation = (
             decision.requires_clarification
@@ -527,6 +599,17 @@ class IntentParser:
         reasons.append(
             f"Complexity score: {complexity_score}"
         )
+
+        if merchant_reconciliation_reason:
+            reasons.append(
+                merchant_reconciliation_reason
+            )
+
+        if merchant_risk_reconciled:
+            reasons.append(
+                "Merchant read/proposal risk was normalized from local "
+                "source WRITE to non-mutating operational risk"
+            )
 
         if (
             calculated_task_class
@@ -735,11 +818,208 @@ class IntentParser:
             ),
         )
 
+    @classmethod
+    def _reconcile_merchant_intent(
+        cls,
+        text: str,
+        operations: Sequence[str],
+        domains: Sequence[str],
+    ) -> tuple[list[str], list[str], str | None, str | None]:
+        """Make Merchant operational ownership deterministic and exclusive."""
+
+        local_operation = (
+            cls._detect_local_merchant_operation(text)
+        )
+        model_operations = [
+            operation
+            for operation in operations
+            if operation in MERCHANT_OPERATIONS
+        ]
+        merchant_candidates = list(model_operations)
+
+        if local_operation:
+            merchant_candidates.append(local_operation)
+
+        if not merchant_candidates:
+            if Domain.MERCHANT.value in domains:
+                reconciled_domains = unique_values(
+                    [
+                        Domain.MERCHANT.value,
+                        *(
+                            domain
+                            for domain in domains
+                            if domain
+                            not in {
+                                Domain.MERCHANT.value,
+                                Domain.GENERAL.value,
+                            }
+                        ),
+                    ]
+                )
+                return (
+                    list(operations),
+                    reconciled_domains,
+                    None,
+                    "Merchant operational domain requires exclusive "
+                    "Merchant Manager routing",
+                )
+
+            return (
+                list(operations),
+                list(domains),
+                None,
+                None,
+            )
+
+        merchant_operation = max(
+            merchant_candidates,
+            key=lambda operation: OPERATION_PRIORITY[operation],
+        )
+        reconciled_domains = unique_values(
+            [
+                Domain.MERCHANT.value,
+                *(
+                    domain
+                    for domain in domains
+                    if domain
+                    not in {
+                        Domain.MERCHANT.value,
+                        Domain.GENERAL.value,
+                    }
+                ),
+            ]
+        )
+
+        source = (
+            "local guardrail"
+            if local_operation
+            else "intent model"
+        )
+
+        return (
+            [merchant_operation],
+            reconciled_domains,
+            merchant_operation,
+            "Merchant operational intent reconciled by "
+            f"{source}: {merchant_operation}",
+        )
+
+    @staticmethod
+    def _detect_local_merchant_operation(
+        text: str,
+    ) -> str | None:
+        """Recognize common Merchant operations without claiming code work."""
+
+        merchant_context_patterns = (
+            r"\bmerchants?\b",
+            r"\bmerchant[-_ ](?:project|contact|document|approval|"
+            r"procurement|identifier|step|state|record)s?\b",
+            r"\bdoi tac\b",
+            r"\bpartnercode\b",
+            r"\bordergroupid\b",
+        )
+
+        if not any(
+            re.search(pattern, text)
+            for pattern in merchant_context_patterns
+        ):
+            return None
+
+        explicit_mode_patterns = (
+            r"--(?:propose|apply)\b",
+            r"\b(?:apply|execute|confirm|approve)\b.{0,80}\bproposal\b",
+            r"\bproposal\b.{0,80}\b(?:apply|execute|confirm|approve)\b",
+            r"\b(?:ap dung|thuc thi|xac nhan|dong y)\b.{0,80}\bde xuat\b",
+            r"\bde xuat\b.{0,80}\b(?:ap dung|thuc thi|xac nhan|dong y)\b",
+            r"\bmerchant (?:state|operation|record)s?\b",
+        )
+        has_explicit_operational_mode = any(
+            re.search(pattern, text)
+            for pattern in explicit_mode_patterns
+        )
+
+        development_patterns = (
+            r"\bsource code\b",
+            r"\bcodebase\b",
+            r"\b(?:python|pytest|unit test|integration test)s?\b",
+            r"\b(?:module|class|function|repository|implementation)\b",
+            r"\b(?:fix|debug|refactor|implement)\b.{0,80}\b(?:code|cli|parser)\b",
+            r"\b(?:sua loi|tai cau truc|ma nguon|kiem thu)\b",
+            r"\.py\b",
+        )
+
+        if (
+            not has_explicit_operational_mode
+            and any(
+                re.search(pattern, text)
+                for pattern in development_patterns
+            )
+        ):
+            return None
+
+        apply_patterns = (
+            r"--apply\b",
+            r"\b(?:apply|execute|confirm|approve)\b.{0,80}\bproposal\b",
+            r"\bproposal\b.{0,80}\b(?:apply|execute|confirm|approve)\b",
+            r"\b(?:ap dung|thuc thi|xac nhan|dong y)\b.{0,80}\bde xuat\b",
+            r"\bde xuat\b.{0,80}\b(?:ap dung|thuc thi|xac nhan|dong y)\b",
+        )
+
+        if any(
+            re.search(pattern, text)
+            for pattern in apply_patterns
+        ):
+            return Operation.MERCHANT_APPLY.value
+
+        propose_patterns = (
+            r"--propose\b",
+            r"\b(?:prepare|create|generate|make)\b.{0,40}\bproposal\b",
+            r"\bproposal\b.{0,80}\b(?:create|import|update|set|approve|change)\b",
+            r"\b(?:de xuat|tao de xuat|chuan bi de xuat)\b",
+            r"\b(?:create|add|import|update|set|approve|change)\b",
+            r"\b(?:tao|them|nhap|cap nhat|gan|duyet|thay doi)\b",
+        )
+
+        if any(
+            re.search(pattern, text)
+            for pattern in propose_patterns
+        ):
+            return Operation.MERCHANT_PROPOSE.value
+
+        read_patterns = (
+            r"\b(?:list|show|get|find|read|display|check)\b",
+            r"\b(?:status|history|blockers?|alerts?)\b",
+            r"\b(?:liet ke|xem|hien thi|tim|doc|kiem tra)\b",
+            r"\b(?:trang thai|lich su|vuong mac|canh bao)\b",
+        )
+
+        if any(
+            re.search(pattern, text)
+            for pattern in read_patterns
+        ):
+            return Operation.MERCHANT_READ.value
+
+        return None
+
     def _candidate_agents(
         self,
         operations: Sequence[str],
         domains: Sequence[str],
     ) -> list[str]:
+        merchant_requested = (
+            bool(MERCHANT_OPERATIONS & set(operations))
+            or Domain.MERCHANT.value in domains
+        )
+
+        if merchant_requested:
+            if "merchant-manager" not in self.enabled_agents:
+                raise IntentParserConfigError(
+                    "Merchant operational intent requires the enabled "
+                    "merchant-manager agent"
+                )
+
+            return ["merchant-manager"]
+
         ranked_operations = sorted(
             operations,
             key=lambda operation: (
@@ -854,6 +1134,12 @@ class IntentParser:
             "build",
             "refactor",
         }
+
+        if (
+            Operation.MERCHANT_APPLY.value
+            in operations
+        ):
+            return RiskLevel.EXTERNAL_WRITE
 
         if write_operations & set(operations):
             return RiskLevel.WRITE

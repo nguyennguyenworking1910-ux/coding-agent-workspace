@@ -123,7 +123,7 @@ def invoke_agent_cli(
         prepared,
         command_factory=command_factory,
         write_command_factory=write_command_factory,
-        runtime_authorized=False,
+        runtime_authorization=None,
     )
 
 

@@ -117,7 +117,7 @@ class MerchantWriteCommands:
         payload: Mapping[str, Any],
         *,
         proposal_hash: str,
-        runtime_authorized: bool = False,
+        runtime_authorization: Any = None,
     ) -> dict[str, Any]:
         """Verify authority and proposal binding before one mutation."""
 
@@ -133,7 +133,9 @@ class MerchantWriteCommands:
         require_apply_authorization(
             normalized_command,
             normalized_database,
-            runtime_authorized=runtime_authorized,
+            runtime_authorization=runtime_authorization,
+            payload=prepared_payload,
+            proposal_hash=proposal_hash,
         )
         verify_proposal_hash(
             proposal_hash,

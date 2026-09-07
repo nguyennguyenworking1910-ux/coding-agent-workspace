@@ -25,18 +25,26 @@ from dotenv import load_dotenv
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from runtime_state import (  # noqa: E402  (path shim must run first)
-    CLAUDE_DIR,
-    new_state,
-    save_state,
-)
+    from runtime_state import (  # noqa: E402
+        CLAUDE_DIR,
+        new_state,
+        redact_secrets,
+        save_state,
+    )
+else:
+    from .runtime_state import (
+        CLAUDE_DIR,
+        new_state,
+        redact_secrets,
+        save_state,
+    )
 
 HOOK_EVENT_NAME = "UserPromptSubmit"
 
 CONTROLLED_COMMANDS = ("solve", "schedule-agent")
 
 CONFIRM_FLAG = "--confirm"
+MERCHANT_CONFIRM_FLAG = "--merchant-confirmation"
 
 # A pre-parsed envelope lets a caller (a test harness, a replay, a wrapper that
 # already paid for classification) skip the API call. It is only honoured when it
@@ -68,8 +76,10 @@ def configure_utf8_output() -> None:
                 errors="strict",
             )
 
-def parse_prompt(prompt: str) -> tuple[str, bool, str] | None:
-    """Split a controlled prompt into (command, confirmed, request).
+def parse_prompt(
+    prompt: str,
+) -> tuple[str, bool, str | None, str] | None:
+    """Split a controlled prompt into flags and the exact classified request.
 
     Returns None when the prompt is not one of the controlled commands, which is
     the common case — the hook then stays silent.
@@ -87,6 +97,7 @@ def parse_prompt(prompt: str) -> tuple[str, bool, str] | None:
 
     remainder = rest.strip()
     confirmed = False
+    merchant_confirmation_token = None
 
     if remainder == CONFIRM_FLAG:
         confirmed = True
@@ -95,7 +106,55 @@ def parse_prompt(prompt: str) -> tuple[str, bool, str] | None:
         confirmed = True
         remainder = remainder[len(CONFIRM_FLAG) :].strip()
 
-    return match.group("command"), confirmed, remainder
+    if remainder == MERCHANT_CONFIRM_FLAG:
+        merchant_confirmation_token = ""
+        remainder = ""
+    elif (
+        remainder.startswith(MERCHANT_CONFIRM_FLAG)
+        and remainder[len(MERCHANT_CONFIRM_FLAG)].isspace()
+    ):
+        confirmation_and_request = remainder[
+            len(MERCHANT_CONFIRM_FLAG) :
+        ].strip()
+        confirmation_parts = confirmation_and_request.split(
+            None,
+            1,
+        )
+        merchant_confirmation_token = (
+            confirmation_parts[0]
+            if confirmation_parts
+            else ""
+        )
+        remainder = (
+            confirmation_parts[1].strip()
+            if len(confirmation_parts) == 2
+            else ""
+        )
+
+    if confirmed and merchant_confirmation_token is not None:
+        raise ValueError(
+            f"{CONFIRM_FLAG} and {MERCHANT_CONFIRM_FLAG} cannot be combined"
+        )
+
+    if confirmed and remainder.startswith(MERCHANT_CONFIRM_FLAG):
+        raise ValueError(
+            f"{CONFIRM_FLAG} and {MERCHANT_CONFIRM_FLAG} cannot be combined"
+        )
+
+    if (
+        merchant_confirmation_token is not None
+        and remainder.startswith(CONFIRM_FLAG)
+    ):
+        raise ValueError(
+            f"{CONFIRM_FLAG} and {MERCHANT_CONFIRM_FLAG} cannot be combined"
+        )
+
+    return (
+        match.group("command"),
+        confirmed,
+        merchant_confirmation_token,
+        remainder,
+    )
 
 
 def block(reason: str) -> dict[str, Any]:
@@ -137,6 +196,23 @@ def build_parser() -> Any:
     from intent_parser import IntentParser  # noqa: PLC0415  (deliberately lazy)
 
     return IntentParser()
+
+
+def load_merchant_confirmation(token: str) -> dict[str, Any]:
+    """Validate a Merchant confirmation without importing it at hook startup."""
+
+    merchant_tools_dir = (
+        CLAUDE_DIR / "agents" / "tools" / "merchant"
+    )
+
+    if str(merchant_tools_dir) not in sys.path:
+        sys.path.insert(0, str(merchant_tools_dir))
+
+    from cli_contract import (  # type: ignore  # noqa: PLC0415
+        parse_confirmation_token,
+    )
+
+    return parse_confirmation_token(token).to_dict()
 
 
 def load_preparsed_envelope(request: str, env: dict[str, str]) -> dict[str, Any] | None:
@@ -203,17 +279,34 @@ def run(
     if not isinstance(prompt, str):
         return {}
 
-    parsed = parse_prompt(prompt)
+    try:
+        parsed = parse_prompt(prompt)
+    except ValueError as error:
+        return block(
+            f"Invalid controlled-command confirmation syntax: {error}. "
+            "Nothing was dispatched."
+        )
 
     if parsed is None:
         return {}
 
-    command, confirmed, request = parsed
+    (
+        command,
+        confirmed,
+        merchant_confirmation_token,
+        request,
+    ) = parsed
 
     if not request:
         return block(
             f"/{command} needs a request. Resubmit as "
             f"`/{command} <what you want done>`. Nothing was dispatched."
+        )
+
+    if redact_secrets(request) != request:
+        return block(
+            f"/{command} requests must not contain credentials or secrets. "
+            "Remove the sensitive value and resubmit. Nothing was dispatched."
         )
 
     try:
@@ -239,6 +332,78 @@ def run(
             "parser flagged missing information that would change what gets "
             f"done.{detail} Resubmit with the target and expected outcome stated. "
             f"`{CONFIRM_FLAG}` does not substitute for this."
+        )
+
+    operations = {
+        str(operation)
+        for operation in envelope_payload.get("operations") or []
+    }
+    selected_for_confirmation = [
+        str(agent)
+        for agent in envelope_payload.get("selected_agents") or []
+    ]
+    merchant_apply = "merchant_apply" in operations
+
+    if merchant_confirmation_token is not None:
+        if not merchant_confirmation_token:
+            return block(
+                f"{MERCHANT_CONFIRM_FLAG} requires the exact token emitted "
+                "by a Merchant proposal. Nothing was dispatched."
+            )
+
+        try:
+            merchant_confirmation = load_merchant_confirmation(
+                merchant_confirmation_token
+            )
+        except Exception:  # noqa: BLE001 - token errors fail closed and stay redacted
+            return block(
+                "Merchant confirmation is malformed or its binding does not "
+                "match. Nothing was dispatched; generate a fresh proposal."
+            )
+
+        if not merchant_apply:
+            return block(
+                "A Merchant confirmation token can authorize only a "
+                "merchant_apply intent. Nothing was dispatched."
+            )
+
+        if merchant_confirmation.get("database_target") != "runtime":
+            return block(
+                "Operational Merchant confirmation must target runtime. "
+                "Nothing was dispatched."
+            )
+
+        if selected_for_confirmation != ["merchant-manager"]:
+            return block(
+                "Merchant confirmation requires exclusive merchant-manager "
+                "authority. Nothing was dispatched."
+            )
+
+        if envelope_payload.get("risk_level") not in {
+            "external_write",
+            "destructive",
+        }:
+            return block(
+                "Merchant apply confirmation requires an external_write or "
+                "destructive envelope. Nothing was dispatched."
+            )
+
+        confirmed = True
+        envelope_payload["merchant_confirmation"] = (
+            merchant_confirmation
+        )
+    elif merchant_apply:
+        if confirmed:
+            return block(
+                f"{CONFIRM_FLAG} is not sufficient for Merchant apply. "
+                f"Use {MERCHANT_CONFIRM_FLAG} with the exact token emitted "
+                "by the proposal. Nothing was dispatched."
+            )
+
+        return block(
+            "Merchant apply requires the exact confirmation token emitted "
+            f"by a prior proposal. Resubmit with {MERCHANT_CONFIRM_FLAG}. "
+            "Nothing was dispatched."
         )
 
     if envelope_payload.get("requires_confirmation") and not confirmed:
@@ -268,6 +433,15 @@ def run(
             selected_agents=selected_agents,
             limits=limits,
             confirmed=confirmed,
+            operations=[
+                str(operation)
+                for operation in envelope_payload.get(
+                    "operations"
+                ) or []
+            ],
+            merchant_confirmation=envelope_payload.get(
+                "merchant_confirmation"
+            ),
         ),
     )
 

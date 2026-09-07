@@ -87,6 +87,12 @@ def test_registry_targets_only_the_runtime_cli_entry_point():
     assert access["database_target"] == "runtime"
     assert "credential-free" not in access["entry_point"]
     assert "password" not in access["entry_point"].lower()
+    assert access["runtime_handoff"] == (
+        ".claude/system/merchant_runtime_handoff.py"
+    )
+    assert access["runtime_handoff_method"] == (
+        "invoke_confirmed_merchant_session_apply"
+    )
 
 
 def test_credential_safe_merchant_cli_tool_is_registered():
@@ -108,7 +114,7 @@ def test_credential_safe_merchant_cli_tool_is_registered():
     assert tool["database_target"] == "runtime"
     assert tool["credential_arguments"] == "forbidden"
     assert tool["runtime_apply"] == (
-        "denied_until_trusted_checkpoint_7_authority"
+        "denied_in_ordinary_agent_cli"
     )
     assert {
         method["name"]
@@ -153,16 +159,24 @@ def test_registry_freezes_the_write_operation_allowlist():
     }
 
 
-def test_registry_keeps_runtime_apply_fail_closed():
+def test_registry_separates_ordinary_cli_from_trusted_handoff():
     access = _merchant_entry()["merchant_access"]
 
     assert access["checkpoint_6_write_mode"] == "propose_only"
     assert access["runtime_apply"] == (
-        "denied_until_trusted_checkpoint_7_authority"
+        "trusted_in_process_handoff_only"
+    )
+    assert access["runtime_handoff"] == (
+        ".claude/system/merchant_runtime_handoff.py"
+    )
+    assert access["runtime_handoff_method"] == (
+        "invoke_confirmed_merchant_session_apply"
     )
     assert "without reading or passing database credentials" in (
         access["note"]
     )
+    assert "ordinary CLI remains read/propose-only" in access["note"]
+    assert "opaque in-process handoff" in access["note"]
 
 
 def test_no_other_agent_claims_merchant_access():

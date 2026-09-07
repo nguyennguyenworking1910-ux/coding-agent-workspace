@@ -457,7 +457,7 @@ def dispatch_write_command(
     commands: MerchantWriteCommands,
     *,
     database: str,
-    runtime_authorized: bool = False,
+    runtime_authorization: Any = None,
 ) -> Any:
     """Build an exact payload and select propose or apply."""
 
@@ -495,7 +495,7 @@ def dispatch_write_command(
             database,
             payload,
             proposal_hash=args.proposal_hash,
-            runtime_authorized=runtime_authorized,
+            runtime_authorization=runtime_authorization,
         )
 
     raise ValueError("Write mode must be PROPOSE or APPLY")
@@ -670,7 +670,7 @@ def main(
     *,
     command_factory: CommandFactory | None = None,
     write_command_factory: WriteCommandFactory | None = None,
-    runtime_authorized: bool = False,
+    runtime_authorization: Any = None,
 ) -> int:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
@@ -694,7 +694,7 @@ def main(
                 args,
                 write_commands,
                 database=database,
-                runtime_authorized=runtime_authorized,
+                runtime_authorization=runtime_authorization,
             )
         else:  # pragma: no cover
             raise ValueError(

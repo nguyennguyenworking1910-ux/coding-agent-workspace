@@ -61,12 +61,23 @@ def test_handoff_records_fail_closed_checkpoint_boundary():
 def test_handoff_records_final_regression_evidence():
     content = _read(f".claude/documents/{HANDOFF_NAME}")
 
-    assert "Implementation and verification complete" in content
+    assert "**Completion commit:** `ba16daa`" in content
+    assert "**Status:** Complete, committed, and pushed" in content
     assert "Final Checkpoint 6 focused regression | 102 passed" in content
     assert "1,036 passed, 8 deselected, 97 subtests passed" in content
     assert "1,107 passed, 8 deselected, 118 subtests passed" in content
     assert "Final structural system validation | 80/80 passed" in content
+    assert "Post-commit clean-checkout system validation | 81/81 passed" in content
     assert "explicitly targeted\nthe root `tests` directory" in content
+
+
+def test_handoff_records_completed_commit_boundary():
+    content = _read(f".claude/documents/{HANDOFF_NAME}")
+
+    assert "## 12. Commit record" in content
+    assert "ba16daa Complete Checkpoint 6 merchant manager agent" in content
+    assert "The remote branch head matches `ba16daa`" in content
+    assert "git show --check ba16daa" in content
 
 
 def test_handoff_defines_checkpoint_7_continuation_order():

@@ -117,6 +117,8 @@ def new_state(
     selected_agents: list[str],
     limits: dict[str, Any],
     confirmed: bool,
+    operations: list[str] | None = None,
+    merchant_confirmation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
 
@@ -128,11 +130,15 @@ def new_state(
     budget (which excludes the coordination reserve). ``total_tool_calls`` is the
     hard cap across all calls.
     """
-    return {
+    state = {
         "request": redact_secrets(request),
         "task_class": task_class,
         "risk_level": risk_level,
         "selected_agents": list(selected_agents),
+        "operations": [
+            str(operation)
+            for operation in (operations or [])
+        ],
         "limits": dict(limits),
         "confirmed": bool(confirmed),
         "members_used": [],
@@ -140,6 +146,31 @@ def new_state(
         "total_tool_calls_regular": 0,
         "agent_rounds": 0,
     }
+
+    if merchant_confirmation is not None:
+        allowed_fields = (
+            "contract_version",
+            "confirmation_version",
+            "operation",
+            "command",
+            "database_target",
+            "expected_version",
+            "payload_hash",
+            "proposal_hash",
+            "confirmation_hash",
+        )
+        state["merchant_confirmation"] = {
+            key: (
+                redact_secrets(value)
+                if isinstance(value, str)
+                else value
+            )
+            for key in allowed_fields
+            if (value := merchant_confirmation.get(key)) is not None
+            or key == "expected_version"
+        }
+
+    return state
 
 
 def load_state(session_id: Any) -> dict[str, Any] | None:
