@@ -28,6 +28,9 @@ try:
         MerchantProjectChecker,
         ProjectAlert,
     )
+    from claude.agents.tools.merchant.deadline_policy import (
+        DEFAULT_DUE_SOON_DAYS,
+    )
     from claude.clients.merchant.repository import MerchantRepository
 except ModuleNotFoundError:
     # Direct execution fallback:
@@ -40,6 +43,9 @@ except ModuleNotFoundError:
     from agents.tools.merchant.checker import (  # type: ignore
         MerchantProjectChecker,
         ProjectAlert,
+    )
+    from agents.tools.merchant.deadline_policy import (  # type: ignore
+        DEFAULT_DUE_SOON_DAYS,
     )
     from clients.merchant.repository import (  # type: ignore
         MerchantRepository,
@@ -282,7 +288,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--due-soon-days",
         type=int,
-        default=3,
+        default=DEFAULT_DUE_SOON_DAYS,
         help="Number of days used for DUE_SOON alerts",
     )
     parser.add_argument(

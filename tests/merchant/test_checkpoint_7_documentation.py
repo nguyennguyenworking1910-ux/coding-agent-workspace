@@ -107,9 +107,13 @@ def test_handoff_defines_checkpoint_8_goal_and_order():
     assert "does not send email" in content
 
 
-def test_handoff_stays_pending_until_user_commits():
+def test_handoff_records_completed_commit_boundary():
     content = _read(f".claude/documents/{HANDOFF_NAME}")
 
-    assert "**Completion commit:** Pending staging review" in content
-    assert "**Status:** Implementation and verification complete; staging review pending" in content
-    assert "## 13. Staging and commit boundary" in content
+    assert "**Completion commit:** `370b0d0`" in content
+    assert "**Status:** Complete, committed, and pushed" in content
+    assert "## 13. Commit record" in content
+    assert "370b0d0 Complete Checkpoint 7 Merchant intent and policy integration" in content
+    assert "remote `feat/workspace-rag` branch resolves to `370b0d0`" in content
+    assert "git show --check 370b0d0" in content
+    assert "structural system validation passes 81/81" in content

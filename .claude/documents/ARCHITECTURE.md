@@ -47,8 +47,12 @@ Root configuration and orchestration for all agents and tools.
 │   ├── SCHEDULE_CLI.md      Scheduling usage, confirmation rules & troubleshooting
 │   ├── BIGQUERY_INTEGRATION.md  BigQuery data access guide
 │   ├── EXAMPLES_GUIDE.md    Reference implementations and usage patterns
-│   └── MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md
-│                            Merchant intent/policy completion record
+│   ├── MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md
+│   │                        Merchant intent/policy completion record
+│   ├── MERCHANT_CHECKPOINT_8_PLAN_2026-09-07.md
+│   │                        Merchant deadline/alert build plan
+│   └── MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md
+│                            Merchant deadline/alert completion record
 │
 ├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
 │   ├── reviewer.md          ┐

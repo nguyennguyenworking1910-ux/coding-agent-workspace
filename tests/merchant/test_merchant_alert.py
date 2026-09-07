@@ -11,6 +11,9 @@ import pytest
 from claude.agents.tools.merchant.checker import (
     MerchantProjectChecker,
 )
+from claude.agents.tools.merchant.deadline_policy import (
+    DEFAULT_DUE_SOON_DAYS,
+)
 from claude.workers.merchant_alert import (
     InternalDeliveryAdapter,
     MerchantAlertWorker,
@@ -400,3 +403,9 @@ def test_argument_parser():
     assert arguments.due_soon_days == 5
     assert arguments.dry_run is True
     assert arguments.claim_limit == 10
+
+
+def test_argument_parser_uses_documented_due_soon_default():
+    arguments = build_argument_parser().parse_args(["--once"])
+
+    assert arguments.due_soon_days == DEFAULT_DUE_SOON_DAYS == 7

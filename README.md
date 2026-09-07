@@ -151,6 +151,8 @@ Read in this order:
    adding and running `.sql` query templates
 6. **[.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md)** —
    Merchant intent, confirmation, dispatch, and trusted runtime-apply boundary
+7. **[.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md)** —
+   Merchant deadline, blocker, missing-gate, and global alert-read boundary
 
 Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 

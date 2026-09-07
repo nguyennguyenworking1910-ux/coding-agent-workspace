@@ -282,9 +282,12 @@ class MerchantRepository:
                 m.name AS merchant_name,
                 p.project_type,
                 p.workflow_variant,
+                p.workflow_template_version_id,
+                p.reused_document_revision_id,
                 p.title,
                 p.status,
                 p.requires_procurement,
+                p.payment_period_number,
                 p.started_at,
                 p.completed_at,
                 p.created_at,
@@ -374,13 +377,21 @@ class MerchantRepository:
                 expiry_date,
                 superseded_by,
                 created_at
-            FROM merchant_ops.document_revisions
-            WHERE project_id = %s
-            ORDER BY document_type, revision_number
+            FROM merchant_ops.document_revisions AS revision
+            WHERE revision.project_id = %s
+               OR revision.id = (
+                    SELECT project.reused_document_revision_id
+                    FROM merchant_ops.projects AS project
+                    WHERE project.id = %s
+               )
+            ORDER BY
+                revision.document_type,
+                revision.revision_number,
+                revision.id
         """
 
         with connection.cursor() as cursor:
-            cursor.execute(query, (project_id,))
+            cursor.execute(query, (project_id, project_id))
             return _records(cursor.fetchall())
 
     @staticmethod

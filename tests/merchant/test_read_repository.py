@@ -255,11 +255,19 @@ def test_project_detail_returns_complete_internal_state():
     assert "contact.name AS contact_name" in calls[1].args[0]
     assert "contact.email AS contact_email" in calls[1].args[0]
     assert "contact.phone AS contact_phone" in calls[1].args[0]
+    assert "project.reused_document_revision_id" in calls[4].args[0]
 
     for execute_call in calls[2:7]:
         query, parameters = execute_call.args
         assert PROJECT_ID not in query
-        assert parameters == (expected_project_id,)
+
+        if "FROM merchant_ops.document_revisions" in query:
+            assert parameters == (
+                expected_project_id,
+                expected_project_id,
+            )
+        else:
+            assert parameters == (expected_project_id,)
 
     assert calls[7].args[1] == (
         expected_merchant_id,

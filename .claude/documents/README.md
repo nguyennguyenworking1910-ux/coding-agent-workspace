@@ -79,6 +79,16 @@ This folder contains all system documentation, setup guides, and reference mater
   - Exact redacted confirmation and single-dispatch policy enforcement
   - Opaque one-use runtime authorization, persisted session bridge, and Checkpoint 8 plan
 
+- **[MERCHANT_CHECKPOINT_8_PLAN_2026-09-07.md](./MERCHANT_CHECKPOINT_8_PLAN_2026-09-07.md)** — Checkpoint 8 baseline and build plan
+  - Reconciles the existing checker with the authoritative Phase 4 alert contract
+  - Defines remaining deadline, blocker, filter, CLI, and verification gates
+  - Preserves read-only calculation and separates future alert delivery
+
+- **[MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md](./MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md)** — Checkpoint 8 implementation handoff
+  - Deterministic deadline, blocker, and missing-gate calculation
+  - Bounded global alert reads with CLI filters and legacy compatibility
+  - Complete non-live and cleanup-safe test-database verification evidence
+
 ---
 
 ## 🧭 Where things live

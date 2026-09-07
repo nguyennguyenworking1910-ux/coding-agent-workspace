@@ -84,6 +84,23 @@ class FakeReadRepository:
         self.calls.append(("project_detail", project_id))
         return self.detail
 
+    def list_alert_candidate_project_ids(
+        self,
+        *,
+        merchant_id=None,
+        project_id=None,
+        limit=100,
+    ):
+        self.calls.append(
+            (
+                "alert_candidates",
+                merchant_id,
+                project_id,
+                limit,
+            )
+        )
+        return [project_id or PROJECT_ID]
+
     def get_project_history(self, project_id, *, limit):
         self.calls.append(("project_history", project_id, limit))
         return [
@@ -239,7 +256,10 @@ def test_project_alerts_returns_every_calculated_alert():
         "MISSING_GATE",
         "DUE_SOON",
     ]
-    assert repository.calls == [("project_detail", PROJECT_ID)]
+    assert repository.calls == [
+        ("alert_candidates", None, PROJECT_ID, 100),
+        ("project_detail", PROJECT_ID),
+    ]
     assert checker.calls == [(repository.detail, business_date)]
 
 

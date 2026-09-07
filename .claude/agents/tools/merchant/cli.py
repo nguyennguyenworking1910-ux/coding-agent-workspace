@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 try:
     from claude.agents.tools.merchant.checker import (
+        ALERT_TYPES,
         MerchantProjectChecker,
     )
     from claude.agents.tools.merchant.cli_contract import (
@@ -68,6 +70,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(CLAUDE_ROOT))
 
     from agents.tools.merchant.checker import (  # type: ignore
+        ALERT_TYPES,
         MerchantProjectChecker,
     )
     from agents.tools.merchant.cli_contract import (  # type: ignore
@@ -220,7 +223,32 @@ def build_argument_parser() -> argparse.ArgumentParser:
     project_blockers.add_argument("project_id")
 
     project_alerts = project_actions.add_parser("alerts")
-    project_alerts.add_argument("project_id")
+    project_alerts.add_argument(
+        "legacy_project_id",
+        nargs="?",
+        type=_uuid_filter,
+        help=(
+            "Optional project id retained for compatibility; prefer "
+            "--project-id for filtered global reads"
+        ),
+    )
+    project_alerts.add_argument(
+        "--merchant-id",
+        type=_uuid_filter,
+    )
+    project_alerts.add_argument(
+        "--project-id",
+        type=_uuid_filter,
+    )
+    project_alerts.add_argument(
+        "--alert-type",
+        type=_upper,
+        choices=tuple(sorted(ALERT_TYPES)),
+    )
+    project_alerts.add_argument(
+        "--due-date-before",
+        type=_alert_due_date,
+    )
 
     project_create = project_actions.add_parser("create")
     _add_write_mode(project_create)
@@ -445,7 +473,13 @@ def dispatch_read_command(
         return commands.project_blockers(args.project_id)
 
     if command == "project alerts":
-        return commands.project_alerts(args.project_id)
+        project_id = _selected_alert_project_id(args)
+        return commands.project_alerts(
+            project_id,
+            merchant_id=args.merchant_id,
+            alert_type=args.alert_type,
+            due_date_before=args.due_date_before,
+        )
 
     raise ValueError(
         f"Merchant read command is not allowlisted: {command!r}"
@@ -746,6 +780,56 @@ def _history_limit(value: str) -> int:
         )
 
     return limit
+
+
+def _uuid_filter(value: str) -> str:
+    candidate = value.strip()
+
+    try:
+        normalized = uuid.UUID(candidate)
+    except (AttributeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "identifier must be a UUID"
+        ) from error
+
+    return str(normalized)
+
+
+def _alert_due_date(value: str) -> date:
+    candidate = value.strip()
+
+    try:
+        parsed = date.fromisoformat(candidate)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "due date must use YYYY-MM-DD"
+        ) from error
+
+    if parsed.isoformat() != candidate:
+        raise argparse.ArgumentTypeError(
+            "due date must use YYYY-MM-DD"
+        )
+
+    return parsed
+
+
+def _selected_alert_project_id(
+    args: argparse.Namespace,
+) -> str | None:
+    legacy_project_id = args.legacy_project_id
+    filtered_project_id = args.project_id
+
+    if (
+        legacy_project_id is not None
+        and filtered_project_id is not None
+        and legacy_project_id != filtered_project_id
+    ):
+        raise ValueError(
+            "project alerts positional project_id and --project-id "
+            "must match"
+        )
+
+    return filtered_project_id or legacy_project_id
 
 
 def _add_write_mode(parser: argparse.ArgumentParser) -> None:

@@ -38,6 +38,12 @@ PROJECT_STATUSES = frozenset(
 
 DEFAULT_HISTORY_LIMIT = 50
 MAX_HISTORY_LIMIT = 500
+DEFAULT_ALERT_PROJECT_LIMIT = 100
+MAX_ALERT_PROJECT_LIMIT = 500
+
+
+class AlertCandidateLimitExceededError(RuntimeError):
+    """Raised rather than returning a silently truncated alert scan."""
 
 
 class MerchantReadRepository:
@@ -157,6 +163,66 @@ class MerchantReadRepository:
                 with connection.cursor() as cursor:
                     cursor.execute(query, parameters)
                     return _records(cursor.fetchall())
+
+    def list_alert_candidate_project_ids(
+        self,
+        *,
+        merchant_id: str | None = None,
+        project_id: str | None = None,
+        limit: int = DEFAULT_ALERT_PROJECT_LIMIT,
+    ) -> list[str]:
+        """Return a bounded, deterministic set of active project ids."""
+
+        normalized_merchant_id = (
+            _uuid(merchant_id, "merchant_id")
+            if merchant_id is not None
+            else None
+        )
+        normalized_project_id = (
+            _uuid(project_id, "project_id")
+            if project_id is not None
+            else None
+        )
+        normalized_limit = _alert_project_limit(limit)
+        query = """
+            SELECT project.id
+            FROM merchant_ops.projects AS project
+            WHERE project.status NOT IN ('COMPLETED', 'CANCELLED')
+              AND (
+                  %s::uuid IS NULL
+                  OR project.merchant_id = %s
+              )
+              AND (
+                  %s::uuid IS NULL
+                  OR project.id = %s
+              )
+            ORDER BY project.created_at, project.id
+            LIMIT %s
+        """
+        parameters = (
+            normalized_merchant_id,
+            normalized_merchant_id,
+            normalized_project_id,
+            normalized_project_id,
+            normalized_limit + 1,
+        )
+
+        with self.repository.connection(
+            read_only=True
+        ) as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(query, parameters)
+                    rows = _records(cursor.fetchall())
+
+        if len(rows) > normalized_limit:
+            raise AlertCandidateLimitExceededError(
+                "Alert candidate project limit exceeded; "
+                "provide merchant_id or project_id, or use a "
+                "reviewed higher limit"
+            )
+
+        return [str(row["id"]) for row in rows]
 
     def get_project_detail(
         self,
@@ -454,6 +520,19 @@ def _history_limit(value: Any) -> int:
     if not 1 <= value <= MAX_HISTORY_LIMIT:
         raise ValueError(
             f"limit must be between 1 and {MAX_HISTORY_LIMIT}"
+        )
+
+    return value
+
+
+def _alert_project_limit(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("project_limit must be an integer")
+
+    if not 1 <= value <= MAX_ALERT_PROJECT_LIMIT:
+        raise ValueError(
+            "project_limit must be between 1 and "
+            f"{MAX_ALERT_PROJECT_LIMIT}"
         )
 
     return value

@@ -204,13 +204,22 @@ def test_get_complete_project_snapshot():
     assert cursor.execute.call_count == 6
 
     expected_uuid = uuid.UUID(PROJECT_ID)
+    project_query = cursor.execute.call_args_list[0].args[0]
+    revision_query = cursor.execute.call_args_list[3].args[0]
+    assert "p.reused_document_revision_id" in project_query
+    assert "p.payment_period_number" in project_query
+    assert "project.reused_document_revision_id" in revision_query
 
     for execute_call in cursor.execute.call_args_list:
         query, parameters = execute_call.args
 
         # User input must be passed as a parameter, never placed in SQL.
         assert PROJECT_ID not in query
-        assert parameters == (expected_uuid,)
+
+        if "FROM merchant_ops.document_revisions" in query:
+            assert parameters == (expected_uuid, expected_uuid)
+        else:
+            assert parameters == (expected_uuid,)
 
 
 def test_project_not_found():

@@ -45,8 +45,23 @@ class RecordingCommands:
         self.calls.append(("project_blockers", project_id))
         return [{"alert_type": "BLOCKED"}]
 
-    def project_alerts(self, project_id):
-        self.calls.append(("project_alerts", project_id))
+    def project_alerts(
+        self,
+        project_id=None,
+        *,
+        merchant_id=None,
+        alert_type=None,
+        due_date_before=None,
+    ):
+        self.calls.append(
+            (
+                "project_alerts",
+                project_id,
+                merchant_id,
+                alert_type,
+                due_date_before,
+            )
+        )
         return [{"alert_type": "DUE_SOON"}]
 
 
@@ -126,7 +141,13 @@ class RecordingWriteCommands:
         ),
         (
             ["project", "alerts", PROJECT_ID],
-            ("project_alerts", PROJECT_ID),
+            (
+                "project_alerts",
+                PROJECT_ID,
+                None,
+                None,
+                None,
+            ),
         ),
     ),
 )

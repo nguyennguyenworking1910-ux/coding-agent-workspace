@@ -3,9 +3,9 @@
 **Date:** September 7, 2026
 **Branch:** `feat/workspace-rag`
 **Base commit:** `ba16daa` (`Complete Checkpoint 6 merchant manager agent`)
-**Completion commit:** Pending staging review
+**Completion commit:** `370b0d0` (`Complete Checkpoint 7 Merchant intent and policy integration`)
 **Checkpoint:** 7 — Intent and Policy Integration
-**Status:** Implementation and verification complete; staging review pending
+**Status:** Complete, committed, and pushed to `feat/workspace-rag`
 
 ## 1. Outcome
 
@@ -184,6 +184,9 @@ Checkpoint 7 contract extends their historical boundary.
 | 7.7 pre-lifecycle readiness | 1 passed |
 | 7.7 cleanup-safe test-database lifecycle | 1 passed |
 | 7.7 post-lifecycle readiness | 1 passed |
+| 7.8 documentation compatibility | 20 passed |
+| Final Checkpoint 7 structural validation | 80/80 passed |
+| Post-commit clean-checkout structural validation | 81/81 passed |
 
 `git diff --check` passed at every completed gate. The non-live suite explicitly excluded all
 integration tests. The live lifecycle was separately enabled only after an exact safety guard
@@ -230,16 +233,19 @@ boundary. Build it in this order:
 Checkpoint 8's deliverable is a deterministic, queryable alert view. It does not send email,
 Slack, or other notifications; delivery remains future Checkpoint 10 work.
 
-## 13. Staging and commit boundary
+## 13. Commit record
 
-Before committing Checkpoint 7:
+Checkpoint 7 was committed and pushed to `feat/workspace-rag` as:
 
-1. Review the complete modified and untracked file list against sections 8 and 9.
-2. Confirm no `.env`, credential, cache, archive, runtime state, or real Merchant data is staged.
-3. Run the Gate 7.8 focused documentation tests and final non-live regression.
-4. Run `git diff --cached --check` after staging only the intended files.
-5. Commit the complete Checkpoint 7 implementation and finalized handoff together.
-6. Push only to `feat/workspace-rag` after confirming the branch and remote.
+```text
+370b0d0 Complete Checkpoint 7 Merchant intent and policy integration
+```
 
-After the commit, replace the pending completion fields above with the actual commit SHA and
-record the clean-checkout structural validation result.
+Post-commit verification confirmed:
+
+1. The remote `feat/workspace-rag` branch resolves to `370b0d0`.
+2. A detached checkout of that remote head has no modified or untracked files.
+3. No `.env`, credential, cache, archive, persisted runtime state, or real Merchant data was
+   committed.
+4. `git show --check 370b0d0` reports no whitespace errors.
+5. The structural system validation passes 81/81 from the clean checkout.

@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import date
 from typing import Any, Iterable, Mapping
-from zoneinfo import ZoneInfo
 
+from .deadline_policy import (
+    DEFAULT_DUE_SOON_DAYS,
+    DUE_SOON,
+    DUE_TODAY,
+    OVERDUE,
+    DeadlinePolicy,
+)
 
-MERCHANT_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 TERMINAL_PROJECT_STATUSES = frozenset({"COMPLETED", "CANCELLED"})
 TERMINAL_STEP_STATUSES = frozenset(
@@ -20,6 +25,16 @@ ACTIVE_STEP_STATUSES = frozenset(
     {"PENDING", "READY", "IN_PROGRESS", "BLOCKED"}
 )
 
+REQUIRES_PROCUREMENT_CONDITION = "requires_procurement"
+PARTNER_APPROVAL_GATE = "RECORD PARTNER APPROVAL"
+SIGNING_GATE = "VALIDATE SIGNING GATE"
+EXISTING_DOCUMENT_GATE = "VALIDATE EXISTING SIGNED DOCUMENT"
+SIGNING_REQUIRED_ROLES = (
+    "LEGAL",
+    "ACCOUNTING",
+    "PARTNER",
+)
+
 ALERT_ORDER = {
     "OVERDUE": 0,
     "DUE_TODAY": 1,
@@ -27,6 +42,7 @@ ALERT_ORDER = {
     "MISSING_GATE": 3,
     "DUE_SOON": 4,
 }
+ALERT_TYPES = frozenset(ALERT_ORDER)
 
 
 @dataclass(frozen=True)
@@ -37,6 +53,7 @@ class ProjectAlert:
     message: str
     project_step_id: str | None = None
     step_name: str | None = None
+    branch_key: str | None = None
     business_due_date: date | None = None
     condition_fingerprint: str | None = None
 
@@ -81,11 +98,15 @@ class ProjectAlert:
 class MerchantProjectChecker:
     """Calculate project alerts without changing workflow state."""
 
-    def __init__(self, *, due_soon_days: int = 3) -> None:
-        if due_soon_days < 0:
-            raise ValueError("due_soon_days cannot be negative")
-
-        self.due_soon_days = due_soon_days
+    def __init__(
+        self,
+        *,
+        due_soon_days: int = DEFAULT_DUE_SOON_DAYS,
+    ) -> None:
+        self.deadline_policy = DeadlinePolicy(
+            due_soon_days=due_soon_days
+        )
+        self.due_soon_days = self.deadline_policy.due_soon_days
 
     def check_repository(
         self,
@@ -119,11 +140,16 @@ class MerchantProjectChecker:
         if project_status in TERMINAL_PROJECT_STATUSES:
             return []
 
-        effective_date = business_date or datetime.now(
-            MERCHANT_TIMEZONE
-        ).date()
+        effective_date = self.deadline_policy.resolve_business_date(
+            business_date
+        )
 
         steps = [dict(step) for step in snapshot.get("steps", [])]
+        active_steps = [
+            step
+            for step in steps
+            if _step_is_active(project, step)
+        ]
         dependencies = [
             dict(edge)
             for edge in snapshot.get("dependencies", [])
@@ -143,7 +169,7 @@ class MerchantProjectChecker:
 
         alerts: list[ProjectAlert] = []
 
-        for step in steps:
+        for step in active_steps:
             alerts.extend(
                 self._deadline_alerts(
                     project_id,
@@ -159,6 +185,7 @@ class MerchantProjectChecker:
 
             missing_gate_alert = self._missing_gate_alert(
                 project_id,
+                project,
                 step,
                 revisions,
                 approvals,
@@ -172,7 +199,7 @@ class MerchantProjectChecker:
         alerts.extend(
             self._dependency_alerts(
                 project_id,
-                steps,
+                active_steps,
                 dependencies,
             )
         )
@@ -180,7 +207,7 @@ class MerchantProjectChecker:
         if project.get("requires_procurement"):
             procurement_alert = self._project_procurement_alert(
                 project_id,
-                steps,
+                active_steps,
                 procurement,
             )
 
@@ -200,20 +227,25 @@ class MerchantProjectChecker:
         if status not in ACTIVE_STEP_STATUSES:
             return []
 
-        due_date = _as_date(step.get("scheduled_completion"))
+        deadline = self.deadline_policy.evaluate(
+            step.get("scheduled_completion"),
+            business_date=business_date,
+        )
+        due_date = deadline.due_date
 
-        if due_date is None:
+        if due_date is None or deadline.alert_type is None:
             return []
 
         step_id = str(step["id"])
         step_name = str(step.get("step_name") or "Unnamed step")
 
-        if due_date < business_date:
+        if deadline.alert_type == OVERDUE:
             return [
                 ProjectAlert(
                     project_id=project_id,
                     project_step_id=step_id,
                     step_name=step_name,
+                    branch_key=_branch_key(step),
                     alert_type="OVERDUE",
                     severity="CRITICAL",
                     business_due_date=due_date,
@@ -224,12 +256,13 @@ class MerchantProjectChecker:
                 )
             ]
 
-        if due_date == business_date:
+        if deadline.alert_type == DUE_TODAY:
             return [
                 ProjectAlert(
                     project_id=project_id,
                     project_step_id=step_id,
                     step_name=step_name,
+                    branch_key=_branch_key(step),
                     alert_type="DUE_TODAY",
                     severity="HIGH",
                     business_due_date=due_date,
@@ -237,18 +270,15 @@ class MerchantProjectChecker:
                 )
             ]
 
-        due_soon_limit = business_date + timedelta(
-            days=self.due_soon_days
-        )
-
-        if due_date <= due_soon_limit:
-            remaining_days = (due_date - business_date).days
+        if deadline.alert_type == DUE_SOON:
+            remaining_days = deadline.days_until_due
 
             return [
                 ProjectAlert(
                     project_id=project_id,
                     project_step_id=step_id,
                     step_name=step_name,
+                    branch_key=_branch_key(step),
                     alert_type="DUE_SOON",
                     severity="MEDIUM",
                     business_due_date=due_date,
@@ -276,6 +306,7 @@ class MerchantProjectChecker:
             project_id=project_id,
             project_step_id=step_id,
             step_name=step_name,
+            branch_key=_branch_key(step),
             alert_type="BLOCKED",
             severity="HIGH",
             condition_fingerprint=f"step-status:{step_id}:BLOCKED",
@@ -285,6 +316,7 @@ class MerchantProjectChecker:
     def _missing_gate_alert(
         self,
         project_id: str,
+        project: Mapping[str, Any],
         step: Mapping[str, Any],
         revisions: list[Mapping[str, Any]],
         approvals: list[Mapping[str, Any]],
@@ -299,7 +331,9 @@ class MerchantProjectChecker:
         if status in TERMINAL_STEP_STATUSES:
             return None
 
-        due_date = _as_date(step.get("scheduled_completion"))
+        due_date = self.deadline_policy.normalize_date(
+            step.get("scheduled_completion")
+        )
 
         # Do not warn about a future gate that is not ready yet.
         if (
@@ -310,67 +344,36 @@ class MerchantProjectChecker:
 
         step_id = str(step["id"])
         step_name = str(step.get("step_name") or "Approval gate")
-        normalized_name = step_name.upper()
+        reasons = _missing_gate_reasons(
+            project_id=project_id,
+            project=project,
+            step=step,
+            revisions=revisions,
+            approvals=approvals,
+            procurement=procurement,
+            business_date=business_date,
+            deadline_policy=self.deadline_policy,
+        )
 
-        latest_revision = _latest_revision(revisions)
-        missing_reason: str | None = None
-
-        if "LEGAL" in normalized_name:
-            if not _has_approval(
-                latest_revision,
-                approvals,
-                "LEGAL",
-            ):
-                missing_reason = "latest document lacks LEGAL approval"
-
-        elif "ACCOUNT" in normalized_name:
-            if not _has_approval(
-                latest_revision,
-                approvals,
-                "ACCOUNTING",
-            ):
-                missing_reason = (
-                    "latest document lacks ACCOUNTING approval"
-                )
-
-        elif "PARTNER" in normalized_name:
-            if not _has_approval(
-                latest_revision,
-                approvals,
-                "PARTNER",
-            ):
-                missing_reason = "latest document lacks PARTNER approval"
-
-        elif "SIGN" in normalized_name:
-            if not latest_revision:
-                missing_reason = "no document revision exists"
-            elif not latest_revision.get("signed"):
-                missing_reason = "latest document is not signed"
-            elif latest_revision.get("signed_at") is None:
-                missing_reason = "signed document has no signed_at timestamp"
-
-        elif any(
-            keyword in normalized_name
-            for keyword in ("PROCUREMENT", "PURCHASE", "PR GATE")
-        ):
-            if not _has_procurement_identifier(procurement):
-                missing_reason = "procurement record has no external ID"
-
-        else:
-            missing_reason = f"approval gate remains {status}"
-
-        if missing_reason is None:
+        if not reasons:
             return None
+
+        reason_codes = tuple(code for code, _ in reasons)
+        missing_reason = "; ".join(
+            description for _, description in reasons
+        )
 
         return ProjectAlert(
             project_id=project_id,
             project_step_id=step_id,
             step_name=step_name,
+            branch_key=_branch_key(step),
             alert_type="MISSING_GATE",
             severity="HIGH",
             business_due_date=due_date,
             condition_fingerprint=(
-                f"approval-gate:{step_id}:{missing_reason}"
+                f"approval-gate:{step_id}:"
+                + "|".join(reason_codes)
             ),
             message=f"Gate '{step_name}' is missing: {missing_reason}.",
         )
@@ -427,6 +430,7 @@ class MerchantProjectChecker:
                     project_id=project_id,
                     project_step_id=destination_id,
                     step_name=destination_name,
+                    branch_key=_branch_key(destination),
                     alert_type="BLOCKED",
                     severity="HIGH",
                     condition_fingerprint=(
@@ -447,27 +451,30 @@ class MerchantProjectChecker:
         steps: list[Mapping[str, Any]],
         procurement: list[Mapping[str, Any]],
     ) -> ProjectAlert | None:
-        if _has_procurement_identifier(procurement):
+        if _has_purchase_request_identifier(
+            project_id,
+            procurement,
+        ):
             return None
 
-        procurement_step = next(
-            (
-                step
-                for step in steps
-                if any(
-                    keyword in str(
-                        step.get("step_name", "")
-                    ).upper()
-                    for keyword in (
-                        "PROCUREMENT",
-                        "PURCHASE REQUEST",
-                        "CREATE PR",
-                    )
-                )
-                and str(step.get("status", "")).upper()
-                not in TERMINAL_STEP_STATUSES
+        procurement_steps = [
+            step
+            for step in steps
+            if _is_procurement_step(step)
+            and str(step.get("status", "")).upper()
+            not in TERMINAL_STEP_STATUSES
+        ]
+        procurement_step = min(
+            procurement_steps,
+            key=lambda step: (
+                0
+                if _normalize_step_name(step.get("step_name"))
+                == "RECORD PURCHASE REQUEST NUMBER"
+                else 1,
+                int(step.get("sequence_number") or 0),
+                str(step.get("id") or ""),
             ),
-            None,
+            default=None,
         )
 
         if procurement_step is None:
@@ -482,39 +489,33 @@ class MerchantProjectChecker:
             project_id=project_id,
             project_step_id=step_id,
             step_name=step_name,
+            branch_key=_branch_key(procurement_step),
             alert_type="MISSING_GATE",
             severity="HIGH",
             condition_fingerprint=f"procurement:{step_id}:external-id",
             message=(
                 f"Project requires procurement, but step "
-                f"'{step_name}' has no recorded PR/PO identifier."
+                f"'{step_name}' has no recorded PR/PO identifier; "
+                "a Purchase Request number is required."
             ),
         )
 
 
-def _as_date(value: Any) -> date | None:
-    if value is None:
-        return None
-
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.date()
-
-        return value.astimezone(MERCHANT_TIMEZONE).date()
-
-    if isinstance(value, date):
-        return value
-
-    if isinstance(value, str):
-        return date.fromisoformat(value[:10])
-
-    raise ValueError(f"Unsupported date value: {value!r}")
-
-
 def _latest_revision(
     revisions: Iterable[Mapping[str, Any]],
+    *,
+    project_id: str | None = None,
 ) -> Mapping[str, Any] | None:
-    available = list(revisions)
+    available = [
+        revision
+        for revision in revisions
+        if revision.get("superseded_by") is None
+        and (
+            project_id is None
+            or revision.get("project_id") is None
+            or str(revision.get("project_id")) == project_id
+        )
+    ]
 
     if not available:
         return None
@@ -548,13 +549,393 @@ def _has_approval(
     )
 
 
-def _has_procurement_identifier(
+def _step_is_active(
+    project: Mapping[str, Any],
+    step: Mapping[str, Any],
+) -> bool:
+    condition_key = step.get("condition_key")
+
+    if condition_key is None:
+        return True
+
+    if not isinstance(condition_key, str) or not condition_key.strip():
+        raise ValueError(
+            "Workflow condition_key must be a non-empty string"
+        )
+
+    normalized_key = condition_key.strip().lower()
+
+    if normalized_key == REQUIRES_PROCUREMENT_CONDITION:
+        return bool(project.get("requires_procurement"))
+
+    raise ValueError(
+        f"Unsupported workflow condition key: {normalized_key}"
+    )
+
+
+def _branch_key(step: Mapping[str, Any]) -> str | None:
+    value = step.get("branch_key")
+
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _normalize_step_name(value: Any) -> str:
+    return " ".join(str(value or "").strip().upper().split())
+
+
+def _is_procurement_step(step: Mapping[str, Any]) -> bool:
+    if (
+        str(step.get("condition_key") or "").strip().lower()
+        == REQUIRES_PROCUREMENT_CONDITION
+    ):
+        return True
+
+    normalized_name = _normalize_step_name(step.get("step_name"))
+    return any(
+        keyword in normalized_name
+        for keyword in (
+            "PROCUREMENT",
+            "PURCHASE REQUEST",
+            "CREATE PR",
+        )
+    )
+
+
+def _has_purchase_request_identifier(
+    project_id: str,
     procurement: Iterable[Mapping[str, Any]],
 ) -> bool:
     return any(
         str(record.get("external_id") or "").strip()
+        and str(record.get("procurement_type") or "").strip().upper()
+        == "PURCHASE_REQUEST"
+        and (
+            record.get("project_id") is None
+            or str(record.get("project_id")) == project_id
+        )
         for record in procurement
     )
+
+
+def _missing_gate_reasons(
+    *,
+    project_id: str,
+    project: Mapping[str, Any],
+    step: Mapping[str, Any],
+    revisions: list[Mapping[str, Any]],
+    approvals: list[Mapping[str, Any]],
+    procurement: list[Mapping[str, Any]],
+    business_date: date,
+    deadline_policy: DeadlinePolicy,
+) -> tuple[tuple[str, str], ...]:
+    normalized_name = _normalize_step_name(step.get("step_name"))
+    latest_revision = _latest_revision(
+        revisions,
+        project_id=project_id,
+    )
+
+    if normalized_name == EXISTING_DOCUMENT_GATE:
+        return _existing_document_reasons(
+            project=project,
+            revisions=revisions,
+            business_date=business_date,
+            deadline_policy=deadline_policy,
+        )
+
+    if normalized_name == PARTNER_APPROVAL_GATE:
+        return _approval_reasons(
+            latest_revision,
+            approvals,
+            ("PARTNER",),
+            require_approved_at=True,
+        )
+
+    if normalized_name == SIGNING_GATE:
+        reasons = list(
+            _approval_reasons(
+                latest_revision,
+                approvals,
+                SIGNING_REQUIRED_ROLES,
+                require_approved_at=True,
+            )
+        )
+
+        if (
+            project.get("requires_procurement")
+            and not _has_purchase_request_identifier(
+                project_id,
+                procurement,
+            )
+        ):
+            reasons.append(
+                (
+                    "MISSING_PURCHASE_REQUEST",
+                    "required Purchase Request number is missing",
+                )
+            )
+
+        if (
+            latest_revision is not None
+            and latest_revision.get("signed")
+            and latest_revision.get("signed_at") is None
+        ):
+            reasons.append(
+                (
+                    "INVALID_SIGNED_DOCUMENT",
+                    "signed document has no signed_at timestamp",
+                )
+            )
+
+        return tuple(reasons)
+
+    # Compatibility fallback for legacy/custom templates that predate
+    # canonical gate names. Exact stored gate names above always win.
+    if "LEGAL" in normalized_name:
+        return _legacy_approval_reason(
+            latest_revision,
+            approvals,
+            "LEGAL",
+        )
+
+    if "ACCOUNT" in normalized_name:
+        return _legacy_approval_reason(
+            latest_revision,
+            approvals,
+            "ACCOUNTING",
+        )
+
+    if "PARTNER" in normalized_name:
+        return _legacy_approval_reason(
+            latest_revision,
+            approvals,
+            "PARTNER",
+        )
+
+    if "SIGN" in normalized_name:
+        if latest_revision is None:
+            return (("MISSING_DOCUMENT_REVISION", "no document revision exists"),)
+
+        if not latest_revision.get("signed"):
+            return (("UNSIGNED_DOCUMENT", "latest document is not signed"),)
+
+        if latest_revision.get("signed_at") is None:
+            return (
+                (
+                    "INVALID_SIGNED_DOCUMENT",
+                    "signed document has no signed_at timestamp",
+                ),
+            )
+
+        return ()
+
+    if any(
+        keyword in normalized_name
+        for keyword in ("PROCUREMENT", "PURCHASE", "PR GATE")
+    ):
+        if not _has_purchase_request_identifier(
+            project_id,
+            procurement,
+        ):
+            return (
+                (
+                    "MISSING_PURCHASE_REQUEST",
+                    "procurement record has no Purchase Request external ID",
+                ),
+            )
+
+        return ()
+
+    status = str(step.get("status", "")).upper()
+    return (
+        (
+            "INCOMPLETE_MANUAL_GATE",
+            f"approval gate remains {status}",
+        ),
+    )
+
+
+def _approval_reasons(
+    latest_revision: Mapping[str, Any] | None,
+    approvals: Iterable[Mapping[str, Any]],
+    required_roles: Iterable[str],
+    *,
+    require_approved_at: bool,
+) -> tuple[tuple[str, str], ...]:
+    roles = tuple(required_roles)
+
+    if latest_revision is None:
+        return (
+            (
+                "MISSING_DOCUMENT_REVISION",
+                "no active document revision exists",
+            ),
+        )
+
+    revision_id = str(latest_revision["id"])
+    approval_rows = [
+        approval
+        for approval in approvals
+        if str(approval.get("document_revision_id")) == revision_id
+    ]
+    reasons: list[tuple[str, str]] = []
+
+    for role in roles:
+        role_rows = [
+            approval
+            for approval in approval_rows
+            if str(approval.get("approver_role", "")).upper() == role
+        ]
+        approved = any(
+            str(approval.get("approval_status", "")).upper()
+            == "APPROVED"
+            and (
+                not require_approved_at
+                or approval.get("approved_at") is not None
+            )
+            for approval in role_rows
+        )
+
+        if approved:
+            continue
+
+        rejected = any(
+            str(approval.get("approval_status", "")).upper()
+            == "REJECTED"
+            for approval in role_rows
+        )
+        code_prefix = "REJECTED" if rejected else "MISSING"
+        description_prefix = "rejected" if rejected else "lacks"
+        reasons.append(
+            (
+                f"{code_prefix}_{role}_APPROVAL",
+                f"latest document {description_prefix} {role} approval",
+            )
+        )
+
+    return tuple(reasons)
+
+
+def _legacy_approval_reason(
+    latest_revision: Mapping[str, Any] | None,
+    approvals: Iterable[Mapping[str, Any]],
+    role: str,
+) -> tuple[tuple[str, str], ...]:
+    if _has_approval(latest_revision, approvals, role):
+        return ()
+
+    return (
+        (
+            f"MISSING_{role}_APPROVAL",
+            f"latest document lacks {role} approval",
+        ),
+    )
+
+
+def _existing_document_reasons(
+    *,
+    project: Mapping[str, Any],
+    revisions: Iterable[Mapping[str, Any]],
+    business_date: date,
+    deadline_policy: DeadlinePolicy,
+) -> tuple[tuple[str, str], ...]:
+    reused_revision_id = project.get("reused_document_revision_id")
+    reasons: list[tuple[str, str]] = []
+
+    if reused_revision_id is None:
+        reasons.append(
+            (
+                "MISSING_REUSED_DOCUMENT",
+                "project has no reused document revision",
+            )
+        )
+        reused_revision = None
+    else:
+        reused_revision = next(
+            (
+                revision
+                for revision in revisions
+                if str(revision.get("id"))
+                == str(reused_revision_id)
+            ),
+            None,
+        )
+
+        if reused_revision is None:
+            reasons.append(
+                (
+                    "MISSING_REUSED_DOCUMENT_EVIDENCE",
+                    "reused document evidence is unavailable",
+                )
+            )
+
+    payment_period = project.get("payment_period_number")
+
+    if (
+        not isinstance(payment_period, int)
+        or isinstance(payment_period, bool)
+        or payment_period < 2
+    ):
+        reasons.append(
+            (
+                "INVALID_PAYMENT_PERIOD",
+                "existing-document workflow requires payment period 2 or later",
+            )
+        )
+
+    if reused_revision is None:
+        return tuple(reasons)
+
+    if reused_revision.get("superseded_by") is not None:
+        reasons.append(
+            (
+                "SUPERSEDED_REUSED_DOCUMENT",
+                "reused document revision has been superseded",
+            )
+        )
+
+    if not reused_revision.get("signed"):
+        reasons.append(
+            (
+                "UNSIGNED_REUSED_DOCUMENT",
+                "reused document revision is not signed",
+            )
+        )
+    elif reused_revision.get("signed_at") is None:
+        reasons.append(
+            (
+                "INVALID_SIGNED_DOCUMENT",
+                "signed reused document has no signed_at timestamp",
+            )
+        )
+
+    effective_date = deadline_policy.normalize_date(
+        reused_revision.get("effective_date")
+    )
+    expiry_date = deadline_policy.normalize_date(
+        reused_revision.get("expiry_date")
+    )
+
+    if effective_date is not None and effective_date > business_date:
+        reasons.append(
+            (
+                "DOCUMENT_NOT_EFFECTIVE",
+                "reused document is not effective yet",
+            )
+        )
+
+    if expiry_date is not None and expiry_date < business_date:
+        reasons.append(
+            (
+                "EXPIRED_REUSED_DOCUMENT",
+                "reused document has expired",
+            )
+        )
+
+    return tuple(reasons)
 
 
 def _deduplicate_and_sort(
@@ -571,6 +952,7 @@ def _deduplicate_and_sort(
         key=lambda alert: (
             ALERT_ORDER.get(alert.alert_type, 99),
             alert.business_due_date or date.max,
+            alert.branch_key or "",
             alert.project_step_id or "",
             alert.condition_fingerprint or "",
         ),
