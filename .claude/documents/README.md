@@ -89,6 +89,16 @@ This folder contains all system documentation, setup guides, and reference mater
   - Bounded global alert reads with CLI filters and legacy compatibility
   - Complete non-live and cleanup-safe test-database verification evidence
 
+- **[MERCHANT_CHECKPOINT_9_PLAN_2026-09-07.md](./MERCHANT_CHECKPOINT_9_PLAN_2026-09-07.md)** — Checkpoint 9 private runtime initialization plan
+  - Finalizes the Checkpoint 8 commit boundary
+  - Defines private catalog isolation, runtime readiness, and authorization gates
+  - Keeps all real Merchant values outside Git, fixtures, logs, archives, and RAG
+
+- **[MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md](./MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)** — Checkpoint 9 final core implementation handoff
+  - Records authorized migrations, templates, and atomic private catalog initialization
+  - Verifies the 22-record runtime through hashes and redacted counts only
+  - Preserves per-operation authority for every future real workflow mutation
+
 ---
 
 ## 🧭 Where things live

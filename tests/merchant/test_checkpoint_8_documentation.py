@@ -24,16 +24,13 @@ def test_checkpoint_8_handoff_exists_and_is_indexed():
     assert HANDOFF_NAME in architecture
 
 
-def test_plan_and_handoff_record_staging_review_status():
+def test_plan_and_handoff_record_completed_commit_status():
     plan = _read(f".claude/documents/{PLAN_NAME}")
     handoff = _read(f".claude/documents/{HANDOFF_NAME}")
 
     assert "Implementation and verification complete; staging review pending" in plan
-    assert "**Completion commit:** Pending staging review" in handoff
-    assert (
-        "**Status:** Implementation and verification complete; "
-        "staging review pending"
-    ) in handoff
+    assert "**Completion commit:** `efa05fa`" in handoff
+    assert "**Status:** Complete, committed, and pushed" in handoff
 
 
 def test_handoff_records_deadline_policy_and_five_types():
@@ -126,10 +123,15 @@ def test_handoff_defines_checkpoint_9_continuation_order():
     assert "Checkpoint 10 remains a future alert-delivery extension" in content
 
 
-def test_handoff_keeps_commit_pending_until_user_review():
+def test_handoff_records_completed_commit_boundary():
     content = _read(f".claude/documents/{HANDOFF_NAME}")
 
-    assert "## 13. Staging and commit boundary" in content
-    assert "Stage only the reviewed Checkpoint 8 files" in content
-    assert "Commit and push only to `feat/workspace-rag`" in content
-    assert "actual commit SHA" in content
+    assert "## 13. Commit record" in content
+    assert (
+        "efa05fa Complete Checkpoint 8 Merchant deadline and "
+        "alert calculation"
+    ) in content
+    assert "efa05fa10bc32f1fbf2b8c2d5d82c1d5b5ec156e" in content
+    assert "exactly the 27 reviewed Checkpoint 8 files" in content
+    assert "git show --check efa05fa" in content
+    assert "Structural system validation passes 81/81" in content

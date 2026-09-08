@@ -3,9 +3,9 @@
 **Date:** September 7, 2026
 **Branch:** `feat/workspace-rag`
 **Base commit:** `370b0d0` (`Complete Checkpoint 7 Merchant intent and policy integration`)
-**Completion commit:** Pending staging review
+**Completion commit:** `efa05fa` (`Complete Checkpoint 8 Merchant deadline and alert calculation`)
 **Checkpoint:** 8 — Deadline and Alert Calculation
-**Status:** Implementation and verification complete; staging review pending
+**Status:** Complete, committed, and pushed to `feat/workspace-rag`
 
 ## 1. Outcome
 
@@ -168,6 +168,10 @@ Checkpoint 8 read contract extends their historical expectations.
 | 8.6 pre-lifecycle readiness | 1 passed |
 | 8.6 cleanup-safe alert-read lifecycle | 1 passed |
 | 8.6 post-lifecycle readiness | 1 passed |
+| 8.7 final focused regression | 317 passed, 23 subtests passed |
+| 8.7 complete non-live regression | 1,385 passed, 9 deselected, 120 subtests passed |
+| 8.7 final structural validation | 80/80 passed |
+| Post-commit clean-checkout structural validation | 81/81 passed |
 
 `git diff --check` passed at every completed gate. The complete non-live suite explicitly
 excluded integration tests. Gate 8.6 was separately enabled only after exact guards verified
@@ -224,17 +228,21 @@ Checkpoint 9 is the final currently planned core Phase 4 checkpoint. Build it in
 Checkpoint 10 remains a future alert-delivery extension and is not required to complete the core
 Phase 4 Merchant manager.
 
-## 13. Staging and commit boundary
+## 13. Commit record
 
-Before committing Checkpoint 8:
+Checkpoint 8 was committed and pushed to `feat/workspace-rag` as:
 
-1. Run the Gate 8.7 documentation compatibility and focused alert regression.
-2. Run the complete root non-integration regression and structural validation.
-3. Review the complete modified and untracked file list against sections 7 and 8.
-4. Confirm no `.env`, credential, cache, archive, persisted runtime state, database dump, or real
-   Merchant data is staged.
-5. Stage only the reviewed Checkpoint 8 files and run `git diff --cached --check`.
-6. Commit and push only to `feat/workspace-rag` after confirming the branch.
+```text
+efa05fa Complete Checkpoint 8 Merchant deadline and alert calculation
+```
 
-After the commit, replace the pending completion fields above with the actual commit SHA and
-record the clean-checkout structural validation result during Checkpoint 9 Gate 9.0.
+Post-commit verification confirmed:
+
+1. The remote `feat/workspace-rag` branch resolves to
+   `efa05fa10bc32f1fbf2b8c2d5d82c1d5b5ec156e`.
+2. The commit contains exactly the 27 reviewed Checkpoint 8 files.
+3. A detached checkout of the remote head has no modified or untracked files.
+4. No `.env`, credential, cache, archive, runtime state, database dump, or real Merchant data was
+   committed.
+5. `git show --check efa05fa` reports no whitespace errors.
+6. Structural system validation passes 81/81 from the clean checkout.

@@ -1,6 +1,6 @@
 # System Architecture & Development Guide
 
-**Last Updated:** September 7, 2026
+**Last Updated:** September 8, 2026
 **Status:** Active System  
 **Target Audience:** Team Leader, All Agent Members, Future Developers
 
@@ -51,8 +51,12 @@ Root configuration and orchestration for all agents and tools.
 │   │                        Merchant intent/policy completion record
 │   ├── MERCHANT_CHECKPOINT_8_PLAN_2026-09-07.md
 │   │                        Merchant deadline/alert build plan
-│   └── MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md
-│                            Merchant deadline/alert completion record
+│   ├── MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md
+│   │                        Merchant deadline/alert completion record
+│   ├── MERCHANT_CHECKPOINT_9_PLAN_2026-09-07.md
+│   │                        Private runtime initialization plan
+│   └── MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md
+│                            Private runtime completion record
 │
 ├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
 │   ├── reviewer.md          ┐
@@ -82,6 +86,9 @@ Root configuration and orchestration for all agents and tools.
 │   ├── config.py            Credential resolution & configuration
 │   ├── SETUP.md             Credential setup instructions
 │   ├── calendar_client.py   Google Calendar API wrapper
+│   ├── merchant/            Merchant PostgreSQL repositories and runtime gates
+│   │   ├── catalog_initializer.py  Atomic private catalog initialization
+│   │   └── runtime_verification.py Read-only catalog/workflow verification
 │   └── .env.example         Environment variables template
 │
 ├── commands/                [SLASH COMMANDS FOR USERS]

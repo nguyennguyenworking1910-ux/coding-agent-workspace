@@ -153,6 +153,8 @@ Read in this order:
    Merchant intent, confirmation, dispatch, and trusted runtime-apply boundary
 7. **[.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md)** —
    Merchant deadline, blocker, missing-gate, and global alert-read boundary
+8. **[.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md](./.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)** —
+   Private runtime initialization, hash-bound catalog, and final core Phase 4 boundary
 
 Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 
