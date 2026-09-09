@@ -1,6 +1,6 @@
 # System Architecture & Development Guide
 
-**Last Updated:** September 8, 2026
+**Last Updated:** September 9, 2026
 **Status:** Active System  
 **Target Audience:** Team Leader, All Agent Members, Future Developers
 
@@ -55,8 +55,14 @@ Root configuration and orchestration for all agents and tools.
 │   │                        Merchant deadline/alert completion record
 │   ├── MERCHANT_CHECKPOINT_9_PLAN_2026-09-07.md
 │   │                        Private runtime initialization plan
-│   └── MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md
-│                            Private runtime completion record
+│   ├── MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md
+│   │                        Private runtime completion record
+│   ├── MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md
+│   │                        Production alert-delivery plan
+│   ├── MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md
+│   │                        Final Merchant implementation record
+│   └── MERCHANT_ALERT_OPERATIONS.md
+│                            Alert-worker operations and recovery
 │
 ├── agents/                  [AGENT DEFINITIONS & IMPLEMENTATIONS]
 │   ├── reviewer.md          ┐

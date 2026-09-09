@@ -155,6 +155,12 @@ Read in this order:
    Merchant deadline, blocker, missing-gate, and global alert-read boundary
 8. **[.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md](./.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)** —
    Private runtime initialization, hash-bound catalog, and final core Phase 4 boundary
+9. **[.claude/documents/MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md](./.claude/documents/MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md)** —
+   Production alert delivery, lease-safe claiming, bounded retries, and operational verification
+10. **[.claude/documents/MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md](./.claude/documents/MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md)** —
+    Final Merchant implementation, runtime rollout evidence, and debugging boundary
+11. **[.claude/documents/MERCHANT_ALERT_OPERATIONS.md](./.claude/documents/MERCHANT_ALERT_OPERATIONS.md)** —
+    One-shot alert-worker modes, safe limits, health checks, Task Scheduler, and recovery
 
 Full index: [.claude/documents/README.md](./.claude/documents/README.md)
 

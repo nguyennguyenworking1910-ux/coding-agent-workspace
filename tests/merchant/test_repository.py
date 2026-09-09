@@ -10,8 +10,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from claude.clients.merchant.repository import (
+    AlertClaimLostError,
     MerchantRepository,
-    MerchantRepositoryError,
+    ProjectScanLimitExceededError,
     ProjectNotFoundError,
     RepositoryConfig,
     RUNTIME_DATABASE,
@@ -22,6 +23,7 @@ from claude.clients.merchant.repository import (
 PROJECT_ID = "00000000-0000-0000-0000-000000000001"
 STEP_ID = "00000000-0000-0000-0000-000000000002"
 ALERT_ID = "00000000-0000-0000-0000-000000000003"
+CLAIM_TOKEN = "00000000-0000-0000-0000-000000000004"
 
 
 def make_config() -> RepositoryConfig:
@@ -50,8 +52,10 @@ def make_repository():
 
     @contextmanager
     def fake_connection(*, read_only=False):
+        repository.connection_modes.append(read_only)
         yield connection
 
+    repository.connection_modes = []
     repository.connection = fake_connection
 
     return repository, connection, cursor
@@ -154,7 +158,36 @@ def test_list_open_project_ids():
 
     assert "COMPLETED" in query
     assert "CANCELLED" in query
-    assert parameters == ()
+    assert "LIMIT %s" in query
+    assert parameters == (101,)
+    assert repository.connection_modes == [True]
+
+
+def test_open_project_scan_refuses_silent_truncation():
+    repository, connection, cursor = make_repository()
+    cursor.fetchall.return_value = [
+        {"id": uuid.UUID(PROJECT_ID)},
+        {"id": uuid.UUID(STEP_ID)},
+        {"id": uuid.UUID(ALERT_ID)},
+    ]
+
+    with pytest.raises(
+        ProjectScanLimitExceededError,
+        match="exceeds configured limit",
+    ):
+        repository.list_open_project_ids(limit=2)
+
+    assert cursor.execute.call_args.args[1] == (3,)
+
+
+@pytest.mark.parametrize("limit", [0, 501, True, "100"])
+def test_open_project_scan_rejects_invalid_limit_before_database(limit):
+    repository, connection, cursor = make_repository()
+
+    with pytest.raises(ValueError, match="limit"):
+        repository.list_open_project_ids(limit=limit)
+
+    cursor.execute.assert_not_called()
 
 
 def test_get_complete_project_snapshot():
@@ -294,8 +327,9 @@ def test_claim_uses_skip_locked():
         "condition_fingerprint": None,
         "deduplication_key": "stable-key",
         "delivery_channel": "INTERNAL",
-        "delivery_status": "FAILED",
+        "delivery_status": "CLAIMED",
         "delivery_attempt_count": 1,
+        "claim_token": uuid.UUID(CLAIM_TOKEN),
     }
 
     cursor.fetchall.return_value = [delivery]
@@ -304,7 +338,7 @@ def test_claim_uses_skip_locked():
         delivery_channel="INTERNAL",
         limit=10,
         max_attempts=5,
-        retry_after_seconds=300,
+        lease_seconds=120,
     )
 
     assert claimed == [delivery]
@@ -312,8 +346,21 @@ def test_claim_uses_skip_locked():
     query, parameters = cursor.execute.call_args.args
 
     assert "FOR UPDATE SKIP LOCKED" in query
+    assert "delivery_status = 'CLAIMED'" in query
+    assert "delivery_status = 'DEAD_LETTER'" in query
+    assert "claim_expires_at <= CURRENT_TIMESTAMP" in query
+    assert "next_attempt_at <= CURRENT_TIMESTAMP" in query
     assert "delivery_attempt_count" in query
-    assert parameters == ("INTERNAL", 5, 300, 10)
+    assert parameters[:6] == (
+        "INTERNAL",
+        5,
+        10,
+        "INTERNAL",
+        5,
+        10,
+    )
+    assert isinstance(parameters[6], uuid.UUID)
+    assert parameters[7] == 120
 
 
 def test_mark_alert_sent():
@@ -321,41 +368,234 @@ def test_mark_alert_sent():
 
     cursor.rowcount = 1
 
-    repository.mark_alert_sent(ALERT_ID)
+    repository.mark_alert_sent(
+        ALERT_ID,
+        CLAIM_TOKEN,
+        provider_message_id=f"internal:{ALERT_ID}",
+    )
 
     query, parameters = cursor.execute.call_args.args
 
     assert "delivery_status = 'SENT'" in query
     assert "delivered_at = CURRENT_TIMESTAMP" in query
-    assert parameters == (uuid.UUID(ALERT_ID),)
+    assert "claim_token = %s" in query
+    assert parameters == (
+        f"internal:{ALERT_ID}",
+        uuid.UUID(ALERT_ID),
+        uuid.UUID(CLAIM_TOKEN),
+    )
 
 
-def test_mark_alert_failed_sanitizes_error():
+def test_mark_alert_failed_schedules_retry_with_safe_reason_code():
     repository, connection, cursor = make_repository()
 
     cursor.rowcount = 1
 
     repository.mark_alert_failed(
         ALERT_ID,
-        "Delivery\nfailed\tbecause adapter is unavailable",
+        CLAIM_TOKEN,
+        "TRANSPORT_UNAVAILABLE",
+        retry_after_seconds=300,
     )
 
     query, parameters = cursor.execute.call_args.args
 
     assert "delivery_status = 'FAILED'" in query
+    assert "next_attempt_at" in query
+    assert "claim_token = %s" in query
     assert parameters == (
-        "Delivery failed because adapter is unavailable",
+        300,
+        "TRANSPORT_UNAVAILABLE",
         uuid.UUID(ALERT_ID),
+        uuid.UUID(CLAIM_TOKEN),
     )
 
 
-def test_delivery_update_requires_existing_record():
+def test_mark_alert_failed_without_retry_enters_dead_letter():
+    repository, connection, cursor = make_repository()
+
+    cursor.rowcount = 1
+
+    repository.mark_alert_failed(
+        ALERT_ID,
+        CLAIM_TOKEN,
+        "PROVIDER_REJECTED",
+        retry_after_seconds=None,
+    )
+
+    query, parameters = cursor.execute.call_args.args
+
+    assert "delivery_status = 'DEAD_LETTER'" in query
+    assert "next_attempt_at = NULL" in query
+    assert parameters == (
+        "PROVIDER_REJECTED",
+        uuid.UUID(ALERT_ID),
+        uuid.UUID(CLAIM_TOKEN),
+    )
+
+
+def test_stale_delivery_claim_is_rejected_without_identifiers():
     repository, connection, cursor = make_repository()
 
     cursor.rowcount = 0
 
     with pytest.raises(
-        MerchantRepositoryError,
-        match=ALERT_ID,
+        AlertClaimLostError,
+        match="claim is no longer current",
     ):
-        repository.mark_alert_sent(ALERT_ID)
+        repository.mark_alert_sent(ALERT_ID, CLAIM_TOKEN)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"limit": 0}, "limit"),
+        ({"limit": 101}, "limit"),
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"max_attempts": 11}, "max_attempts"),
+        ({"lease_seconds": 29}, "lease_seconds"),
+        ({"lease_seconds": 901}, "lease_seconds"),
+        ({"delivery_channel": "WEBHOOK"}, "delivery_channel"),
+    ],
+)
+def test_claim_rejects_invalid_configuration_before_database_access(
+    arguments,
+    message,
+):
+    repository, connection, cursor = make_repository()
+
+    with pytest.raises(ValueError, match=message):
+        repository.claim_pending_alerts(**arguments)
+
+    cursor.execute.assert_not_called()
+
+
+def test_delivery_failure_rejects_unredacted_error_before_database():
+    repository, connection, cursor = make_repository()
+
+    with pytest.raises(ValueError, match="safe reason code"):
+        repository.mark_alert_failed(
+            ALERT_ID,
+            CLAIM_TOKEN,
+            "SMTP failed for private.user@example.invalid",
+            retry_after_seconds=300,
+        )
+
+    cursor.execute.assert_not_called()
+
+
+def test_delivery_failure_rejects_unknown_reason_code_before_database():
+    repository, connection, cursor = make_repository()
+
+    with pytest.raises(ValueError, match="safe reason code"):
+        repository.mark_alert_failed(
+            ALERT_ID,
+            CLAIM_TOKEN,
+            "PRIVATE_SECRET",
+            retry_after_seconds=300,
+        )
+
+    cursor.execute.assert_not_called()
+
+
+def test_alert_queue_status_is_aggregated_and_parameterized():
+    repository, connection, cursor = make_repository()
+    result = [
+        {
+            "delivery_channel": "INTERNAL",
+            "total_count": 4,
+            "ready_count": 1,
+            "active_claim_count": 1,
+            "expired_claim_count": 0,
+            "retryable_failure_count": 1,
+            "dead_letter_count": 1,
+        }
+    ]
+    cursor.fetchall.return_value = result
+
+    assert repository.get_alert_queue_status(
+        delivery_channel="internal"
+    ) == result
+
+    query, parameters = cursor.execute.call_args.args
+
+    assert "COUNT(*) FILTER" in query
+    assert "delivery_status = 'CLAIMED'" in query
+    assert "delivery_status = 'DEAD_LETTER'" in query
+    assert "GROUP BY delivery_channel" in query
+    assert "CAST(%s AS VARCHAR) IS NULL" in query
+    assert parameters == ("INTERNAL", "INTERNAL")
+    assert repository.connection_modes == [True]
+
+
+def test_alert_worker_health_snapshot_is_read_only_and_non_business():
+    repository, connection, cursor = make_repository()
+    cursor.fetchone.side_effect = [
+        {
+            "database": RUNTIME_DATABASE,
+            "user": "merchant_alert",
+            "read_only": "on",
+            "encoding": "UTF8",
+        },
+        {
+            "indexdef": (
+                "CREATE INDEX alert_deliveries_claim_idx ON "
+                "merchant_ops.alert_deliveries "
+                "(delivery_channel, delivery_status, "
+                "next_attempt_at, claim_expires_at, created_at, id)"
+            )
+        },
+        {
+            "can_select": True,
+            "can_insert": True,
+            "can_update": True,
+        },
+    ]
+    cursor.fetchall.side_effect = [
+        [
+            {"column_name": "claim_expires_at"},
+            {"column_name": "claim_token"},
+            {"column_name": "last_attempt_at"},
+            {"column_name": "next_attempt_at"},
+            {"column_name": "provider_message_id"},
+        ],
+        [
+            {"constraint_name": "alert_deliveries_claim_state_check"},
+            {"constraint_name": "alert_deliveries_dead_letter_state_check"},
+            {"constraint_name": "alert_deliveries_next_attempt_state_check"},
+            {"constraint_name": "alert_deliveries_provider_message_state_check"},
+            {"constraint_name": "alert_deliveries_status_check"},
+        ],
+    ]
+
+    snapshot = repository.get_alert_worker_health_snapshot()
+
+    assert snapshot["database"] == RUNTIME_DATABASE
+    assert snapshot["user"] == "merchant_alert"
+    assert snapshot["read_only"] == "on"
+    assert snapshot["encoding"] == "UTF8"
+    assert set(snapshot["lease_columns"]) == {
+        "claim_token",
+        "claim_expires_at",
+        "next_attempt_at",
+        "last_attempt_at",
+        "provider_message_id",
+    }
+    assert snapshot["alert_table_privileges"] == {
+        "select": True,
+        "insert": True,
+        "update": True,
+    }
+    assert repository.connection_modes == [True]
+    assert cursor.execute.call_count == 5
+
+    all_queries = " ".join(
+        call.args[0] for call in cursor.execute.call_args_list
+    ).lower()
+    for business_table in (
+        "merchant_ops.merchants",
+        "merchant_ops.projects",
+        "merchant_ops.merchant_contacts",
+        "merchant_ops.project_events",
+    ):
+        assert business_table not in all_queries

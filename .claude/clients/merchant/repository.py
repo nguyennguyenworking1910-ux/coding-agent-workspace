@@ -25,6 +25,25 @@ except ImportError as exc:  # pragma: no cover
 SCHEMA_NAME = "merchant_ops"
 RUNTIME_DATABASE = "coding_agent_merchant"
 TEST_DATABASE = "coding_agent_merchant_test"
+DELIVERY_CHANNELS = frozenset({"INTERNAL", "EMAIL", "SLACK"})
+MAX_ALERT_PROJECT_LIMIT = 500
+MAX_DELIVERY_CLAIM_LIMIT = 100
+MAX_DELIVERY_ATTEMPTS = 10
+MIN_DELIVERY_LEASE_SECONDS = 30
+MAX_DELIVERY_LEASE_SECONDS = 900
+MAX_DELIVERY_RETRY_SECONDS = 86_400
+SAFE_DELIVERY_ERROR_CODES = frozenset(
+    {
+        "ATTEMPTS_EXHAUSTED",
+        "CLAIM_LOST",
+        "CONFIGURATION_INVALID",
+        "PROVIDER_REJECTED",
+        "PROVIDER_RESPONSE_INVALID",
+        "TRANSPORT_TIMEOUT",
+        "TRANSPORT_UNAVAILABLE",
+        "UNEXPECTED_FAILURE",
+    }
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
@@ -42,6 +61,14 @@ class MerchantRepositoryError(RuntimeError):
 
 class ProjectNotFoundError(MerchantRepositoryError):
     """Raised when a project does not exist."""
+
+
+class AlertClaimLostError(MerchantRepositoryError):
+    """Raised when a worker no longer owns an alert delivery claim."""
+
+
+class ProjectScanLimitExceededError(MerchantRepositoryError):
+    """Raised instead of silently truncating open-project discovery."""
 
 
 @dataclass(frozen=True)
@@ -222,19 +249,33 @@ class MerchantRepository:
         finally:
             connection.close()
 
-    def list_open_project_ids(self) -> list[str]:
+    def list_open_project_ids(self, *, limit: int = 100) -> list[str]:
+        _validated_bounded_int(
+            limit,
+            field_name="limit",
+            minimum=1,
+            maximum=MAX_ALERT_PROJECT_LIMIT,
+        )
         query = """
             SELECT id
             FROM merchant_ops.projects
             WHERE status NOT IN ('COMPLETED', 'CANCELLED')
             ORDER BY created_at, id
+            LIMIT %s
         """
 
         with self.connection(read_only=True) as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
-                    cursor.execute(query, ())
-                    return [str(row["id"]) for row in cursor.fetchall()]
+                    cursor.execute(query, (limit + 1,))
+                    rows = cursor.fetchall()
+
+                    if len(rows) > limit:
+                        raise ProjectScanLimitExceededError(
+                            "Open project scan exceeds configured limit"
+                        )
+
+                    return [str(row["id"]) for row in rows]
 
     def get_project_snapshot(self, project_id: str) -> dict[str, Any]:
         project_uuid = _validated_uuid(project_id, "project_id")
@@ -451,12 +492,9 @@ class MerchantRepository:
         if not alerts:
             return 0
 
-        normalized_channel = delivery_channel.strip().upper()
-
-        if normalized_channel not in {"INTERNAL", "EMAIL", "SLACK"}:
-            raise ValueError(
-                f"Unsupported delivery channel: {delivery_channel}"
-            )
+        normalized_channel = _validated_delivery_channel(
+            delivery_channel
+        )
 
         query = """
             INSERT INTO merchant_ops.alert_deliveries (
@@ -518,35 +556,105 @@ class MerchantRepository:
         delivery_channel: str = "INTERNAL",
         limit: int = 25,
         max_attempts: int = 5,
-        retry_after_seconds: int = 300,
+        lease_seconds: int = 120,
     ) -> list[dict[str, Any]]:
-        if limit <= 0:
-            raise ValueError("limit must be greater than zero")
+        normalized_channel = _validated_delivery_channel(
+            delivery_channel
+        )
+        _validated_bounded_int(
+            limit,
+            field_name="limit",
+            minimum=1,
+            maximum=MAX_DELIVERY_CLAIM_LIMIT,
+        )
+        _validated_bounded_int(
+            max_attempts,
+            field_name="max_attempts",
+            minimum=1,
+            maximum=MAX_DELIVERY_ATTEMPTS,
+        )
+        _validated_bounded_int(
+            lease_seconds,
+            field_name="lease_seconds",
+            minimum=MIN_DELIVERY_LEASE_SECONDS,
+            maximum=MAX_DELIVERY_LEASE_SECONDS,
+        )
+        claim_token = uuid.uuid4()
 
         query = """
-            WITH candidates AS (
+            WITH terminal_candidates AS (
                 SELECT id
                 FROM merchant_ops.alert_deliveries
                 WHERE delivery_channel = %s
-                  AND delivery_status IN ('PENDING', 'FAILED')
-                  AND delivery_attempt_count < %s
+                  AND delivery_attempt_count >= %s
                   AND (
-                      delivery_status = 'PENDING'
-                      OR updated_at <= (
-                          CURRENT_TIMESTAMP
-                          - (%s * INTERVAL '1 second')
+                      (
+                          delivery_status IN ('PENDING', 'FAILED')
+                          AND (
+                              next_attempt_at IS NULL
+                              OR next_attempt_at <= CURRENT_TIMESTAMP
+                          )
+                      )
+                      OR (
+                          delivery_status = 'CLAIMED'
+                          AND claim_expires_at <= CURRENT_TIMESTAMP
                       )
                   )
-                ORDER BY created_at, id
+                ORDER BY updated_at, created_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            ),
+            exhausted AS (
+                UPDATE merchant_ops.alert_deliveries AS delivery
+                SET
+                    delivery_status = 'DEAD_LETTER',
+                    claim_token = NULL,
+                    claim_expires_at = NULL,
+                    next_attempt_at = NULL,
+                    last_error_summary = 'ATTEMPTS_EXHAUSTED',
+                    updated_at = CURRENT_TIMESTAMP
+                FROM terminal_candidates
+                WHERE delivery.id = terminal_candidates.id
+                RETURNING delivery.id
+            ),
+            candidates AS (
+                SELECT id
+                FROM merchant_ops.alert_deliveries
+                WHERE delivery_channel = %s
+                  AND delivery_attempt_count < %s
+                  AND (
+                      (
+                          delivery_status IN ('PENDING', 'FAILED')
+                          AND (
+                              next_attempt_at IS NULL
+                              OR next_attempt_at <= CURRENT_TIMESTAMP
+                          )
+                      )
+                      OR (
+                          delivery_status = 'CLAIMED'
+                          AND claim_expires_at <= CURRENT_TIMESTAMP
+                      )
+                  )
+                ORDER BY
+                    COALESCE(next_attempt_at, created_at),
+                    created_at,
+                    id
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
             )
             UPDATE merchant_ops.alert_deliveries AS delivery
             SET
-                delivery_status = 'FAILED',
+                delivery_status = 'CLAIMED',
                 delivery_attempt_count =
                     delivery.delivery_attempt_count + 1,
-                last_error_summary = 'Claimed for delivery',
+                claim_token = %s,
+                claim_expires_at = (
+                    CURRENT_TIMESTAMP
+                    + (%s * INTERVAL '1 second')
+                ),
+                next_attempt_at = NULL,
+                last_attempt_at = CURRENT_TIMESTAMP,
+                last_error_summary = NULL,
                 updated_at = CURRENT_TIMESTAMP
             FROM candidates
             WHERE delivery.id = candidates.id
@@ -561,6 +669,11 @@ class MerchantRepository:
                 delivery.delivery_channel,
                 delivery.delivery_status,
                 delivery.delivery_attempt_count,
+                delivery.claim_token,
+                delivery.claim_expires_at,
+                delivery.next_attempt_at,
+                delivery.last_attempt_at,
+                delivery.provider_message_id,
                 delivery.created_at
         """
 
@@ -570,68 +683,294 @@ class MerchantRepository:
                     cursor.execute(
                         query,
                         (
-                            delivery_channel.strip().upper(),
+                            normalized_channel,
                             max_attempts,
-                            retry_after_seconds,
                             limit,
+                            normalized_channel,
+                            max_attempts,
+                            limit,
+                            claim_token,
+                            lease_seconds,
                         ),
                     )
                     return _records(cursor.fetchall())
 
-    def mark_alert_sent(self, alert_id: str) -> None:
-        self._update_delivery(
+    def mark_alert_sent(
+        self,
+        alert_id: str,
+        claim_token: str,
+        *,
+        provider_message_id: str | None = None,
+    ) -> None:
+        safe_provider_message_id = _validated_provider_message_id(
+            provider_message_id
+        )
+        self._update_claimed_delivery(
             alert_id,
+            claim_token,
             """
                 UPDATE merchant_ops.alert_deliveries
                 SET
                     delivery_status = 'SENT',
+                    claim_token = NULL,
+                    claim_expires_at = NULL,
+                    next_attempt_at = NULL,
                     last_error_summary = NULL,
+                    provider_message_id = %s,
                     delivered_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
+                  AND delivery_status = 'CLAIMED'
+                  AND claim_token = %s
             """,
-            (),
+            (safe_provider_message_id,),
         )
 
     def mark_alert_failed(
         self,
         alert_id: str,
+        claim_token: str,
         error_summary: str,
+        *,
+        retry_after_seconds: int | None,
     ) -> None:
-        safe_summary = " ".join(error_summary.split())[:500]
+        safe_summary = _validated_error_code(error_summary)
 
-        self._update_delivery(
+        if retry_after_seconds is None:
+            self._update_claimed_delivery(
+                alert_id,
+                claim_token,
+                """
+                    UPDATE merchant_ops.alert_deliveries
+                    SET
+                        delivery_status = 'DEAD_LETTER',
+                        claim_token = NULL,
+                        claim_expires_at = NULL,
+                        next_attempt_at = NULL,
+                        last_error_summary = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                      AND delivery_status = 'CLAIMED'
+                      AND claim_token = %s
+                """,
+                (safe_summary,),
+            )
+            return
+
+        _validated_bounded_int(
+            retry_after_seconds,
+            field_name="retry_after_seconds",
+            minimum=1,
+            maximum=MAX_DELIVERY_RETRY_SECONDS,
+        )
+        self._update_claimed_delivery(
             alert_id,
+            claim_token,
             """
                 UPDATE merchant_ops.alert_deliveries
                 SET
                     delivery_status = 'FAILED',
+                    claim_token = NULL,
+                    claim_expires_at = NULL,
+                    next_attempt_at = (
+                        CURRENT_TIMESTAMP
+                        + (%s * INTERVAL '1 second')
+                    ),
                     last_error_summary = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
+                  AND delivery_status = 'CLAIMED'
+                  AND claim_token = %s
             """,
-            (safe_summary,),
+            (retry_after_seconds, safe_summary),
         )
 
-    def _update_delivery(
+    def get_alert_queue_status(
+        self,
+        *,
+        delivery_channel: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_channel = (
+            _validated_delivery_channel(delivery_channel)
+            if delivery_channel is not None
+            else None
+        )
+        query = """
+            SELECT
+                delivery_channel,
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (
+                    WHERE delivery_status IN ('PENDING', 'FAILED')
+                      AND (
+                          next_attempt_at IS NULL
+                          OR next_attempt_at <= CURRENT_TIMESTAMP
+                      )
+                ) AS ready_count,
+                COUNT(*) FILTER (
+                    WHERE delivery_status = 'CLAIMED'
+                      AND claim_expires_at > CURRENT_TIMESTAMP
+                ) AS active_claim_count,
+                COUNT(*) FILTER (
+                    WHERE delivery_status = 'CLAIMED'
+                      AND claim_expires_at <= CURRENT_TIMESTAMP
+                ) AS expired_claim_count,
+                COUNT(*) FILTER (
+                    WHERE delivery_status = 'FAILED'
+                ) AS retryable_failure_count,
+                COUNT(*) FILTER (
+                    WHERE delivery_status = 'DEAD_LETTER'
+                ) AS dead_letter_count,
+                MIN(created_at) FILTER (
+                    WHERE delivery_status IN ('PENDING', 'FAILED')
+                ) AS oldest_pending_at,
+                MAX(delivered_at) FILTER (
+                    WHERE delivery_status IN ('SENT', 'ACKNOWLEDGED')
+                ) AS most_recent_delivery_at
+            FROM merchant_ops.alert_deliveries
+            WHERE (
+                CAST(%s AS VARCHAR) IS NULL
+                OR delivery_channel = %s
+            )
+            GROUP BY delivery_channel
+            ORDER BY delivery_channel
+        """
+
+        with self.connection(read_only=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    query,
+                    (normalized_channel, normalized_channel),
+                )
+                return _records(cursor.fetchall())
+
+    def get_alert_worker_health_snapshot(self) -> dict[str, Any]:
+        """Read only non-business state required by ``--health-check``."""
+        identity_query = """
+            SELECT
+                current_database() AS database,
+                current_user AS user,
+                current_setting('transaction_read_only') AS read_only,
+                current_setting('server_encoding') AS encoding
+        """
+        columns_query = """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = 'alert_deliveries'
+              AND column_name IN (
+                  'claim_token',
+                  'claim_expires_at',
+                  'next_attempt_at',
+                  'last_attempt_at',
+                  'provider_message_id'
+              )
+            ORDER BY column_name
+        """
+        constraints_query = """
+            SELECT constraint_name
+            FROM information_schema.table_constraints
+            WHERE table_schema = %s
+              AND table_name = 'alert_deliveries'
+              AND constraint_name IN (
+                  'alert_deliveries_status_check',
+                  'alert_deliveries_claim_state_check',
+                  'alert_deliveries_next_attempt_state_check',
+                  'alert_deliveries_dead_letter_state_check',
+                  'alert_deliveries_provider_message_state_check'
+              )
+            ORDER BY constraint_name
+        """
+        index_query = """
+            SELECT indexdef
+            FROM pg_catalog.pg_indexes
+            WHERE schemaname = %s
+              AND tablename = 'alert_deliveries'
+              AND indexname = 'alert_deliveries_claim_idx'
+        """
+        privilege_query = """
+            SELECT
+                has_table_privilege(
+                    current_user,
+                    'merchant_ops.alert_deliveries',
+                    'SELECT'
+                ) AS can_select,
+                has_table_privilege(
+                    current_user,
+                    'merchant_ops.alert_deliveries',
+                    'INSERT'
+                ) AS can_insert,
+                has_table_privilege(
+                    current_user,
+                    'merchant_ops.alert_deliveries',
+                    'UPDATE'
+                ) AS can_update
+        """
+
+        with self.connection(read_only=True) as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(identity_query, ())
+                    identity = _record(cursor.fetchone()) or {}
+
+                    cursor.execute(columns_query, (SCHEMA_NAME,))
+                    lease_columns = tuple(
+                        str(row["column_name"])
+                        for row in cursor.fetchall()
+                    )
+
+                    cursor.execute(constraints_query, (SCHEMA_NAME,))
+                    lease_constraints = tuple(
+                        str(row["constraint_name"])
+                        for row in cursor.fetchall()
+                    )
+
+                    cursor.execute(index_query, (SCHEMA_NAME,))
+                    index_row = _record(cursor.fetchone())
+
+                    cursor.execute(privilege_query, ())
+                    privileges = _record(cursor.fetchone()) or {}
+
+        return {
+            **identity,
+            "lease_columns": lease_columns,
+            "lease_constraints": lease_constraints,
+            "claim_index_definition": (
+                str(index_row["indexdef"])
+                if index_row is not None
+                else None
+            ),
+            "alert_table_privileges": {
+                "select": bool(privileges.get("can_select")),
+                "insert": bool(privileges.get("can_insert")),
+                "update": bool(privileges.get("can_update")),
+            },
+        }
+
+    def _update_claimed_delivery(
         self,
         alert_id: str,
+        claim_token: str,
         query: str,
         leading_parameters: Sequence[Any],
     ) -> None:
         delivery_uuid = _validated_uuid(alert_id, "alert_id")
+        claim_uuid = _validated_uuid(claim_token, "claim_token")
 
         with self.connection() as connection:
             with connection.transaction():
                 with connection.cursor() as cursor:
                     cursor.execute(
                         query,
-                        (*leading_parameters, delivery_uuid),
+                        (
+                            *leading_parameters,
+                            delivery_uuid,
+                            claim_uuid,
+                        ),
                     )
 
                     if cursor.rowcount != 1:
-                        raise MerchantRepositoryError(
-                            f"Alert delivery not found: {alert_id}"
+                        raise AlertClaimLostError(
+                            "Alert delivery claim is no longer current"
                         )
 
 
@@ -650,3 +989,57 @@ def _optional_uuid(
         return None
 
     return _validated_uuid(str(value), field_name)
+
+
+def _validated_delivery_channel(value: Any) -> str:
+    normalized = str(value).strip().upper()
+
+    if normalized not in DELIVERY_CHANNELS:
+        raise ValueError("delivery_channel is not supported")
+
+    return normalized
+
+
+def _validated_bounded_int(
+    value: Any,
+    *,
+    field_name: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > maximum
+    ):
+        raise ValueError(
+            f"{field_name} must be between {minimum} and {maximum}"
+        )
+
+    return value
+
+
+def _validated_provider_message_id(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+
+    if (
+        not normalized
+        or len(normalized) > 255
+        or any(character.isspace() for character in normalized)
+    ):
+        raise ValueError("provider_message_id is invalid")
+
+    return normalized
+
+
+def _validated_error_code(value: Any) -> str:
+    normalized = str(value).strip().upper()
+
+    if normalized not in SAFE_DELIVERY_ERROR_CODES:
+        raise ValueError("error_summary must be a safe reason code")
+
+    return normalized

@@ -72,6 +72,7 @@ ALLOWED_MERCHANT_STATUSES = frozenset(
 
 MIGRATIONS_DIRECTORY = Path(__file__).parent / "migrations"
 EXPECTED_MIGRATION_VERSIONS = (1, 2, 3)
+KNOWN_LOCAL_MIGRATION_VERSIONS = (1, 2, 3, 4)
 MAX_BACKUP_AGE = timedelta(hours=24)
 MAX_BACKUP_FUTURE_SKEW = timedelta(minutes=5)
 BACKUP_MAGIC = b"PGDMP"
@@ -735,13 +736,20 @@ def _local_migration_manifest() -> tuple[dict[str, Any], ...]:
 
     versions = tuple(item["version"] for item in manifest)
 
-    if versions != EXPECTED_MIGRATION_VERSIONS:
+    if versions != KNOWN_LOCAL_MIGRATION_VERSIONS:
         raise RuntimeReadinessError(
-            "Local Merchant migration manifest is not exactly 1, 2, 3",
+            "Local Merchant migration manifest is not exactly 1, 2, 3, 4",
             reason_code="INVALID_LOCAL_MIGRATION_SET",
         )
 
-    return tuple(manifest)
+    # Checkpoint 9 readiness is a historical contract frozen at migrations
+    # 1-3. Migration 4 belongs to the separately authorized Checkpoint 10
+    # alert-worker rollout and must not retroactively alter catalog planning.
+    return tuple(
+        item
+        for item in manifest
+        if item["version"] in EXPECTED_MIGRATION_VERSIONS
+    )
 
 
 def _expected_template_rows() -> tuple[dict[str, Any], ...]:

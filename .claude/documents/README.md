@@ -99,6 +99,21 @@ This folder contains all system documentation, setup guides, and reference mater
   - Verifies the 22-record runtime through hashes and redacted counts only
   - Preserves per-operation authority for every future real workflow mutation
 
+- **[MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md](./MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md)** — Checkpoint 10 production alert-delivery plan
+  - Extends the existing independent worker with lease-safe claim ownership and bounded retries
+  - Defines fail-closed INTERNAL, EMAIL, and Slack delivery contracts
+  - Guards migration 4, operational health, privacy, runtime rollout, and final completion
+
+- **[MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md](./MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md)** — Final Merchant implementation handoff
+  - Records the lease-safe worker, adapters, runtime migration, and verification evidence
+  - Preserves the private 22-record catalog and four standard workflow templates
+  - Defines the boundary for ordinary use, observation, and issue-driven debugging
+
+- **[MERCHANT_ALERT_OPERATIONS.md](./MERCHANT_ALERT_OPERATIONS.md)** — One-shot alert-worker operations
+  - Explicit dry-run, enqueue, delivery, status, and health-check commands
+  - Reviewed limits, exit codes, redacted logging, and recovery procedure
+  - Safe Windows Task Scheduler configuration without an in-process scheduler
+
 ---
 
 ## 🧭 Where things live
@@ -160,4 +175,4 @@ When creating new documentation:
 
 ---
 
-**Last Updated:** September 7, 2026
+**Last Updated:** September 9, 2026
