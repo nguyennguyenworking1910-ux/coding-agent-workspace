@@ -24,16 +24,19 @@ def test_checkpoint_9_handoff_exists_and_is_indexed():
     assert HANDOFF_NAME in architecture
 
 
-def test_plan_and_handoff_record_staging_review_status():
+def test_plan_and_handoff_record_final_commit_status():
     plan = _read(f".claude/documents/{PLAN_NAME}")
     handoff = _read(f".claude/documents/{HANDOFF_NAME}")
 
     assert (
-        "Implementation and runtime verification complete; "
-        "final staging review pending"
+        "Complete; implementation commit "
+        "`2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9` pushed and verified"
     ) in plan
-    assert "**Completion commit:** Pending commit and push verification" in handoff
-    assert "**Status:** Implementation and runtime verification complete" in handoff
+    assert (
+        "**Completion commit:** "
+        "`2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9`"
+    ) in handoff
+    assert "**Status:** Complete; implementation committed, pushed" in handoff
 
 
 def test_handoff_records_exact_redacted_runtime_state():
@@ -145,11 +148,13 @@ def test_handoff_records_final_core_and_future_boundary():
     assert "not required for the\ncompleted core Merchant Project Manager" in content
 
 
-def test_handoff_defines_post_commit_finalization():
+def test_handoff_records_pushed_commit_boundary():
     content = _read(f".claude/documents/{HANDOFF_NAME}")
 
-    assert "## 15. Commit boundary" in content
-    assert "Stage only the reviewed Checkpoint 9 files" in content
+    assert "## 15. Commit and remote boundary" in content
+    assert "2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9" in content
+    assert "exactly the 33 reviewed files" in content
+    assert "`origin/feat/workspace-rag` resolved to the same" in content
+    assert "detached checkout of the pushed commit was clean" in content
+    assert "passed all 81 structural checks" in content
     assert "documentation-only finalization" in content
-    assert "real commit SHA" in content
-    assert "remote and clean-checkout evidence" in content

@@ -4,7 +4,7 @@
 **Branch:** `feat/workspace-rag`
 **Base commit:** `efa05fa` (`Complete Checkpoint 8 Merchant deadline and alert calculation`)
 **Checkpoint:** 9 — Private Runtime Initialization
-**Status:** Implementation and runtime verification complete; final staging review pending
+**Status:** Complete; implementation commit `2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9` pushed and verified
 
 ## 1. Goal
 
@@ -166,6 +166,10 @@ Checkpoint 9 is complete only when:
 5. Runtime contains exactly 22 Merchants with the reviewed status distribution.
 6. Redacted reads and workflow preconditions work against initialized runtime state.
 7. Complete regression, handoff, commit, push, and clean-checkout verification pass.
+
+All seven completion criteria were satisfied. The main implementation was committed and pushed as
+`2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9`, and a detached checkout of that remote commit was
+clean and passed all 81 structural checks.
 
 ## 8. Future boundary
 

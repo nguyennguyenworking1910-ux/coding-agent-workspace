@@ -1,11 +1,12 @@
 # Merchant Project Manager — Checkpoint 9 Handoff
 
 **Date:** September 8, 2026
+**Finalized:** September 9, 2026
 **Branch:** `feat/workspace-rag`
 **Base commit:** `efa05fa` (`Complete Checkpoint 8 Merchant deadline and alert calculation`)
-**Completion commit:** Pending commit and push verification
+**Completion commit:** `2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9` (`Complete Checkpoint 9 private runtime initialization`)
 **Checkpoint:** 9 — Private Runtime Initialization
-**Status:** Implementation and runtime verification complete; final staging review pending
+**Status:** Complete; implementation committed, pushed, and remotely verified
 
 ## 1. Outcome
 
@@ -248,6 +249,7 @@ Tests:
 | 9.5D | Rollback proof, correction, 22-record initialization, and identical retry passed |
 | 9.6 | Runtime verification and workflow compatibility passed |
 | 9.7A | Focused regression, complete non-live regression, structural validation, privacy scan, and final runtime verification passed |
+| 9.7B | Documentation regression, final non-live regression, privacy scan, exact 33-file staging review, commit, push, and clean-checkout verification passed |
 
 The Gate 9.7A accepted markers were:
 
@@ -263,6 +265,16 @@ CHECKPOINT_9_GATE_7A_COMPLETE_REGRESSION_PASSED
 All 80 structural checks passed. `git diff --check` passed, and the complete repository regression
 excluded integration tests. Every runtime mutation had a separate read-only preflight and explicit
 authorization; the final verification was read-only.
+
+Gate 9.7B then passed 32 documentation tests, 1,622 non-live tests, 120 subtests, the private-data
+isolation scan, and the exact 33-file staging review. The accepted Gate 9.7B markers were:
+
+```text
+CHECKPOINT_9_GATE_7B_DOCUMENTATION_PASSED
+CHECKPOINT_9_GATE_7B_FINAL_NON_LIVE_REGRESSION_PASSED
+CHECKPOINT_9_GATE_7B_PRIVATE_DATA_ISOLATION_PASSED
+CHECKPOINT_9_GATE_7B_FINAL_HANDOFF_AND_STAGING_REVIEW_PASSED
+```
 
 ## 13. Final runtime state
 
@@ -290,16 +302,23 @@ Checkpoint 10 remains the optional Phase 4B production alert worker: delivery sc
 claiming, retries, channel integrations, and operational monitoring. It is not required for the
 completed core Merchant Project Manager.
 
-## 15. Commit boundary
+## 15. Commit and remote boundary
 
-Before committing Checkpoint 9:
+The Checkpoint 9 implementation was committed as:
 
-1. Run the final documentation and complete non-live regression.
-2. Review the exact modified and untracked file manifest against sections 10 and 11.
-3. Confirm no private source, environment file, credential, backup, dump, cache, generated archive,
-   or real Merchant value is staged.
-4. Stage only the reviewed Checkpoint 9 files and run `git diff --cached --check`.
-5. Commit and push only to `feat/workspace-rag` after confirming the branch.
+```text
+2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9
+Complete Checkpoint 9 private runtime initialization
+```
 
-After the Checkpoint 9 commit is pushed, a small documentation-only finalization will replace the
-pending completion fields with the real commit SHA and record remote and clean-checkout evidence.
+Its parent is the exact Checkpoint 8 completion commit
+`efa05fa10bc32f1fbf2b8c2d5d82c1d5b5ec156e`. The commit changes exactly the 33 reviewed files:
+28 additions and 5 modifications, matching sections 10 and 11. `git show --check` passed, and
+`origin/feat/workspace-rag` resolved to the same Checkpoint 9 commit.
+
+A detached checkout of the pushed commit was clean and passed all 81 structural checks. The
+clean-checkout history identified `2ac90c0` as the branch head with the expected commit message.
+This documentation-only finalization records that immutable implementation boundary and makes no
+runtime, schema, template, catalog, workflow, policy, CLI, or alert change. Its own administrative
+commit SHA is intentionally not embedded in this file because a Git commit cannot contain its own
+final SHA.
