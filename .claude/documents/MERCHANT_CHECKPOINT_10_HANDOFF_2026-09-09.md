@@ -3,9 +3,9 @@
 **Date:** September 9, 2026
 **Branch:** `feat/workspace-rag`
 **Base commit:** `ef2ee1d695ca1f0e63472f881d95449cf1db2f02` (`Finalize Checkpoint 9 handoff`)
-**Implementation commit:** pending final staging review
+**Implementation commit:** `d4d29db5bd4e470bf5af49f640c55b00cd3157e4` (`Complete Checkpoint 10 production alert delivery`)
 **Checkpoint:** 10 — Phase 4B Production Alert Delivery
-**Status:** Runtime rollout verified; final regression, staging, commit, and remote verification pending
+**Status:** Complete; implementation committed, pushed, and remotely verified
 
 ## 1. Outcome
 
@@ -170,8 +170,17 @@ CHECKPOINT_10_GATE_7B_RUNTIME_MIGRATION_4_APPLY_AND_VERIFY_PASSED
 
 Gate 10.7B passed 68 immediate pre-apply contract tests, the hash-bound runtime preflight, the
 forward migration, the alert-role health proof, the post-migration private-state proof, and all 80
-structural checks. Final Gate 10.8 records the complete non-live regression, privacy scan, staging
-manifest, implementation commit, push, and clean-checkout verification.
+structural checks.
+
+Gate 10.8 then passed 219 focused tests, 1,810 complete non-live tests, 120 subtests, all 80
+working-tree structural checks, the final read-only runtime proof, the INTERNAL health check and
+dry run, and the private-data isolation scan. The exact 31-file manifest was staged and committed
+as `d4d29db5bd4e470bf5af49f640c55b00cd3157e4`, then pushed to
+`origin/feat/workspace-rag`.
+
+A detached clean checkout of the pushed implementation commit passed all 81 structural checks and
+had no working-tree changes. The commit has the final Checkpoint 9 handoff as its parent and
+contains exactly the reviewed 31 files.
 
 ## 11. Files in the implementation boundary
 
@@ -184,7 +193,7 @@ artifacts, caches, and compiled Python files are excluded from staging.
 
 ## 12. Ready-for-use boundary
 
-After Gate 10.8 is committed and remotely verified, the planned Merchant Project Manager is ready
+The planned Merchant Project Manager is now ready
 for ordinary use, observation, and issue-driven debugging. This completion does not authorize a
 real Merchant workflow mutation or automatic external delivery.
 
@@ -198,3 +207,21 @@ For initial operation:
 
 Any future bug fix should reproduce the issue with a focused regression, preserve private-data
 isolation, and use the test database before touching runtime state.
+
+## 13. Commit and remote boundary
+
+The Checkpoint 10 implementation was committed as:
+
+```text
+d4d29db5bd4e470bf5af49f640c55b00cd3157e4
+Complete Checkpoint 10 production alert delivery
+```
+
+Its parent is the exact Checkpoint 9 final handoff commit
+`ef2ee1d695ca1f0e63472f881d95449cf1db2f02`. The commit changes exactly the reviewed 31 files.
+`git show --check` passed, and `origin/feat/workspace-rag` resolved to the same implementation
+commit.
+
+A detached checkout of the pushed commit was clean and passed all 81 structural checks. This
+documentation-only finalization records that immutable implementation boundary without changing
+worker behavior, database state, delivery configuration, or private catalog data.

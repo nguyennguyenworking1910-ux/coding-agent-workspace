@@ -21,11 +21,14 @@ def test_checkpoint_10_handoff_exists_and_is_indexed():
     assert HANDOFF_NAME in _read(".claude/documents/ARCHITECTURE.md")
 
 
-def test_plan_records_runtime_rollout_and_final_closeout_state():
+def test_plan_records_completed_remote_implementation_state():
     content = _read(f".claude/documents/{PLAN_NAME}")
 
-    assert "Gate 10.7 runtime rollout verified" in content
-    assert "Gate 10.8 final closeout in progress" in content
+    assert (
+        "Complete; implementation commit "
+        "`d4d29db5bd4e470bf5af49f640c55b00cd3157e4` "
+        "pushed and verified"
+    ) in content
 
 
 def test_handoff_records_final_checkpoint_and_execution_modes():
@@ -146,3 +149,19 @@ def test_handoff_defines_ready_for_use_and_debugging_boundary():
     assert "does not authorize a\nreal Merchant workflow mutation" in content
     assert "run `--health-check` with `INTERNAL`" in content
     assert "preserve private-data\nisolation" in content
+
+
+def test_handoff_records_final_regression_and_remote_boundary():
+    content = _read(f".claude/documents/{HANDOFF_NAME}")
+
+    assert "219 focused tests" in content
+    assert "1,810 complete non-live tests" in content
+    assert "120 subtests" in content
+    assert "INTERNAL health check and\ndry run" in content
+    assert "## 13. Commit and remote boundary" in content
+    assert "d4d29db5bd4e470bf5af49f640c55b00cd3157e4" in content
+    assert "exactly the reviewed 31 files" in content
+    assert "`origin/feat/workspace-rag` resolved to the same" in content
+    assert "detached checkout of the pushed commit was clean" in content
+    assert "passed all 81 structural checks" in content
+    assert "documentation-only finalization" in content
