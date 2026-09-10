@@ -14,6 +14,12 @@ Team state is:
 - Persisted for the session's lifetime
 - Cleared when the session ends (SessionEnd hook)
 - Checked before each new dispatch to enable reuse
+
+Allocation decisions are explicit:
+- CREATE: no teammate exists yet; ready to create one
+- REUSE: canonical teammate exists and is idle; ready to reuse
+- BUSY: canonical teammate exists but is currently active; cannot dispatch
+- DENIED: lock timeout; unable to acquire team state; fail closed
 """
 
 from __future__ import annotations
@@ -47,6 +53,14 @@ class TeammateLifecycleStatus(str, Enum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
     IDLE_REUSABLE = "IDLE_REUSABLE"
     FAILED = "FAILED"
+
+
+class TeammateAllocationDecision(str, Enum):
+    """Decision for allocating a teammate: create, reuse, busy, or denied."""
+    CREATE = "CREATE"
+    REUSE = "REUSE"
+    BUSY = "BUSY"
+    DENIED = "DENIED"
 
 
 def team_state_dir() -> Path:
@@ -175,24 +189,26 @@ def clear_team_state(session_id: Any) -> bool:
     return removed
 
 
-def get_or_create_teammate(
+def allocate_teammate(
     session_id: Any,
     role: str,
-    preferred_name: str,
-) -> tuple[str, bool]:
+    canonical_name: str,
+) -> tuple[TeammateAllocationDecision, str]:
     """
-    Get or create a teammate record for a role.
+    Allocate a teammate for a role with explicit decision.
 
-    Returns (teammate_name, is_new).
-    - If a teammate for this role exists and is idle/reusable, returns its name and False
-    - If no teammate exists, creates one, returns its name and True
-    - If a teammate exists but is busy, returns the canonical name and False
-      (caller should treat as "role busy")
+    Returns (decision, teammate_name).
+    - CREATE: no teammate exists; ready to create one
+    - REUSE: canonical teammate exists and is idle; ready to reuse
+    - BUSY: canonical teammate exists but is currently active
+    - DENIED: lock timeout; unable to acquire team state; fail closed
+
+    The teammate_name is always returned for reference, even when BUSY or DENIED.
     """
     with locked_team_state(session_id) as state:
         if state is None:
             # Lock timeout, unable to acquire state
-            return preferred_name, False
+            return TeammateAllocationDecision.DENIED, canonical_name
 
         teammates = state.get("teammates", {})
         existing = None
@@ -204,10 +220,10 @@ def get_or_create_teammate(
 
         if existing is None:
             # No teammate for this role exists, create one
-            record = init_teammate_record(role, preferred_name)
-            teammates[preferred_name] = record
+            record = init_teammate_record(role, canonical_name)
+            teammates[canonical_name] = record
             state["teammates"] = teammates
-            return preferred_name, True
+            return TeammateAllocationDecision.CREATE, canonical_name
 
         name, record = existing
         status = record.get("status", "")
@@ -223,10 +239,32 @@ def get_or_create_teammate(
             record["current_task_id"] = None
             record["result_received"] = False
             record["report_source"] = None
-            return name, False
+            return TeammateAllocationDecision.REUSE, name
 
         # Teammate exists but is busy or failed
-        return name, False
+        return TeammateAllocationDecision.BUSY, name
+
+
+def get_or_create_teammate(
+    session_id: Any,
+    role: str,
+    preferred_name: str,
+) -> tuple[str, bool]:
+    """
+    Get or create a teammate record for a role (backward-compatible wrapper).
+
+    Returns (teammate_name, is_new).
+    - If a teammate for this role exists and is idle/reusable, returns its name and False
+    - If no teammate exists, creates one, returns its name and True
+    - If a teammate exists but is busy, returns the canonical name and False
+      (caller should treat as "role busy")
+    - On lock timeout, returns (preferred_name, False)
+
+    For new code, prefer allocate_teammate() which returns explicit decisions.
+    """
+    decision, name = allocate_teammate(session_id, role, preferred_name)
+    is_new = decision == TeammateAllocationDecision.CREATE
+    return name, is_new
 
 
 def mark_teammate_running(

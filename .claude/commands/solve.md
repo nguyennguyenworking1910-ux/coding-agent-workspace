@@ -142,28 +142,26 @@ The Checkpoint 7 intent/policy authorization handoff is therefore split across t
 Gate 7.3 authorizes the exact teammate dispatch, while Gate 7.4 must authorize the exact
 in-process runtime mutation.
 
-## 4. Required Agent Team and pane mode
+## 4. Required Agent Team mode
 
 This command requires all of the following runtime conditions:
 
 - Claude Code is running interactively, not with `-p` or `--print`;
 - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is enabled;
-- `teammateMode` is `tmux`, or Claude Code was started with `--teammate-mode tmux`;
-- the current Claude Code session is already inside the compatible tmux/psmux environment.
+- `teammateMode` is `tmux` (configured in settings.json).
 
-These are prerequisites, not work for `/solve`. Do not install software, edit settings, start a
-new multiplexer, or manually split panes during the run.
+These are prerequisites, not work for `/solve`. Do not install software or edit settings during
+the run.
 
 Do not use the absence of a separately exposed `TeamCreate` tool as proof that Agent Teams are
 unavailable. Claude Code versions differ: in this project runtime, teammates are created through
 the team-aware mode of the `Agent` tool. Test the authorized team-aware dispatch itself.
 
-If that dispatch rejects the required teammate fields, creates an ordinary subagent, or fails to
-open a separate pane, respond:
+If that dispatch rejects the required teammate fields or creates an ordinary subagent, respond:
 
-`Agent Team tmux backend unavailable — no teammates were dispatched.`
+`Agent Team backend unavailable — no teammates were dispatched.`
 
-Then stop. Never fall back to an in-process agent.
+Then stop. Never fall back to an ordinary subagent.
 
 ## 5. Hard dispatch contract
 
@@ -180,18 +178,17 @@ For every id in `selected_agents`:
 
 1. Invoke `Agent` in Agent Team teammate mode.
 2. Set `subagent_type` to the exact selected agent id.
-3. Set a stable unique teammate `name`, normally the agent id; add a deterministic suffix only
-   when required for uniqueness.
+3. Set a stable canonical teammate `name`: exactly one role per name, no suffixes (reviewer,
+   coder, bug-fixer, diagnostician, red-team, group-sales-manager, merchant-manager, scheduler).
 4. Supply a complete bounded assignment as the teammate prompt, including the mandatory
    result-delivery contract in section 8.
-5. Ensure the result is an independent Agent Team teammate in its own visible tmux/psmux pane.
-6. Give it one bounded task through the shared team task list when task tools are exposed.
+5. Give it one bounded task through the shared team task list when task tools are exposed.
 
 The direct semantic instruction is:
 
 > Spawn one named Agent Team teammate for each `selected_agents` entry, using the corresponding
-> project agent type and a stable teammate name. Use the current session-scoped Agent Team.
-> Every teammate must run in a separate tmux/psmux pane. Do not use an ordinary subagent.
+> project agent type and a stable canonical teammate name. Use the current session-scoped Agent
+> Team. Do not use an ordinary subagent.
 
 The following are forbidden:
 
@@ -201,18 +198,17 @@ The following are forbidden:
 - ordinary foreground or background subagents;
 - forked subagents;
 - `isolation: "worktree"`;
-- in-process fallback;
+- ordinary subagent fallback;
 - omitting or substituting a selected agent;
 - creating an agent not listed in `selected_agents`;
 - creating extra instances unless the envelope explicitly authorizes them;
-- manually creating, renaming, splitting, or killing tmux panes;
+- creating suffixed teammate names (reviewer-2, reviewer-3, etc.);
 - creating or editing project-level team configuration files;
-- manually editing Claude Code team, task, mailbox, or pane state.
+- manually editing Claude Code team, task, mailbox, or state files.
 
-After the first teammate is created, verify that it has the requested teammate name, is
-registered as a teammate of the current session-scoped team, and appears in a separate pane.
-If any condition fails, stop immediately, report the backend failure, and do not dispatch the
-remaining roster.
+After the first teammate is created, verify that it has the requested canonical teammate name
+and is registered as a teammate of the current session-scoped team. If any condition fails,
+stop immediately, report the backend failure, and do not dispatch the remaining roster.
 
 Claude Code supports one Agent Team per session. If an earlier teammate from the same session is
 still active and conflicts with this run, do not reuse or destroy it automatically. Report the

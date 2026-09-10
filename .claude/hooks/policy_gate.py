@@ -28,17 +28,19 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import locked_state  # noqa: E402
     from team_lifecycle import (  # noqa: E402
+        allocate_teammate,
         check_role_in_selected_agents,
-        get_or_create_teammate,
         mark_teammate_running,
+        TeammateAllocationDecision,
         TeammateLifecycleStatus,
     )
 else:
     from .runtime_state import locked_state
     from .team_lifecycle import (
+        allocate_teammate,
         check_role_in_selected_agents,
-        get_or_create_teammate,
         mark_teammate_running,
+        TeammateAllocationDecision,
         TeammateLifecycleStatus,
     )
 
@@ -332,6 +334,7 @@ def apply_call(
     state: dict[str, Any],
     tool_name: str,
     tool_input: dict[str, Any],
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Count the call, mutate `state`, and return a decision when one is needed.
 
@@ -342,6 +345,8 @@ def apply_call(
     SendMessage and TaskUpdate are not subject to the regular budget cap; they
     draw from a coordination reserve instead so that handoff communication is never
     blocked by tool exhaustion.
+
+    session_id is passed to _check_agent_dispatch for team lifecycle reservation.
     """
     state["total_tool_calls"] = int(state.get("total_tool_calls", 0)) + 1
 
@@ -403,7 +408,7 @@ def apply_call(
         )
 
     if tool_name in AGENT_TOOL_NAMES:
-        return _check_agent_dispatch(state, tool_input)
+        return _check_agent_dispatch(state, tool_input, session_id)
 
     if risk_level == RISK_READ_ONLY:
         if tool_name in FILE_WRITE_TOOLS:
@@ -441,20 +446,21 @@ def apply_call(
 def _check_agent_dispatch(
     state: dict[str, Any],
     tool_input: dict[str, Any],
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Enforce the roster, the member cap, and the dispatch-round cap.
+    """Enforce the roster, member cap, dispatch-round cap, and team lifecycle.
 
     Uses session-scoped team lifecycle to enable teammate reuse:
-    - Checks if a teammate for this role already exists and is reusable
-    - If reusable, reuses the same teammate (no new pane, no member slot)
-    - If busy, rejects the dispatch
-    - If not found, creates a new teammate (consumes one member slot)
+    - Allocates canonical teammate and checks lifecycle decision
+    - CREATE: new teammate; proceeds with dispatch (consumes member slot)
+    - REUSE: teammate exists and idle; instructs lead to use SendMessage instead
+    - BUSY: teammate exists but active; blocks dispatch
+    - DENIED: lock timeout; fails closed
 
-    Authorization is checked against selected_agents before reuse.
+    Authorization is checked against selected_agents and canonical names enforced.
     """
     subagent_type = ""
     requested_teammate_name = ""
-    session_id = ""
 
     if isinstance(tool_input, dict):
         subagent_type = str(tool_input.get("subagent_type") or "").strip()
@@ -481,6 +487,15 @@ def _check_agent_dispatch(
             "unique name. Provide it via the `name` parameter."
         )
 
+    canonical_name = subagent_type
+
+    if requested_teammate_name != canonical_name:
+        return deny(
+            f"Blocked: requested teammate name '{requested_teammate_name}' does not "
+            f"match the canonical name '{canonical_name}' for role '{subagent_type}'. "
+            f"Use the canonical name to enable teammate reuse across runs."
+        )
+
     merchant_decision = _check_merchant_dispatch(
         state,
         subagent_type,
@@ -500,6 +515,38 @@ def _check_agent_dispatch(
             f"for task_class {state.get('task_class')}. Synthesize what the agents "
             "reported and stop."
         )
+
+    if session_id:
+        decision, teammate_name = allocate_teammate(session_id, subagent_type, canonical_name)
+
+        if decision == TeammateAllocationDecision.DENIED:
+            return deny(
+                f"Blocked: unable to acquire team state lock for role '{subagent_type}'. "
+                "Team state is temporarily unavailable; retry after a moment."
+            )
+
+        if decision == TeammateAllocationDecision.BUSY:
+            return deny(
+                f"Blocked: teammate '{teammate_name}' (role '{subagent_type}') is "
+                "currently handling work. Do not dispatch a new instance. Instead, "
+                "assign remaining work to the existing teammate by sending it a "
+                "message via SendMessage. After the teammate reports completion, "
+                "it will be available for reuse."
+            )
+
+        if decision == TeammateAllocationDecision.REUSE:
+            return deny(
+                f"Blocked: teammate '{teammate_name}' (role '{subagent_type}') "
+                "exists and is idle. Do not create a new instance. Assign work to "
+                "the existing teammate by sending it a message via SendMessage. "
+                "Reusing existing teammates saves resources and maintains context."
+            )
+
+        if decision != TeammateAllocationDecision.CREATE:
+            return deny(
+                f"Blocked: unexpected allocation decision '{decision}' for role "
+                f"'{subagent_type}'. Request a fresh dispatch."
+            )
 
     members_used = [str(member) for member in state.get("members_used") or []]
 
@@ -785,15 +832,16 @@ def main() -> int:
 
     tool_name = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input")
+    session_id = payload.get("session_id")
 
     if not isinstance(tool_input, dict):
         tool_input = {}
 
     output: dict[str, Any] | None = None
 
-    with locked_state(payload.get("session_id")) as state:
+    with locked_state(session_id) as state:
         if state is not None:
-            output = apply_call(state, tool_name, tool_input)
+            output = apply_call(state, tool_name, tool_input, session_id)
 
     if output:
         print(json.dumps(output, ensure_ascii=False))

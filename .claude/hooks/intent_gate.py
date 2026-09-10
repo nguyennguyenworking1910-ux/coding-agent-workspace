@@ -32,12 +32,18 @@ if __package__ in (None, ""):
         redact_secrets,
         save_state,
     )
+    from team_lifecycle import (  # noqa: E402
+        load_team_state,
+    )
 else:
     from .runtime_state import (
         CLAUDE_DIR,
         new_state,
         redact_secrets,
         save_state,
+    )
+    from .team_lifecycle import (
+        load_team_state,
     )
 
 HOOK_EVENT_NAME = "UserPromptSubmit"
@@ -214,6 +220,41 @@ def load_merchant_confirmation(token: str) -> dict[str, Any]:
     )
 
     return parse_confirmation_token(token).to_dict()
+
+
+def build_team_state_snapshot(
+    session_id: Any,
+    selected_agents: list[str],
+) -> dict[str, Any] | None:
+    """Read session-scoped team state and extract status for selected agents.
+
+    Returns a snapshot showing which canonical teammates already exist for each
+    selected agent, or None if team state cannot be read.
+    """
+    try:
+        team_state = load_team_state(session_id)
+    except Exception:
+        return None
+
+    if team_state is None:
+        return None
+
+    teammates = team_state.get("teammates", {})
+    snapshot = {}
+
+    for agent_id in selected_agents:
+        for teammate_name, record in teammates.items():
+            if record.get("role") == agent_id:
+                snapshot[agent_id] = {
+                    "canonical_name": teammate_name,
+                    "status": record.get("status", "UNKNOWN"),
+                    "exists": True,
+                }
+                break
+        else:
+            snapshot[agent_id] = {"exists": False}
+
+    return snapshot
 
 
 def load_preparsed_envelope(request: str, env: dict[str, str]) -> dict[str, Any] | None:
@@ -451,18 +492,36 @@ def run(
 
     envelope_json = json.dumps(envelope_payload, ensure_ascii=False, indent=2)
 
+    additional_context = (
+        "INTENT_ENVELOPE_JSON\n"
+        "```json\n"
+        f"{envelope_json}\n"
+        "```\n"
+        "This envelope is the authority for this run. Dispatch only from "
+        "selected_agents, stay inside limits, and do not re-classify the "
+        "request yourself."
+    )
+
+    team_snapshot = build_team_state_snapshot(
+        payload.get("session_id"),
+        selected_agents,
+    )
+
+    if team_snapshot is not None:
+        team_snapshot_json = json.dumps(team_snapshot, ensure_ascii=False, indent=2)
+        additional_context += (
+            "\n\nTEAM_STATE_SNAPSHOT_JSON\n"
+            "```json\n"
+            f"{team_snapshot_json}\n"
+            "```\n"
+            "Canonical teammate status for this session's selected_agents. "
+            "Use this to determine whether to create or reuse teammates."
+        )
+
     return {
         "hookSpecificOutput": {
             "hookEventName": HOOK_EVENT_NAME,
-            "additionalContext": (
-                "INTENT_ENVELOPE_JSON\n"
-                "```json\n"
-                f"{envelope_json}\n"
-                "```\n"
-                "This envelope is the authority for this run. Dispatch only from "
-                "selected_agents, stay inside limits, and do not re-classify the "
-                "request yourself."
-            ),
+            "additionalContext": additional_context,
         }
     }
 
