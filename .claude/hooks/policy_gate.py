@@ -27,8 +27,20 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import locked_state  # noqa: E402
+    from team_lifecycle import (  # noqa: E402
+        check_role_in_selected_agents,
+        get_or_create_teammate,
+        mark_teammate_running,
+        TeammateLifecycleStatus,
+    )
 else:
     from .runtime_state import locked_state
+    from .team_lifecycle import (
+        check_role_in_selected_agents,
+        get_or_create_teammate,
+        mark_teammate_running,
+        TeammateLifecycleStatus,
+    )
 
 HOOK_EVENT_NAME = "PreToolUse"
 
@@ -432,16 +444,21 @@ def _check_agent_dispatch(
 ) -> dict[str, Any] | None:
     """Enforce the roster, the member cap, and the dispatch-round cap.
 
-    Members are tracked by their unique `name` field, not by subagent_type.
-    Multiple instances with the same subagent_type but different names are
-    distinct members and each consumes a slot.
+    Uses session-scoped team lifecycle to enable teammate reuse:
+    - Checks if a teammate for this role already exists and is reusable
+    - If reusable, reuses the same teammate (no new pane, no member slot)
+    - If busy, rejects the dispatch
+    - If not found, creates a new teammate (consumes one member slot)
+
+    Authorization is checked against selected_agents before reuse.
     """
     subagent_type = ""
-    teammate_name = ""
+    requested_teammate_name = ""
+    session_id = ""
 
     if isinstance(tool_input, dict):
         subagent_type = str(tool_input.get("subagent_type") or "").strip()
-        teammate_name = str(tool_input.get("name") or "").strip()
+        requested_teammate_name = str(tool_input.get("name") or "").strip()
 
     selected_agents = [str(agent) for agent in state.get("selected_agents") or []]
 
@@ -458,7 +475,7 @@ def _check_agent_dispatch(
             "not allowed — report that the roster does not cover this work and stop."
         )
 
-    if not teammate_name:
+    if not requested_teammate_name:
         return deny(
             "Blocked: the dispatch provides no name. Each teammate must have a stable, "
             "unique name. Provide it via the `name` parameter."
@@ -467,7 +484,7 @@ def _check_agent_dispatch(
     merchant_decision = _check_merchant_dispatch(
         state,
         subagent_type,
-        teammate_name,
+        requested_teammate_name,
         tool_input,
     )
 
@@ -486,18 +503,18 @@ def _check_agent_dispatch(
 
     members_used = [str(member) for member in state.get("members_used") or []]
 
-    if teammate_name not in members_used:
+    if requested_teammate_name not in members_used:
         max_members = _limit(state, "max_members")
 
         if max_members is not None and len(members_used) + 1 > max_members:
             return deny(
-                f"Blocked: dispatching teammate '{teammate_name}' would make "
+                f"Blocked: dispatching teammate '{requested_teammate_name}' would make "
                 f"{len(members_used) + 1} members, over the {max_members} allowed for "
                 f"task_class {state.get('task_class')}. Already dispatched: "
                 f"{', '.join(members_used) or 'none'}."
             )
 
-        members_used.append(teammate_name)
+        members_used.append(requested_teammate_name)
         state["members_used"] = members_used
 
     if MERCHANT_APPLY_OPERATION in {
@@ -509,7 +526,7 @@ def _check_agent_dispatch(
         state["merchant_dispatch"] = {
             "operation": MERCHANT_APPLY_OPERATION,
             "subagent_type": subagent_type,
-            "teammate_name": teammate_name,
+            "teammate_name": requested_teammate_name,
             "confirmation_hash": confirmation[
                 "confirmation_hash"
             ],

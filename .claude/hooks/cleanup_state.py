@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Stop and SessionEnd hook: drop the run state.
+"""Stop and SessionEnd hook: manage run and team state cleanup.
 
-State outliving its run is worse than no state: the next `/solve` in the same
-session would inherit spent budget, and a leftover document makes an ordinary
-session look like a controlled run to the policy gate.
+Stop hook: clears only the run state so the next `/solve` gets a fresh budget.
+SessionEnd hook: clears both run state and team state when the session ends.
 
-Registered on both events on purpose. Stop covers the normal end of a turn
-(including clear, resume, and compact); SessionEnd covers the session going away
-without a Stop. Removing state twice is harmless — a missing file is not an error.
+The distinction is important: team state is session-scoped and persists across
+multiple `/solve` runs for teammate reuse, but run state must be cleared after
+each run.
 """
 
 from __future__ import annotations
@@ -19,8 +18,10 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import clear_state  # noqa: E402
+    from team_lifecycle import clear_team_state  # noqa: E402
 else:
     from .runtime_state import clear_state
+    from .team_lifecycle import clear_team_state
 
 
 def main() -> int:
@@ -32,7 +33,13 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
-    clear_state(payload.get("session_id"))
+    session_id = payload.get("session_id")
+    hook_event = payload.get("hook_event_name", "").lower()
+
+    clear_state(session_id)
+
+    if hook_event == "sessionend":
+        clear_team_state(session_id)
 
     return 0
 

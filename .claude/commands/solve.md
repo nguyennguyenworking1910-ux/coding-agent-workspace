@@ -392,15 +392,26 @@ history. Put all necessary task-specific context in the assignment.
 
 Every teammate assignment must end with this semantic instruction:
 
-> Before going idle, mark your shared task completed with `TaskUpdate` when a task exists. Your
-> **FINAL ACTION** must be `SendMessage` to `team-lead` with your complete report. Include all
-> findings, changed files, verification or test results, failures, and unresolved work in the
-> message body. Do not rely on ordinary final text in your pane: it is not delivered to the
-> lead. If `SendMessage` explicitly reports that nothing was sent, retry it once. If the retry
-> fails, remain available and preserve the complete report in your pane.
+> When your task finishes, return a complete final answer.
+> 
+> **Result delivery:** The lead accepts your complete result through either:
+> - automatic final-answer delivery when your work completes naturally;
+> - `SendMessage` to `team-lead` with your complete report in the body.
+> 
+> If both delivery forms arrive, the report ledger deduplicates them as one logical result.
+> 
+> Before a timeout, mark your task completed with `TaskUpdate` if a task exists.
+> Ensure your complete report reaches the lead through one of the accepted forms above.
+> 
+> Include in your result: all findings, changed files, verification or test results, failures, 
+> and unresolved work. Do not rely on pane text or status updates alone: the complete report 
+> must be delivered through the forms named above.
+> 
+> A task status update (`TaskUpdate`) or idle notification without report content is not a 
+> complete result and will trigger a recovery message; do not discard your report.
 
-The complete report must be carried in the `SendMessage` body, not only in its summary. A task
-status change, pane output, or idle notification never substitutes for the report.
+The lead will only send a recovery message if no complete result was received through automatic 
+delivery or `SendMessage`. Once the lead acknowledges your report, do not resend or redo work.
 
 ## 9. Coordinate safely and collect reports
 
@@ -415,13 +426,21 @@ Never let writing teammates edit overlapping paths concurrently. Give `coder` an
 explicit disjoint ownership, or sequence their tasks. Two writing teammates must not edit the
 same file in the same round.
 
-Maintain a report ledger keyed by teammate name. Count a teammate's result as received only when
-the lead receives that teammate's complete report through `SendMessage`. `TaskUpdate` status and
-`idle_notification` are coordination signals only; neither contains or proves delivery of the
-result.
+**Idempotent result ledger:** Maintain a report ledger keyed by `run_id + task_id + agent_name`.
+Accept a teammate's result as delivered only when the lead receives a complete final answer 
+through either:
 
-If a teammate becomes idle before its report arrives, send exactly one bounded recovery message
-to that teammate:
+1. automatic final-answer delivery when the teammate's work completes; or
+2. explicit `SendMessage` to `team-lead` with the complete report in the body.
+
+`TaskUpdate` status updates and `idle_notification` are coordination signals only; a status 
+change without report content does not count as result delivery.
+
+When both automatic delivery and `SendMessage` occur for the same task, treat them as one logical 
+result (idempotent). Store the delivery source but do not process the result twice.
+
+**Recovery behavior:** If a teammate becomes idle and no complete result was received, send 
+exactly one bounded recovery message:
 
 > Your result was not delivered to the lead. Send your complete existing report now through
 > `SendMessage` to `team-lead`; do not redo the task.

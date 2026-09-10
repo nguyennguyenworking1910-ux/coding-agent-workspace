@@ -119,6 +119,7 @@ def new_state(
     confirmed: bool,
     operations: list[str] | None = None,
     merchant_confirmation: dict[str, Any] | None = None,
+    run_id: str = "",
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
 
@@ -129,8 +130,12 @@ def new_state(
     ``total_tool_calls_regular`` tracks non-coordination calls against the regular
     budget (which excludes the coordination reserve). ``total_tool_calls`` is the
     hard cap across all calls.
+
+    ``run_id`` uniquely identifies this run and is used in result ledger keys.
+    ``result_ledger`` tracks which tasks have delivered their results (idempotent).
     """
     state = {
+        "run_id": run_id,
         "request": redact_secrets(request),
         "task_class": task_class,
         "risk_level": risk_level,
@@ -145,6 +150,7 @@ def new_state(
         "total_tool_calls": 0,
         "total_tool_calls_regular": 0,
         "agent_rounds": 0,
+        "result_ledger": {},
     }
 
     if merchant_confirmation is not None:

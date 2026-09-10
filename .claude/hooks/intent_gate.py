@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
@@ -424,6 +425,8 @@ def run(
     envelope_payload["limits"] = limits
     envelope_payload["confirmed"] = confirmed
 
+    run_id = str(uuid.uuid4())
+
     save_state(
         payload.get("session_id"),
         new_state(
@@ -442,6 +445,7 @@ def run(
             merchant_confirmation=envelope_payload.get(
                 "merchant_confirmation"
             ),
+            run_id=run_id,
         ),
     )
 
