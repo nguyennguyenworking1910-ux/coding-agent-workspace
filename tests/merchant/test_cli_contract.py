@@ -64,6 +64,8 @@ def test_command_allowlists_are_complete_and_disjoint():
         "document approve",
         "document revision-create",
         "integration identifier-set",
+        "merchant activate",
+        "merchant activate-all",
         "merchant create",
         "procurement update",
         "project create",

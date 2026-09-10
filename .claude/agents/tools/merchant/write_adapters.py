@@ -116,12 +116,33 @@ class MerchantRepositoryWriteAdapters:
             "document approve": self.approve_document,
             "document revision-create": self.create_revision,
             "integration identifier-set": self.set_identifier,
+            "merchant activate": self.activate_merchant,
+            "merchant activate-all": self.activate_merchants_batch,
             "merchant create": self.create_merchant,
             "procurement update": self.update_procurement,
             "project create": self.create_project,
             "project update": self.update_project,
             "step update": self.update_step,
         }
+
+    def activate_merchant(self, payload: dict[str, Any]) -> Any:
+        return self.repositories.merchants.activate_merchant(
+            merchant_id=payload["merchant_id"],
+            expected_version=payload["expected_version"],
+            reason=payload["reason"],
+            triggered_by=payload.get("triggered_by"),
+        )
+
+    def activate_merchants_batch(
+        self,
+        payload: dict[str, Any],
+    ) -> Any:
+        return self.repositories.merchants.activate_merchants_batch(
+            from_status=payload["from_status"],
+            expected_count=payload["expected_count"],
+            reason=payload["reason"],
+            triggered_by=payload.get("triggered_by"),
+        )
 
     def create_merchant(self, payload: dict[str, Any]) -> Any:
         return self.repositories.merchants.create_merchant(

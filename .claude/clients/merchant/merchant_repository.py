@@ -13,9 +13,12 @@ from psycopg.types.json import Jsonb
 
 from claude.agents.tools.merchant.merchant_engine import (
     ContactImportPlan,
+    MerchantActivationPlan,
+    MerchantConflictError,
     MerchantCreationPlan,
     MerchantVersionConflictError,
     propose_contact_import,
+    propose_merchant_activation,
     propose_merchant_creation,
 )
 from claude.clients.merchant.repository import MerchantRepository
@@ -62,6 +65,22 @@ class ContactImportResult:
     contacts_imported: int
     previous_merchant_version: int
     current_merchant_version: int
+    event_id: str
+    event_type: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class MerchantActivationResult:
+    """Result of a committed merchant activation."""
+
+    merchant_id: str
+    previous_status: str
+    current_status: str
+    previous_version: int
+    current_version: int
     event_id: str
     event_type: str
 
@@ -175,6 +194,179 @@ class MerchantEntityRepository:
             event_id=str(event_id),
             event_type=plan.event_type,
         )
+
+    def activate_merchant(
+        self,
+        *,
+        merchant_id: str,
+        expected_version: int,
+        reason: str,
+        triggered_by: str | None = None,
+    ) -> MerchantActivationResult:
+        """Activate a merchant transactionally."""
+
+        merchant_uuid = _uuid(merchant_id, "merchant_id")
+        event_id = uuid.uuid4()
+
+        try:
+            with self.repository.connection() as connection:
+                with connection.transaction():
+                    with connection.cursor(
+                        row_factory=dict_row,
+                    ) as cursor:
+                        merchant = self._lock_merchant(
+                            cursor,
+                            merchant_uuid,
+                        )
+                        # Check idempotency: if already ACTIVE, return success
+                        if merchant.get("account_status") == "ACTIVE":
+                            return MerchantActivationResult(
+                                merchant_id=merchant_uuid,
+                                previous_status="ACTIVE",
+                                current_status="ACTIVE",
+                                previous_version=merchant.get("version", 1),
+                                current_version=merchant.get("version", 1),
+                                event_id=str(event_id),
+                                event_type="MERCHANT_ALREADY_ACTIVE",
+                            )
+                        plan = propose_merchant_activation(
+                            merchant,
+                            expected_version=expected_version,
+                            reason=reason,
+                            triggered_by=triggered_by,
+                        )
+                        self._update_merchant_status(
+                            cursor,
+                            plan,
+                        )
+                        self._insert_activation_event(
+                            cursor,
+                            plan,
+                            event_id,
+                        )
+        except MerchantConflictError as error:
+            raise MerchantConflictError(
+                str(error)
+            ) from error
+
+        return MerchantActivationResult(
+            merchant_id=plan.merchant_id,
+            previous_status=plan.current_status,
+            current_status=plan.target_status,
+            previous_version=plan.expected_version,
+            current_version=plan.new_merchant_version,
+            event_id=str(event_id),
+            event_type=plan.event_type,
+        )
+
+    def activate_merchants_batch(
+        self,
+        *,
+        from_status: str,
+        expected_count: int,
+        reason: str,
+        triggered_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically activate all merchants with matching status."""
+
+        normalized_from_status = (
+            str(from_status).strip().upper()
+        )
+        normalized_triggered_by = (
+            _uuid(triggered_by, "triggered_by")
+            if triggered_by is not None
+            else None
+        )
+
+        if not isinstance(expected_count, int) or expected_count < 1:
+            raise MerchantConflictError(
+                "expected_count must be a positive integer"
+            )
+
+        results: list[MerchantActivationResult] = []
+
+        try:
+            with self.repository.connection() as connection:
+                with connection.transaction():
+                    with connection.cursor(
+                        row_factory=dict_row,
+                    ) as cursor:
+                        merchants = self._read_merchants_by_status(
+                            cursor,
+                            normalized_from_status,
+                        )
+
+                        if len(merchants) != expected_count:
+                            raise MerchantConflictError(
+                                f"Expected {expected_count} merchants with "
+                                f"status {normalized_from_status}, found "
+                                f"{len(merchants)}"
+                            )
+
+                        for merchant_row in merchants:
+                            merchant_id = merchant_row["id"]
+                            plan = propose_merchant_activation(
+                                merchant_row,
+                                expected_version=merchant_row["version"],
+                                reason=reason,
+                                triggered_by=triggered_by,
+                            )
+                            event_id = uuid.uuid4()
+                            self._update_merchant_status(
+                                cursor,
+                                plan,
+                            )
+                            self._insert_activation_event(
+                                cursor,
+                                plan,
+                                event_id,
+                            )
+                            results.append(
+                                MerchantActivationResult(
+                                    merchant_id=plan.merchant_id,
+                                    previous_status=plan.current_status,
+                                    current_status=plan.target_status,
+                                    previous_version=plan.expected_version,
+                                    current_version=plan.new_merchant_version,
+                                    event_id=str(event_id),
+                                    event_type=plan.event_type,
+                                )
+                            )
+        except MerchantConflictError as error:
+            raise MerchantConflictError(
+                str(error)
+            ) from error
+
+        return {
+            "success": True,
+            "mode": "APPLY",
+            "command": "merchant activate-all",
+            "from_status": normalized_from_status,
+            "expected_count": expected_count,
+            "activated_count": len(results),
+            "results": [result.to_dict() for result in results],
+        }
+
+    @staticmethod
+    def _read_merchants_by_status(
+        cursor: Any,
+        status: str,
+    ) -> list[dict[str, Any]]:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                code,
+                account_status,
+                version
+            FROM merchant_ops.merchants
+            WHERE account_status = %s
+            ORDER BY id ASC
+            FOR UPDATE
+            """,
+            (status,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def _insert_merchant(
@@ -391,6 +583,84 @@ class MerchantEntityRepository:
                 plan.change_summary,
                 Jsonb(plan.old_values),
                 Jsonb(plan.new_values),
+                (
+                    uuid.UUID(plan.triggered_by)
+                    if plan.triggered_by is not None
+                    else None
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _update_merchant_status(
+        cursor: Any,
+        plan: MerchantActivationPlan,
+    ) -> None:
+        cursor.execute(
+            """
+            UPDATE merchant_ops.merchants
+            SET
+                account_status = %s,
+                updated_at = CURRENT_TIMESTAMP,
+                version = %s
+            WHERE id = %s
+              AND version = %s
+            """,
+            (
+                plan.target_status,
+                plan.new_merchant_version,
+                uuid.UUID(plan.merchant_id),
+                plan.expected_version,
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            raise MerchantVersionConflictError(
+                "Merchant version changed or status "
+                "could not be updated"
+            )
+
+    @staticmethod
+    def _insert_activation_event(
+        cursor: Any,
+        plan: MerchantActivationPlan,
+        event_id: uuid.UUID,
+    ) -> None:
+        merchant_id = uuid.UUID(plan.merchant_id)
+        # Include reason in audit event
+        new_values = dict(plan.new_values)
+        new_values["reason"] = plan.reason
+        old_values = dict(plan.old_values)
+        old_values["reason"] = plan.reason
+        cursor.execute(
+            """
+            INSERT INTO merchant_ops.project_events (
+                id,
+                merchant_id,
+                project_id,
+                event_type,
+                entity_type,
+                entity_id,
+                change_summary,
+                old_values,
+                new_values,
+                triggered_by,
+                created_at
+            )
+            VALUES (
+                %s, %s, NULL, %s, 'MERCHANT',
+                %s, %s, %s, %s, %s,
+                CURRENT_TIMESTAMP
+            )
+            """,
+            (
+                event_id,
+                merchant_id,
+                plan.event_type,
+                merchant_id,
+                plan.change_summary,
+                Jsonb(old_values),
+                Jsonb(new_values),
                 (
                     uuid.UUID(plan.triggered_by)
                     if plan.triggered_by is not None

@@ -104,6 +104,68 @@ class ContactImportPlan:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class MerchantActivationPlan:
+    """Validated merchant activation with audit metadata."""
+
+    merchant_id: str
+    current_status: str
+    target_status: str
+    expected_version: int
+    new_merchant_version: int
+    reason: str
+    triggered_by: str | None
+    event_type: str
+    change_summary: str
+    old_values: dict[str, object]
+    new_values: dict[str, object]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class MerchantBatchActivationManifest:
+    """Deterministic manifest of merchants for batch activation verification."""
+
+    merchants: tuple[dict[str, object], ...]  # Each: {id, code, current_status, version}
+    payload_hash: str
+    confirmation_hash: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "merchants": list(self.merchants),
+            "payload_hash": self.payload_hash,
+            "confirmation_hash": self.confirmation_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MerchantBatchActivationPlan:
+    """Batch activation plan for multiple merchants with deterministic ordering."""
+
+    merchants: tuple[MerchantActivationPlan, ...]
+    manifest: MerchantBatchActivationManifest
+    from_status: str
+    target_status: str
+    reason: str
+    triggered_by: str | None
+    event_type: str
+    change_summary: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "merchants": [plan.to_dict() for plan in self.merchants],
+            "manifest": self.manifest.to_dict(),
+            "from_status": self.from_status,
+            "target_status": self.target_status,
+            "reason": self.reason,
+            "triggered_by": self.triggered_by,
+            "event_type": self.event_type,
+            "change_summary": self.change_summary,
+        }
+
+
 def propose_merchant_creation(
     *,
     merchant_id: str,
@@ -211,6 +273,160 @@ def propose_contact_import(
             "contacts_imported": len(records),
             "primary_contacts_imported": primary_count,
             "merchant_version": new_version,
+        },
+    )
+
+
+def propose_merchant_batch_activation(
+    merchants: Sequence[Mapping[str, Any]],
+    *,
+    reason: str,
+    triggered_by: str | None = None,
+) -> MerchantBatchActivationPlan:
+    """Validate and plan batch merchant activation with manifest binding."""
+
+    if not merchants:
+        raise MerchantEngineError(
+            "batch activation requires at least one merchant"
+        )
+
+    normalized_reason = _required_text(
+        reason,
+        "reason",
+        maximum=500,
+    )
+    normalized_triggered_by = (
+        _uuid_identifier(triggered_by, "triggered_by")
+        if triggered_by is not None
+        else None
+    )
+
+    # Verify all merchants are ONBOARDING
+    merchant_list = list(merchants)
+    for merchant in merchant_list:
+        current_status = merchant.get("account_status", "").upper()
+        if current_status != "ONBOARDING":
+            raise MerchantConflictError(
+                f"All merchants must be ONBOARDING; found {current_status}"
+            )
+
+    # Sort deterministically by merchant ID
+    sorted_merchants = sorted(
+        merchant_list,
+        key=lambda m: str(m.get("id", "")),
+    )
+
+    # Create individual activation plans
+    plans = []
+    for merchant in sorted_merchants:
+        plan = propose_merchant_activation(
+            merchant,
+            expected_version=merchant.get("version", 0),
+            reason=normalized_reason,
+            triggered_by=normalized_triggered_by,
+        )
+        plans.append(plan)
+
+    # Build deterministic manifest
+    manifest_entries = []
+    for merchant in sorted_merchants:
+        manifest_entries.append({
+            "id": str(merchant.get("id", "")),
+            "code": str(merchant.get("code", "")),
+            "current_status": str(merchant.get("account_status", "")),
+            "version": int(merchant.get("version", 0)),
+        })
+
+    manifest = MerchantBatchActivationManifest(
+        merchants=tuple(manifest_entries),
+        payload_hash="",  # Will be computed in CLI layer
+        confirmation_hash="",  # Will be computed in CLI layer
+    )
+
+    return MerchantBatchActivationPlan(
+        merchants=tuple(plans),
+        manifest=manifest,
+        from_status="ONBOARDING",
+        target_status="ACTIVE",
+        reason=normalized_reason,
+        triggered_by=normalized_triggered_by,
+        event_type="MERCHANT_BATCH_ACTIVATED",
+        change_summary=(
+            f"Batch activation: {len(plans)} merchants from ONBOARDING to ACTIVE"
+        ),
+    )
+
+
+def propose_merchant_activation(
+    merchant: Mapping[str, Any],
+    *,
+    expected_version: int,
+    reason: str,
+    triggered_by: str | None = None,
+) -> MerchantActivationPlan:
+    """Validate and plan one merchant activation."""
+
+    normalized_expected_version = _positive_integer(
+        expected_version,
+        "expected_version",
+    )
+    merchant_id = _uuid_identifier(
+        merchant.get("id"),
+        "merchant.id",
+    )
+    current_version = _positive_integer(
+        merchant.get("version"),
+        "merchant.version",
+    )
+    current_status = _required_text(
+        merchant.get("account_status"),
+        "account_status",
+        maximum=50,
+    )
+
+    if normalized_expected_version != current_version:
+        raise MerchantVersionConflictError(
+            "Merchant version changed before activation "
+            "could proceed"
+        )
+
+    if current_status != "ONBOARDING":
+        raise MerchantConflictError(
+            f"Merchant cannot be activated from {current_status} status; "
+            "only ONBOARDING merchants can be activated"
+        )
+
+    normalized_reason = _required_text(
+        reason,
+        "reason",
+        maximum=500,
+    )
+    normalized_triggered_by = (
+        _uuid_identifier(triggered_by, "triggered_by")
+        if triggered_by is not None
+        else None
+    )
+    new_version = current_version + 1
+
+    return MerchantActivationPlan(
+        merchant_id=merchant_id,
+        current_status=current_status,
+        target_status="ACTIVE",
+        expected_version=current_version,
+        new_merchant_version=new_version,
+        reason=normalized_reason,
+        triggered_by=normalized_triggered_by,
+        event_type="MERCHANT_ACTIVATED",
+        change_summary=(
+            f"Merchant activated from {current_status} to ACTIVE"
+        ),
+        old_values={
+            "account_status": current_status,
+            "version": current_version,
+        },
+        new_values={
+            "account_status": "ACTIVE",
+            "version": new_version,
         },
     )
 

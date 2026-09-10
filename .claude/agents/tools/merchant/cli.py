@@ -179,6 +179,35 @@ def build_argument_parser() -> argparse.ArgumentParser:
     merchant_create.add_argument("--created-by")
     merchant_create.add_argument("--merchant-id")
 
+    merchant_activate = merchant_actions.add_parser("activate")
+    _add_write_mode(merchant_activate)
+    merchant_activate.add_argument("--merchant-id", required=True)
+    merchant_activate.add_argument(
+        "--expected-version",
+        type=_positive_integer,
+        required=True,
+    )
+    merchant_activate.add_argument("--reason", required=True)
+    merchant_activate.add_argument("--triggered-by", required=True)
+
+    merchant_activate_all = merchant_actions.add_parser(
+        "activate-all"
+    )
+    _add_write_mode(merchant_activate_all)
+    merchant_activate_all.add_argument(
+        "--from-status",
+        type=_upper,
+        choices=("ONBOARDING",),
+        required=True,
+    )
+    merchant_activate_all.add_argument(
+        "--expected-count",
+        type=_positive_integer,
+        required=True,
+    )
+    merchant_activate_all.add_argument("--reason", required=True)
+    merchant_activate_all.add_argument("--triggered-by", required=True)
+
     contact_parser = resources.add_parser("contact")
     contact_actions = contact_parser.add_subparsers(
         dest="action",
@@ -550,6 +579,28 @@ def build_write_payload(
                 "name",
                 "region_code",
                 "created_by",
+            ),
+        )
+
+    if command == "merchant activate":
+        return _selected_fields(
+            args,
+            (
+                "merchant_id",
+                "expected_version",
+                "reason",
+                "triggered_by",
+            ),
+        )
+
+    if command == "merchant activate-all":
+        return _selected_fields(
+            args,
+            (
+                "from_status",
+                "expected_count",
+                "reason",
+                "triggered_by",
             ),
         )
 

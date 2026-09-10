@@ -80,6 +80,7 @@ class MerchantWriteCommands:
             configured[normalized_command] = handler
 
         self._handlers = MappingProxyType(configured)
+        self._preflight_validators: dict[str, WriteHandler] = {}
 
     @property
     def configured_commands(self) -> frozenset[str]:
