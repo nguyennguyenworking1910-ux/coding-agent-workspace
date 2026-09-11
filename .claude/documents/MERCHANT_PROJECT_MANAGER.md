@@ -941,7 +941,122 @@ return read_project_step(step_id)
 
 ---
 
-## 15. Migration Strategy
+## 15. Merchant Activation
+
+Merchant activation transitions merchants from ONBOARDING to ACTIVE status after all integration workflow gates pass.
+
+### Single Merchant Activation
+
+**Syntax:**
+```
+python .claude/agents/tools/merchant/agent_cli.py merchant activate \
+  --propose \
+  --merchant-id <MERCHANT_UUID> \
+  --expected-version <VERSION_INT> \
+  --reason "<REASON_TEXT>" \
+  --triggered-by <USER_UUID>
+```
+
+**Proposal Output:**
+- Contains `proposal_hash`, `confirmation_hash`, and `confirmation_token`
+- Includes normalized payload with merchant_id, expected_version, and reason
+- `requires_confirmation: true` (user must provide confirmation token to apply)
+
+**Apply Syntax (via orchestration only):**
+```
+# APPLY MODE IS NOT AVAILABLE VIA ORDINARY CLI
+# Orchestration performs the mutation through trusted in-process handoff only
+```
+
+**Behavior:**
+- Only ONBOARDING → ACTIVE is valid; already ACTIVE is a conflict (not fake success)
+- `expected_version` protects against concurrent modifications
+- Updates merchant status and version atomically
+- Inserts exactly one redacted audit event in same transaction
+- Never fabricates event_id for never-inserted events
+- No fake success or artificial events for already-ACTIVE merchants
+
+### Batch Merchant Activation
+
+**Preflight (read-only proposal):**
+```
+python .claude/scripts/merchant_activation_preflight.py --database runtime
+```
+
+Validates:
+- Current merchants with ONBOARDING status
+- Exact sorted manifest: merchant_id, code, account_status, version
+- Expected count matches actual database count
+- Builds deterministic manifest SHA256
+
+**Syntax:**
+```
+python .claude/agents/tools/merchant/agent_cli.py merchant activate-all \
+  --propose \
+  --from-status ONBOARDING \
+  --expected-count <COUNT_INT> \
+  --reason "<REASON_TEXT>" \
+  --triggered-by <USER_UUID>
+```
+
+**Critical Protections:**
+- Manifest binding: proposal includes exact sorted list of (merchant_id, code, account_status, version)
+- Expected count ALONE is not sufficient; manifest membership and state must be identical
+- Same-count membership drift (different merchant IDs, different codes, or different statuses) → rejection
+- Version drift → rejection (any merchant version changed since proposal) → rejection
+- SELECT FOR UPDATE locks all proposed merchants before manifest verification
+- Manifest rebuilt from locked rows and compared to proposal exactly
+
+**Apply:**
+- All or nothing atomicity: all updates + all events succeed or entire batch rolls back
+- One redacted audit event per successfully activated merchant
+- Identical proposal hash cannot silently activate a different merchant set
+
+**Batch Failure Examples:**
+- Proposal merchant [A, B, C]; apply finds [A, B, D] → rejected (membership drift)
+- Proposal merchant A v2; apply finds A v3 → rejected (version drift)
+- Proposal status ONBOARDING; apply finds status ACTIVE → rejected (status conflict)
+
+### Workflow-Triggered Activation
+
+When the canonical `activate_merchant` step of `INTEGRATION_NEW_MERCHANT_STANDARD` workflow reaches COMPLETED status:
+
+1. **Lookup:** Load persisted project, step, and dependency metadata from database
+2. **Authorize:** Verify step is canonical activation step (template_step_uuid match, no caller inference)
+3. **Validate:** Check all required dependency steps are COMPLETED
+4. **Activate:** Call merchant activation using same database cursor and transaction
+5. **Atomicity:** Step transition + merchant update + audit event in one transaction
+6. **Rollback:** Any failure (dependency validation, activation conflict, version mismatch) rolls back entire transaction including step transition
+
+**Failures:**
+- Missing dependencies → REJECT and roll back step
+- Merchant already ACTIVE → REJECT and roll back step
+- Version conflict → REJECT and roll back step
+- Update rowcount ≠ 1 → REJECT and roll back step
+
+### Safety Guidelines
+
+**Database Targets:**
+- Use `runtime` for user-initiated operations (through merchant-manager teammate)
+- Use `test` only for explicit development/readiness tests
+- Never substitute test target for runtime when runtime is requested
+- Test database is isolated and reserved; do not treat it as failover
+
+**Confirmation Handling:**
+- `confirmation_token` is displayed by CLI; user enters it when prompted
+- **Never** copy-paste confirmation phrases directly as shell commands
+- **Always** wait for the confirmation prompt before entering token
+- Confirmation is entered interactively only when CLI asks; it is not a flag or environment variable
+
+**No Real Data in Documentation:**
+- Merchant IDs are placeholders (not real UUIDs from catalogs)
+- Confirmations are redacted; hashes and tokens are not printed in plain text
+- Credentials, passwords, and contact data remain internal to CLI
+- Private catalog records and identifiers never appear in documentation or examples
+
+---
+
+## 16. Migration Strategy
 
 ### Forward-Only Design
 - **No Rollbacks:** Migrations are applied once and never undone

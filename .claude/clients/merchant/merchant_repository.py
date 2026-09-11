@@ -206,7 +206,7 @@ class MerchantEntityRepository:
         """Activate a merchant transactionally."""
 
         merchant_uuid = _uuid(merchant_id, "merchant_id")
-        event_id = uuid.uuid4()
+        event_id = None
 
         try:
             with self.repository.connection() as connection:
@@ -218,23 +218,13 @@ class MerchantEntityRepository:
                             cursor,
                             merchant_uuid,
                         )
-                        # Check idempotency: if already ACTIVE, return success
-                        if merchant.get("account_status") == "ACTIVE":
-                            return MerchantActivationResult(
-                                merchant_id=merchant_uuid,
-                                previous_status="ACTIVE",
-                                current_status="ACTIVE",
-                                previous_version=merchant.get("version", 1),
-                                current_version=merchant.get("version", 1),
-                                event_id=str(event_id),
-                                event_type="MERCHANT_ALREADY_ACTIVE",
-                            )
                         plan = propose_merchant_activation(
                             merchant,
                             expected_version=expected_version,
                             reason=reason,
                             triggered_by=triggered_by,
                         )
+                        event_id = uuid.uuid4()
                         self._update_merchant_status(
                             cursor,
                             plan,
@@ -266,8 +256,9 @@ class MerchantEntityRepository:
         expected_count: int,
         reason: str,
         triggered_by: str | None = None,
+        manifest: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Atomically activate all merchants with matching status."""
+        """Atomically activate all merchants with exact manifest validation."""
 
         normalized_from_status = (
             str(from_status).strip().upper()
@@ -291,7 +282,7 @@ class MerchantEntityRepository:
                     with connection.cursor(
                         row_factory=dict_row,
                     ) as cursor:
-                        merchants = self._read_merchants_by_status(
+                        merchants = self._read_merchants_by_status_for_update(
                             cursor,
                             normalized_from_status,
                         )
@@ -301,6 +292,12 @@ class MerchantEntityRepository:
                                 f"Expected {expected_count} merchants with "
                                 f"status {normalized_from_status}, found "
                                 f"{len(merchants)}"
+                            )
+
+                        if manifest is not None:
+                            self._validate_batch_manifest(
+                                merchants,
+                                manifest,
                             )
 
                         for merchant_row in merchants:
@@ -367,6 +364,68 @@ class MerchantEntityRepository:
             (status,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _read_merchants_by_status_for_update(
+        cursor: Any,
+        status: str,
+    ) -> list[dict[str, Any]]:
+        """Read merchants by status with explicit FOR UPDATE lock."""
+        cursor.execute(
+            """
+            SELECT
+                id,
+                code,
+                account_status,
+                version
+            FROM merchant_ops.merchants
+            WHERE account_status = %s
+            ORDER BY id ASC
+            FOR UPDATE
+            """,
+            (status,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _validate_batch_manifest(
+        merchants: list[dict[str, Any]],
+        manifest: list[dict[str, Any]],
+    ) -> None:
+        """Validate that locked merchant rows match the proposal manifest exactly."""
+        if len(merchants) != len(manifest):
+            raise MerchantConflictError(
+                f"Manifest contains {len(manifest)} merchants but "
+                f"database has {len(merchants)}"
+            )
+
+        for merchant_row, manifest_entry in zip(merchants, manifest):
+            merchant_id = str(merchant_row.get("id", ""))
+            manifest_id = str(manifest_entry.get("merchant_id", ""))
+
+            if merchant_id != manifest_id:
+                raise MerchantConflictError(
+                    f"Manifest membership drift: expected merchant "
+                    f"{manifest_id} but found {merchant_id}"
+                )
+
+            merchant_status = str(merchant_row.get("account_status", "")).upper()
+            manifest_status = str(manifest_entry.get("account_status", "")).upper()
+
+            if merchant_status != manifest_status:
+                raise MerchantConflictError(
+                    f"Merchant {merchant_id} status changed from "
+                    f"{manifest_status} to {merchant_status}"
+                )
+
+            merchant_version = int(merchant_row.get("version", 0))
+            manifest_version = int(manifest_entry.get("version", 0))
+
+            if merchant_version != manifest_version:
+                raise MerchantConflictError(
+                    f"Merchant {merchant_id} version changed from "
+                    f"{manifest_version} to {merchant_version}"
+                )
 
     @staticmethod
     def _insert_merchant(

@@ -10,6 +10,10 @@ from .cli_contract import (
     normalize_database_target,
     repository_role_for_target,
 )
+from .merchant_engine import (
+    propose_merchant_activation,
+    propose_merchant_batch_activation,
+)
 from .workflow_templates import STANDARD_WORKFLOW_TEMPLATES
 from .write_commands import MerchantWriteCommands
 
@@ -142,6 +146,7 @@ class MerchantRepositoryWriteAdapters:
             expected_count=payload["expected_count"],
             reason=payload["reason"],
             triggered_by=payload.get("triggered_by"),
+            manifest=payload.get("manifest"),
         )
 
     def create_merchant(self, payload: dict[str, Any]) -> Any:
@@ -264,6 +269,50 @@ class MerchantRepositoryWriteAdapters:
             triggered_by=payload.get("triggered_by"),
         )
 
+    def preflight_activate_merchant(
+        self,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Read-only preflight validation for single merchant activation."""
+        merchant = self.repositories.merchants.read_merchant(
+            merchant_id=payload["merchant_id"]
+        )
+        plan = propose_merchant_activation(
+            merchant,
+            expected_version=payload["expected_version"],
+            reason=payload["reason"],
+            triggered_by=payload.get("triggered_by"),
+        )
+        return {
+            "merchant_id": str(merchant.get("id", "")),
+            "code": str(merchant.get("code", "")),
+            "account_status": str(merchant.get("account_status", "")),
+            "version": int(merchant.get("version", 0)),
+        }
+
+    def preflight_activate_merchants_batch(
+        self,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Read-only preflight validation for batch merchant activation."""
+        merchants = self.repositories.merchants.read_merchants_by_ids(
+            merchant_ids=payload.get("merchant_ids", [])
+        )
+        plan = propose_merchant_batch_activation(
+            merchants,
+            reason=payload["reason"],
+            triggered_by=payload.get("triggered_by"),
+        )
+        manifest_entries = []
+        for merchant in plan.merchants:
+            manifest_entries.append({
+                "merchant_id": merchant.merchant_id,
+                "code": merchant.__dict__.get("code", ""),
+                "account_status": merchant.current_status,
+                "version": merchant.expected_version,
+            })
+        return manifest_entries
+
 
 def build_repository_write_commands(
     database: str,
@@ -289,7 +338,18 @@ def build_repository_write_commands(
         )
 
     adapters = MerchantRepositoryWriteAdapters(repositories)
-    return MerchantWriteCommands(adapters.handlers())
+    commands = MerchantWriteCommands(adapters.handlers())
+
+    commands.register_preflight_validator(
+        "merchant activate",
+        adapters.preflight_activate_merchant,
+    )
+    commands.register_preflight_validator(
+        "merchant activate-all",
+        adapters.preflight_activate_merchants_batch,
+    )
+
+    return commands
 
 
 def _workflow_template(

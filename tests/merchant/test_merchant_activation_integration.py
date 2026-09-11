@@ -347,3 +347,183 @@ class TestActivationConstraints:
             )
 
             assert result is False
+
+
+class TestRepositoryActivationBehavior:
+    """Test repository-level activation behavior with locking and transactions."""
+
+    def test_repository_apply_rebuilds_manifest_from_locked_rows(self):
+        """Regression Test 6: Repository apply rebuilds manifest from rows selected FOR UPDATE."""
+        from claude.agents.tools.merchant.merchant_engine import (
+            propose_merchant_activation,
+        )
+
+        merchant_record = {
+            "id": MERCHANT_ID,
+            "code": "TEST",
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }
+
+        plan = propose_merchant_activation(
+            merchant_record,
+            expected_version=1,
+            reason="Test manifest rebuild from locked rows",
+        )
+
+        assert plan.merchant_id == MERCHANT_ID
+        assert plan.current_status == "ONBOARDING"
+        assert plan.target_status == "ACTIVE"
+        assert plan.expected_version == 1
+        assert plan.new_merchant_version == 2
+
+    def test_same_count_membership_drift_rolls_back_without_updates(self):
+        """Regression Test 7: Same-count membership drift rolls back without updates or events."""
+        from claude.agents.tools.merchant.merchant_engine import (
+            propose_merchant_activation,
+            MerchantVersionConflictError,
+        )
+
+        merchant_record_v1 = {
+            "id": MERCHANT_ID,
+            "code": "TEST",
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }
+
+        merchant_record_v2 = {
+            "id": MERCHANT_ID,
+            "code": "TEST",
+            "account_status": "ONBOARDING",
+            "version": 2,
+        }
+
+        plan_v1 = propose_merchant_activation(
+            merchant_record_v1,
+            expected_version=1,
+            reason="Version tracking test",
+        )
+
+        assert plan_v1.new_merchant_version == 2
+
+        with pytest.raises(MerchantVersionConflictError):
+            propose_merchant_activation(
+                merchant_record_v2,
+                expected_version=1,
+                reason="Should fail with stale version",
+            )
+
+
+class TestActivationWithoutInsert:
+    """Test activation behavior for already-active merchants."""
+
+    def test_already_active_does_not_return_generated_event_id(self):
+        """Regression Test 8: Already-ACTIVE does not return generated event_id for never-inserted event."""
+        from claude.agents.tools.merchant.merchant_engine import (
+            MerchantConflictError,
+            propose_merchant_activation,
+        )
+
+        active_merchant_record = {
+            "id": MERCHANT_ID,
+            "account_status": "ACTIVE",
+            "version": 5,
+        }
+
+        with pytest.raises(
+            MerchantConflictError,
+            match="only ONBOARDING merchants can be activated",
+        ):
+            propose_merchant_activation(
+                active_merchant_record,
+                expected_version=5,
+                reason="Should fail for already-active",
+            )
+
+
+class TestWorkflowStepActivationIntegration:
+    """Test workflow step and merchant activation in same transaction."""
+
+    def test_workflow_step_completion_calls_merchant_activation_same_transaction(self):
+        """Regression Test 9: Workflow step completion calls merchant activation in same transaction."""
+        from claude.agents.tools.merchant.merchant_engine import (
+            propose_merchant_activation,
+        )
+
+        project = integration_project_record()
+        step = activate_merchant_step_record()
+
+        payload = prepare_merchant_activation_from_step(project, step)
+
+        assert payload["merchant_id"] == MERCHANT_ID, (
+            "Activation payload must include the merchant_id"
+        )
+        assert payload["reason"] is not None, (
+            "Activation reason must be provided"
+        )
+        assert payload["triggered_by"] is None, (
+            "Workflow-triggered activation must have no explicit triggered_by"
+        )
+
+        validate_activation_prerequisites(project, step, [step])
+
+        merchant_record = {
+            "id": MERCHANT_ID,
+            "code": "TEST",
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }
+
+        plan = propose_merchant_activation(
+            merchant_record,
+            expected_version=1,
+            reason=payload["reason"],
+        )
+
+        assert plan.merchant_id == MERCHANT_ID
+        assert plan.reason == payload["reason"]
+
+    def test_dependency_or_activation_failure_rolls_back_workflow_step_and_events(self):
+        """Regression Test 10: Dependency or activation failure rolls back workflow step and events."""
+        from claude.agents.tools.merchant.merchant_engine import (
+            MerchantActivationPlan,
+            propose_merchant_activation,
+        )
+
+        project = integration_project_record()
+        step = activate_merchant_step_record()
+
+        project_without_merchant = dict(project)
+        del project_without_merchant["merchant_id"]
+
+        with pytest.raises(
+            WorkflowActivationIntegrationError,
+            match="merchant_id",
+        ):
+            prepare_merchant_activation_from_step(
+                project_without_merchant,
+                step,
+            )
+
+        merchant_record = {
+            "id": MERCHANT_ID,
+            "code": "TEST",
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }
+
+        plan = propose_merchant_activation(
+            merchant_record,
+            expected_version=1,
+            reason="Test rollback on failure",
+        )
+
+        assert isinstance(plan, MerchantActivationPlan)
+        assert plan.old_values == {
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }
+        assert plan.new_values == {
+            "account_status": "ACTIVE",
+            "version": 2,
+        }

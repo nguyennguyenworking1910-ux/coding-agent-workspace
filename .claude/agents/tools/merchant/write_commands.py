@@ -82,6 +82,26 @@ class MerchantWriteCommands:
         self._handlers = MappingProxyType(configured)
         self._preflight_validators: dict[str, WriteHandler] = {}
 
+    def register_preflight_validator(
+        self,
+        command: str,
+        validator: WriteHandler,
+    ) -> None:
+        """Register a read-only preflight validator for a write command."""
+        normalized_command = normalize_command(command)
+
+        if normalized_command not in WRITE_COMMANDS:
+            raise CommandNotAllowedError(
+                "Preflight validators must use write commands"
+            )
+
+        if not callable(validator):
+            raise WriteCommandNotConfiguredError(
+                f"Preflight validator must be callable: {normalized_command}"
+            )
+
+        self._preflight_validators[normalized_command] = validator
+
     @property
     def configured_commands(self) -> frozenset[str]:
         return frozenset(self._handlers)
@@ -96,10 +116,17 @@ class MerchantWriteCommands:
 
         normalized_command = normalize_command(command)
         self._handler(normalized_command)
+
+        preflight_result = None
+        validator = self._preflight_validators.get(normalized_command)
+        if validator is not None:
+            preflight_result = validator(payload)
+
         prepared_payload = materialize_write_payload(
             normalized_command,
             database,
             payload,
+            preflight_result=preflight_result,
         )
         proposal = build_proposal(
             normalized_command,
@@ -125,10 +152,17 @@ class MerchantWriteCommands:
         normalized_command = normalize_command(command)
         normalized_database = normalize_database_target(database)
         handler = self._handler(normalized_command)
+
+        preflight_result = None
+        validator = self._preflight_validators.get(normalized_command)
+        if validator is not None:
+            preflight_result = validator(payload)
+
         prepared_payload = materialize_write_payload(
             normalized_command,
             normalized_database,
             payload,
+            preflight_result=preflight_result,
         )
 
         require_apply_authorization(
@@ -178,8 +212,10 @@ def materialize_write_payload(
     command: str,
     database: str,
     payload: Mapping[str, Any],
+    *,
+    preflight_result: Any = None,
 ) -> dict[str, Any]:
-    """Add stable internal IDs before proposal hashing."""
+    """Add stable internal IDs and preflight manifest before proposal hashing."""
 
     normalized_command = normalize_command(command)
 
@@ -219,6 +255,17 @@ def materialize_write_payload(
             normalized_payload,
             materialized,
         )
+
+    if preflight_result is not None and normalized_command in (
+        "merchant activate",
+        "merchant activate-all",
+    ):
+        if isinstance(preflight_result, dict) and "merchants" in preflight_result:
+            materialized["manifest"] = preflight_result["merchants"]
+        elif isinstance(preflight_result, list):
+            materialized["manifest"] = preflight_result
+        else:
+            materialized["manifest"] = preflight_result
 
     return materialized
 

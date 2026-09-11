@@ -147,6 +147,8 @@ def test_registry_freezes_the_write_operation_allowlist():
     )
 
     assert operations == {
+        "merchant activate",
+        "merchant activate-all",
         "merchant create",
         "contact import",
         "project create",

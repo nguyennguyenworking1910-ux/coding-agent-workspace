@@ -74,6 +74,24 @@ This confirms the details with you, then dispatches the `scheduler` subagent, wh
 slot by running `.claude/schedule.py` — so it needs the credentials set up below. Works in any
 language; the event title keeps your original wording.
 
+### Merchant Activation
+
+The Merchant activation feature transitions merchants from ONBOARDING to ACTIVE status:
+
+```
+merchant activate         # Single merchant activation
+merchant activate-all     # Controlled batch activation of all ONBOARDING merchants
+```
+
+**How it works:**
+
+1. **Single activation:** Specify merchant ID, expected version, and reason. Only ONBOARDING → ACTIVE is allowed.
+2. **Batch activation:** Read-only preflight validates the sorted manifest. Exact merchant count, codes, status, and versions must match between proposal and apply. Same-count membership drift is rejected.
+3. **Confirmation-required:** Both commands use proposal → confirmation → apply workflow. The `merchant-manager` teammate prepares the proposal; you provide the confirmation token to authorize the apply.
+4. **Atomic transaction:** Updates, audit events, and workflow steps complete together or roll back together. Already-ACTIVE merchants are conflicts, not silent success.
+
+**Detailed documentation:** See [.claude/documents/MERCHANT_PROJECT_MANAGER.md](./.claude/documents/MERCHANT_PROJECT_MANAGER.md) for full syntax, manifest binding, drift rejection, and workflow integration.
+
 ## Installation
 
 Nothing is required for the subagents or slash commands — they are configuration, not code.

@@ -152,6 +152,8 @@
           "project alerts"
         ],
         "write_operations": [
+          "merchant activate",
+          "merchant activate-all",
           "merchant create",
           "contact import",
           "project create",

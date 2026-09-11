@@ -105,6 +105,8 @@ For a read assignment:
 
 Only these write command families are recognized:
 
+- `merchant activate`
+- `merchant activate-all`
 - `merchant create`
 - `contact import`
 - `project create`

@@ -16,6 +16,7 @@ import json
 import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 try:
@@ -29,8 +30,6 @@ except ModuleNotFoundError:
     from clients.merchant.read_repository import (  # type: ignore
         MerchantReadRepository,
     )
-
-from pathlib import Path
 
 
 EXPECTED_MERCHANT_COUNT = 22
@@ -102,14 +101,27 @@ def run_preflight(database: str) -> dict[str, Any]:
             f"found {len(onboarding_sorted)}"
         )
 
+    # Build merchant manifest (deterministic ordering, exact state)
+    manifest_entries = [
+        {
+            "merchant_id": str(m.get("id", "")),
+            "code": str(m.get("code", "")),
+            "account_status": str(m.get("account_status", "")),
+            "version": int(m.get("version", 0)),
+        }
+        for m in onboarding_sorted
+    ]
+
     # Build proposal payload
     payload = {
         "from_status": FROM_STATUS,
-        "expected_count": EXPECTED_MERCHANT_COUNT,
+        "target_status": TARGET_STATUS,
+        "expected_count": len(manifest_entries),
         "reason": BATCH_REASON,
+        "manifest": manifest_entries,
     }
 
-    # Calculate hashes
+    # Calculate payload_hash from complete payload
     payload_canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -118,16 +130,31 @@ def run_preflight(database: str) -> dict[str, Any]:
     ).encode("utf-8")
     payload_hash = hashlib.sha256(payload_canonical).hexdigest()
 
-    # Build merchant summary
-    merchant_summary = [
-        {
-            "id": str(m.get("id", "")),
-            "code": str(m.get("code", "")),
-            "status": str(m.get("account_status", "")),
-            "version": int(m.get("version", 0)),
-        }
-        for m in onboarding_sorted
-    ]
+    # Calculate proposal_hash (same as payload_hash for proposal)
+    proposal_hash = payload_hash
+
+    # Calculate confirmation_hash from proposal_hash + manifest
+    confirmation_data = {
+        "proposal_hash": proposal_hash,
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(
+                manifest_entries,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    confirmation_canonical = json.dumps(
+        confirmation_data,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    confirmation_hash = hashlib.sha256(confirmation_canonical).hexdigest()
+
+    # Retain merchant_summary for output compatibility
+    merchant_summary = manifest_entries
 
     # Expected event count = one MERCHANT_ACTIVATED event per merchant
     expected_event_count = len(onboarding_sorted)
@@ -148,12 +175,14 @@ def run_preflight(database: str) -> dict[str, Any]:
         "merchants": merchant_summary,
         "hashes": {
             "payload_hash": payload_hash,
-            "payload": payload,
+            "proposal_hash": proposal_hash,
+            "confirmation_hash": confirmation_hash,
         },
         "backup_required": True,
         "backup_instructions": (
-            "Create PostgreSQL backup before apply: "
-            "pg_dump coding_agent_merchant > backup_before_activation_$(date +%s).sql"
+            "Create PostgreSQL backup before apply:\n"
+            "  Linux/macOS: pg_dump coding_agent_merchant > backup_before_activation_$(date +%s).sql\n"
+            "  Windows: pg_dump coding_agent_merchant > backup_before_activation_%date:~-4,4%%date:~-10,2%%date:~-7,2%_%time:~0,2%%time:~3,2%%time:~6,2%.sql"
         ),
         "expected_mutations": {
             "merchants_updated": EXPECTED_MERCHANT_COUNT,

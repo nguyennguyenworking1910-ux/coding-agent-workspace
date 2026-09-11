@@ -21,6 +21,10 @@ from claude.agents.tools.merchant.gates import (
 from claude.agents.tools.merchant.project_engine import (
     propose_project_transition,
 )
+from claude.agents.tools.merchant.workflow_activation_integration import (
+    should_activate_merchant_on_step_transition,
+    activate_merchant_in_workflow_transaction,
+)
 from claude.clients.merchant.repository import (
     MerchantRepository,
     ProjectNotFoundError,
@@ -245,6 +249,35 @@ class MerchantStepTransitionRepository:
                         raise WorkflowVersionConflictError(
                             "Project step changed before "
                             "transition could be applied"
+                        )
+
+                    if should_activate_merchant_on_step_transition(
+                        current_step,
+                        project,
+                        transition_plan.target_status,
+                    ):
+                        merchant_uuid = uuid.UUID(project["merchant_id"])
+                        cursor.execute(
+                            """
+                            SELECT version FROM merchant_ops.merchants
+                            WHERE id = %s
+                            """,
+                            (merchant_uuid,),
+                        )
+                        merchant_version_row = cursor.fetchone()
+                        merchant_version = (
+                            merchant_version_row["version"]
+                            if merchant_version_row
+                            else 1
+                        )
+
+                        activate_merchant_in_workflow_transaction(
+                            cursor,
+                            project["merchant_id"],
+                            merchant_version,
+                            project,
+                            current_step,
+                            steps,
                         )
 
                     event_id = uuid.uuid4()

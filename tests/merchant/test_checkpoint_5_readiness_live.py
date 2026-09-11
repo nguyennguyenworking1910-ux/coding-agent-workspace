@@ -117,6 +117,11 @@ def test_checkpoint_5_read_only_readiness():
         migration["version"]: migration
         for migration in applied_migrations
     }
+    local_versions = sorted(local_by_version)
+    applied_versions = [
+        migration["version"]
+        for migration in applied_migrations
+    ]
     pending_versions = sorted(
         set(local_by_version) - set(applied_by_version)
     )
@@ -154,11 +159,8 @@ def test_checkpoint_5_read_only_readiness():
         == TEST_DATABASE,
         "correct_test_user": identity["user"] == "merchant_test",
         "read_only_enforced": identity["read_only"] == "on",
-        "migration_versions_are_1_2_3": [
-            migration["version"]
-            for migration in applied_migrations
-        ]
-        == [1, 2, 3],
+        "migration_versions_match_local": applied_versions
+        == local_versions,
         "no_pending_migrations": not pending_versions,
         "no_missing_local_migrations": not missing_local_versions,
         "no_checksum_conflicts": not checksum_conflicts,
@@ -200,10 +202,8 @@ def test_checkpoint_5_read_only_readiness():
         "success": all(checks.values()),
         "checks": checks,
         "database": identity,
-        "migration_versions": [
-            migration["version"]
-            for migration in applied_migrations
-        ],
+        "applied_versions": applied_versions,
+        "local_versions": local_versions,
         "pending_versions": pending_versions,
         "missing_local_versions": missing_local_versions,
         "checksum_conflicts": checksum_conflicts,
