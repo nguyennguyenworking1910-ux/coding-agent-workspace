@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -60,6 +61,12 @@ ACCOUNTING_APPROVAL_ID = (
 )
 PROCUREMENT_ID = (
     "00000000-0000-0000-0000-000000000012"
+)
+ASSIGNEE_ID = (
+    "00000000-0000-0000-0000-000000000013"
+)
+EXISTING_ASSIGNEE_ID = (
+    "00000000-0000-0000-0000-000000000014"
 )
 
 
@@ -204,6 +211,7 @@ def step_record(
     actual_completion=None,
     step_type="SEQUENTIAL",
     step_name="Test step",
+    assigned_to=None,
 ):
     return {
         "id": step_id,
@@ -216,6 +224,7 @@ def step_record(
         "sequence_number": 1,
         "actual_start": actual_start,
         "actual_completion": actual_completion,
+        "assigned_to": assigned_to,
         "version": version,
     }
 
@@ -984,5 +993,396 @@ def test_persisted_signing_gate_passes_with_all_evidence():
         combined
     )
     assert "INSERT INTO merchant_ops.project_events" in (
+        combined
+    )
+
+
+def executed_call(cursor, prefix):
+    for call in cursor.execute.call_args_list:
+        statement = " ".join(call.args[0].split())
+
+        if statement.startswith(prefix):
+            return statement, call.args[1]
+
+    raise AssertionError(
+        f"No executed statement starts with {prefix!r}"
+    )
+
+
+def step_update_call(cursor):
+    return executed_call(
+        cursor,
+        "UPDATE merchant_ops.project_steps",
+    )
+
+
+def persisted_assignment(cursor):
+    _, parameters = step_update_call(cursor)
+    return parameters[3]
+
+
+def audit_values(cursor):
+    _, parameters = executed_call(
+        cursor,
+        "INSERT INTO merchant_ops.project_events",
+    )
+    old_values, new_values = parameters[6], parameters[7]
+    return old_values.obj, new_values.obj
+
+
+def test_locked_step_projection_includes_assignment():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        _,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[step_record()],
+    )
+
+    transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+    )
+
+    projection, _ = executed_call(
+        cursor,
+        "SELECT step.id,",
+    )
+
+    assert "step.assigned_to" in projection
+    assert "FOR UPDATE OF step" in projection
+
+
+def test_ready_step_starts_when_assignment_is_omitted():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        transaction_context,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=1,
+            )
+        ],
+    )
+
+    result = transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+        triggered_by=TRIGGERED_BY,
+    )
+
+    assert result.previous_status == "READY"
+    assert result.current_status == "IN_PROGRESS"
+    assert result.current_version == 2
+    assert result.event_type == "STEP_STARTED"
+    assert transaction_context.exception_type is None
+
+    statement, _ = step_update_call(cursor)
+
+    assert (
+        "assigned_to = COALESCE( %s, assigned_to )"
+        in statement
+    )
+    assert persisted_assignment(cursor) is None
+
+    old_values, new_values = audit_values(cursor)
+
+    assert "assigned_to" not in old_values
+    assert "assigned_to" not in new_values
+
+
+def test_existing_assignment_is_preserved_when_omitted():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        transaction_context,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=1,
+                assigned_to=uuid.UUID(
+                    EXISTING_ASSIGNEE_ID
+                ),
+            )
+        ],
+    )
+
+    result = transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+        assigned_to=None,
+    )
+
+    assert result.current_status == "IN_PROGRESS"
+    assert transaction_context.exception_type is None
+
+    statement, _ = step_update_call(cursor)
+
+    # A NULL parameter keeps the stored assignment; the column is
+    # never written back as NULL by an omitted assignment.
+    assert (
+        "assigned_to = COALESCE( %s, assigned_to )"
+        in statement
+    )
+    assert persisted_assignment(cursor) is None
+
+    old_values, new_values = audit_values(cursor)
+
+    assert "assigned_to" not in old_values
+    assert "assigned_to" not in new_values
+
+
+def test_supplied_assignment_is_persisted_as_uuid():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        transaction_context,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=1,
+            )
+        ],
+    )
+
+    result = transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+        assigned_to=ASSIGNEE_ID,
+    )
+
+    assert result.current_status == "IN_PROGRESS"
+    assert transaction_context.exception_type is None
+    assert persisted_assignment(cursor) == uuid.UUID(
+        ASSIGNEE_ID
+    )
+
+    statement, parameters = step_update_call(cursor)
+
+    # Optimistic locking is unchanged by the assignment.
+    assert "WHERE id = %s AND project_id = %s" in statement
+    assert (
+        "AND status = %s AND version = %s" in statement
+    )
+    assert parameters[5] == uuid.UUID(STEP_ID)
+    assert parameters[6] == uuid.UUID(PROJECT_ID)
+    assert parameters[7] == "READY"
+    assert parameters[8] == 1
+
+
+def test_assignment_audit_values_are_truthful():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        _,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=1,
+                assigned_to=uuid.UUID(
+                    EXISTING_ASSIGNEE_ID
+                ),
+            )
+        ],
+    )
+
+    transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+        assigned_to=ASSIGNEE_ID,
+    )
+
+    old_values, new_values = audit_values(cursor)
+
+    assert old_values["assigned_to"] == (
+        EXISTING_ASSIGNEE_ID
+    )
+    assert new_values["assigned_to"] == ASSIGNEE_ID
+    assert old_values["status"] == "READY"
+    assert new_values["status"] == "IN_PROGRESS"
+    assert old_values["version"] == 1
+    assert new_values["version"] == 2
+
+
+def test_first_assignment_audits_null_previous_value():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        _,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=1,
+            )
+        ],
+    )
+
+    transition_repository.transition_step(
+        step_id=STEP_ID,
+        target_status="IN_PROGRESS",
+        expected_version=1,
+        occurred_at=OCCURRED_AT,
+        assigned_to=ASSIGNEE_ID,
+    )
+
+    old_values, new_values = audit_values(cursor)
+
+    assert old_values["assigned_to"] is None
+    assert new_values["assigned_to"] == ASSIGNEE_ID
+
+
+def test_invalid_assignment_fails_before_any_mutation():
+    (
+        transition_repository,
+        repository,
+        _,
+        cursor,
+        _,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[step_record()],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="assigned_to must be a valid UUID",
+    ):
+        transition_repository.transition_step(
+            step_id=STEP_ID,
+            target_status="IN_PROGRESS",
+            expected_version=1,
+            occurred_at=OCCURRED_AT,
+            assigned_to="not-a-uuid",
+        )
+
+    repository.connection.assert_not_called()
+    assert cursor.execute.call_args_list == []
+
+
+def test_stale_version_fails_closed_with_assignment():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        transaction_context,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[
+            step_record(
+                status="READY",
+                version=2,
+            )
+        ],
+    )
+
+    with pytest.raises(WorkflowVersionConflictError):
+        transition_repository.transition_step(
+            step_id=STEP_ID,
+            target_status="IN_PROGRESS",
+            expected_version=1,
+            occurred_at=OCCURRED_AT,
+            assigned_to=ASSIGNEE_ID,
+        )
+
+    assert transaction_context.exception_type is (
+        WorkflowVersionConflictError
+    )
+
+    combined = "\n".join(executed_sql(cursor))
+
+    assert "UPDATE merchant_ops.project_steps" not in (
+        combined
+    )
+    assert "INSERT INTO merchant_ops.project_events" not in (
+        combined
+    )
+
+
+def test_lost_update_race_with_assignment_skips_event():
+    (
+        transition_repository,
+        _,
+        _,
+        cursor,
+        transaction_context,
+    ) = make_transition_repository()
+
+    prepare_snapshot(
+        cursor,
+        steps=[step_record()],
+    )
+    cursor.rowcount = 0
+
+    with pytest.raises(
+        WorkflowVersionConflictError,
+        match="changed before",
+    ):
+        transition_repository.transition_step(
+            step_id=STEP_ID,
+            target_status="IN_PROGRESS",
+            expected_version=1,
+            occurred_at=OCCURRED_AT,
+            assigned_to=ASSIGNEE_ID,
+        )
+
+    assert transaction_context.exception_type is (
+        WorkflowVersionConflictError
+    )
+
+    combined = "\n".join(executed_sql(cursor))
+
+    assert "UPDATE merchant_ops.project_steps" in combined
+    assert "INSERT INTO merchant_ops.project_events" not in (
         combined
     )

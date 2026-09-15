@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import date, datetime, timezone
 
@@ -16,6 +17,9 @@ from claude.agents.tools.merchant.write_adapters import (
     MerchantWriteRepositories,
     WriteAdapterError,
     build_repository_write_commands,
+)
+from claude.clients.merchant.transition_repository import (
+    MerchantStepTransitionRepository,
 )
 
 
@@ -424,3 +428,78 @@ def test_builder_rejects_ambiguous_repository_injection():
             repository=object(),
             repositories=repositories,
         )
+
+
+def step_update_arguments(payload):
+    repositories, services = make_repositories()
+    adapters = MerchantRepositoryWriteAdapters(repositories)
+    adapters.update_step(payload)
+
+    method, arguments = services["steps"].calls[0]
+    assert method == "transition_step"
+    return arguments
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    (MERCHANT_ID, None),
+)
+def test_step_update_adapter_matches_real_repository(
+    assignment,
+):
+    """The adapter call must bind to the real repository contract.
+
+    This is the regression guard for the TypeError raised when
+    `transition_step()` did not declare `assigned_to`.
+    """
+
+    arguments = step_update_arguments(
+        {
+            "step_id": STEP_ID,
+            "status": "IN_PROGRESS",
+            "assigned_to": assignment,
+            "expected_version": 2,
+            "occurred_at": "2026-09-05T08:30:00+07:00",
+            "triggered_by": None,
+            "allow_reopen": False,
+        }
+    )
+
+    assert arguments["assigned_to"] == assignment
+
+    signature = inspect.signature(
+        MerchantStepTransitionRepository.transition_step
+    )
+
+    # Binding proves the real method accepts every keyword the
+    # adapter sends, with no unexpected-keyword TypeError.
+    signature.bind(object(), **arguments)
+
+
+def test_step_update_adapter_omitting_assignment_binds():
+    arguments = step_update_arguments(
+        {
+            "step_id": STEP_ID,
+            "status": "IN_PROGRESS",
+            "expected_version": 2,
+        }
+    )
+
+    assert arguments["assigned_to"] is None
+
+    inspect.signature(
+        MerchantStepTransitionRepository.transition_step
+    ).bind(object(), **arguments)
+
+
+def test_real_transition_step_declares_optional_assignment():
+    parameters = inspect.signature(
+        MerchantStepTransitionRepository.transition_step
+    ).parameters
+
+    assert "assigned_to" in parameters
+
+    parameter = parameters["assigned_to"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is None

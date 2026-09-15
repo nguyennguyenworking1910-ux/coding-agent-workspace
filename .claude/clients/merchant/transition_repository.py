@@ -83,13 +83,19 @@ class MerchantStepTransitionRepository:
         step_id: str,
         target_status: str,
         expected_version: int,
+        assigned_to: str | None = None,
         occurred_at: datetime | None = None,
         triggered_by: str | None = None,
         allow_reopen: bool = False,
         gate_required: bool = False,
         gate_result: GateValidationResult | None = None,
     ) -> StepTransitionResult:
-        """Lock project state, validate, update, and audit."""
+        """Lock project state, validate, update, and audit.
+
+        ``assigned_to`` is optional. A supplied value must be a UUID and
+        replaces the stored assignment. Omitting it, or passing ``None``,
+        preserves whatever assignment is already persisted.
+        """
 
         normalized_step_id = _uuid(
             step_id,
@@ -98,6 +104,13 @@ class MerchantStepTransitionRepository:
         normalized_triggered_by = (
             _uuid(triggered_by, "triggered_by")
             if triggered_by is not None
+            else None
+        )
+        # Validated before any connection or lock is taken so an invalid
+        # assignment can never reach a mutation.
+        normalized_assigned_to = (
+            _uuid(assigned_to, "assigned_to")
+            if assigned_to is not None
             else None
         )
 
@@ -217,6 +230,27 @@ class MerchantStepTransitionRepository:
                         )
                     )
 
+                    old_values = dict(
+                        transition_plan.old_values
+                    )
+                    new_values = dict(
+                        transition_plan.new_values
+                    )
+
+                    # An omitted assignment changes nothing, so it is
+                    # not reported as an assignment change.
+                    if normalized_assigned_to is not None:
+                        old_values["assigned_to"] = (
+                            _optional_uuid_text(
+                                current_step.get(
+                                    "assigned_to"
+                                )
+                            )
+                        )
+                        new_values["assigned_to"] = str(
+                            normalized_assigned_to
+                        )
+
                     cursor.execute(
                         """
                         UPDATE merchant_ops.project_steps
@@ -224,6 +258,10 @@ class MerchantStepTransitionRepository:
                             status = %s,
                             actual_start = %s,
                             actual_completion = %s,
+                            assigned_to = COALESCE(
+                                %s,
+                                assigned_to
+                            ),
                             updated_at = CURRENT_TIMESTAMP,
                             version = %s
                         WHERE id = %s
@@ -235,6 +273,7 @@ class MerchantStepTransitionRepository:
                             transition_plan.target_status,
                             transition_plan.actual_start,
                             transition_plan.actual_completion,
+                            normalized_assigned_to,
                             transition_plan.new_version,
                             normalized_step_id,
                             uuid.UUID(
@@ -309,12 +348,8 @@ class MerchantStepTransitionRepository:
                                 f"to "
                                 f"{transition_plan.target_status}"
                             ),
-                            Jsonb(
-                                transition_plan.old_values
-                            ),
-                            Jsonb(
-                                transition_plan.new_values
-                            ),
+                            Jsonb(old_values),
+                            Jsonb(new_values),
                             normalized_triggered_by,
                         ),
                     )
@@ -403,6 +438,7 @@ class MerchantStepTransitionRepository:
                 step.sequence_number,
                 step.actual_start,
                 step.actual_completion,
+                step.assigned_to,
                 step.version
             FROM merchant_ops.project_steps AS step
             JOIN merchant_ops.workflow_template_steps
@@ -772,6 +808,15 @@ class MerchantProjectTransitionRepository:
             dict(record)
             for record in cursor.fetchall()
         ]
+
+
+def _optional_uuid_text(value: Any) -> str | None:
+    """Render a stored optional UUID column as JSON-safe text."""
+
+    if value is None:
+        return None
+
+    return str(value)
 
 
 def _uuid(value: str, field_name: str) -> uuid.UUID:
