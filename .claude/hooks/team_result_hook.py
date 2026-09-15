@@ -30,14 +30,26 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import locked_state  # noqa: E402
     from team_lifecycle import (  # noqa: E402
+        load_team_state,
         mark_report_received,
         mark_teammate_idle_reusable,
+    )
+    from merchant_confirmation_preferences import (  # noqa: E402
+        MERCHANT_MANAGER_AGENT,
+        MERCHANT_PROPOSE_OPERATION,
+        capture_proposal_receipt,
     )
 else:
     from .runtime_state import locked_state
     from .team_lifecycle import (
+        load_team_state,
         mark_report_received,
         mark_teammate_idle_reusable,
+    )
+    from .merchant_confirmation_preferences import (
+        MERCHANT_MANAGER_AGENT,
+        MERCHANT_PROPOSE_OPERATION,
+        capture_proposal_receipt,
     )
 
 
@@ -196,6 +208,129 @@ def handle_teammate_idle(
             mark_report_received(session_id, teammate_name, task_id, "automatic")
 
 
+def merchant_report_sender(payload: dict[str, Any]) -> str:
+    """Resolve who delivered this report, preferring the harness field.
+
+    `teammate_name` comes from the harness. `from_teammate` is self-declared
+    by the caller, so it is accepted only when the harness supplied nothing
+    and the session team state actually holds a canonical teammate with that
+    name and role. Either way the name must be the canonical
+    `merchant-manager`.
+    """
+    harness_name = str(payload.get("teammate_name") or "").strip()
+
+    if harness_name:
+        return harness_name
+
+    tool_input = payload.get("tool_input")
+    declared = ""
+
+    if isinstance(tool_input, dict):
+        declared = str(tool_input.get("from_teammate") or "").strip()
+
+    if not declared:
+        return ""
+
+    team_state = load_team_state(payload.get("session_id"))
+
+    if not isinstance(team_state, dict):
+        return ""
+
+    record = (team_state.get("teammates") or {}).get(declared)
+
+    if not isinstance(record, dict) or record.get("role") != declared:
+        return ""
+
+    return declared
+
+
+def embedded_json_objects(text: str) -> list[Any]:
+    """Return every JSON object embedded in a teammate report body.
+
+    A report is prose with one or more fenced CLI results inside it, so the
+    body is scanned for decodable objects instead of being parsed whole.
+    """
+    decoder = json.JSONDecoder()
+    objects: list[Any] = []
+    index = text.find("{")
+
+    while index != -1:
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            index = text.find("{", index + 1)
+            continue
+
+        if isinstance(value, dict):
+            objects.append(value)
+            index = text.find("{", max(end, index + 1))
+        else:  # pragma: no cover - raw_decode at "{" yields a dict
+            index = text.find("{", index + 1)
+
+    return objects
+
+
+def handle_merchant_proposal_receipt(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    session_id: Any = None,
+) -> bool:
+    """Capture a proposal receipt from the canonical merchant-manager report.
+
+    This is the only accepted source. Pane text, `TaskUpdate`, idle
+    notifications, a non-canonical teammate, an ordinary subagent, a failed
+    CLI result, a test-database result, and malformed or inconsistently
+    redacted JSON are all refused, and refusal is silent: the later apply
+    reports the missing receipt instead.
+    """
+    if str(payload.get("tool_name") or "").strip() != "SendMessage":
+        return False
+
+    tool_input = payload.get("tool_input")
+
+    if not isinstance(tool_input, dict):
+        return False
+
+    if str(tool_input.get("to") or "").strip() != "team-lead":
+        return False
+
+    if merchant_report_sender(payload) != MERCHANT_MANAGER_AGENT:
+        return False
+
+    # The envelope, not the message, establishes that this session was doing
+    # exclusive Merchant proposal work.
+    operations = [
+        str(operation) for operation in state.get("operations") or []
+    ]
+    selected_agents = [
+        str(agent) for agent in state.get("selected_agents") or []
+    ]
+
+    if operations != [MERCHANT_PROPOSE_OPERATION]:
+        return False
+
+    if selected_agents != [MERCHANT_MANAGER_AGENT]:
+        return False
+
+    message = tool_input.get("message")
+
+    if not isinstance(message, str):
+        return False
+
+    candidates = [
+        candidate
+        for candidate in embedded_json_objects(message)
+        if "confirmation_token" in candidate
+    ]
+
+    # More than one proposal in a single report is ambiguous about which one
+    # a later apply would mean.
+    if len(candidates) != 1:
+        return False
+
+    return capture_proposal_receipt(session_id, candidates[0]).accepted
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -217,6 +352,7 @@ def main() -> int:
 
         if hook_event == "PostToolUse":
             handle_post_tool_use(state, payload, session_id)
+            handle_merchant_proposal_receipt(state, payload, session_id)
         elif hook_event == "TeammateIdle":
             handle_teammate_idle(state, payload, session_id)
 

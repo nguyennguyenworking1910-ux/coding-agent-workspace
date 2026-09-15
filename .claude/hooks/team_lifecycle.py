@@ -125,7 +125,7 @@ def load_team_state(session_id: Any) -> dict[str, Any] | None:
     return state if isinstance(state, dict) else None
 
 
-def _replace_with_retry(temporary: Path, destination: Path) -> None:
+def replace_with_retry(temporary: Path, destination: Path) -> None:
     """Atomically replace destination with temporary.
 
     The replacement stays atomic: the destination is never unlinked first and
@@ -165,7 +165,7 @@ def save_team_state(session_id: Any, state: dict[str, Any]) -> None:
             f.flush()
             os.fsync(f.fileno())
 
-        _replace_with_retry(temporary, path)
+        replace_with_retry(temporary, path)
         replaced = True
     finally:
         if not replaced:

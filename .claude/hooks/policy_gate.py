@@ -26,7 +26,15 @@ from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from runtime_state import locked_state  # noqa: E402
+    from runtime_state import (  # noqa: E402
+        MERCHANT_CONFIRMATION_MODE_FIELD,
+        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+        MERCHANT_CONFIRMATION_MODE_MANUAL,
+        locked_state,
+    )
+    from merchant_confirmation_preferences import (  # noqa: E402
+        reserve_receipt,
+    )
     from team_lifecycle import (  # noqa: E402
         allocate_teammate,
         check_role_in_selected_agents,
@@ -35,7 +43,13 @@ if __package__ in (None, ""):
         TeammateLifecycleStatus,
     )
 else:
-    from .runtime_state import locked_state
+    from .runtime_state import (
+        MERCHANT_CONFIRMATION_MODE_FIELD,
+        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+        MERCHANT_CONFIRMATION_MODE_MANUAL,
+        locked_state,
+    )
+    from .merchant_confirmation_preferences import reserve_receipt
     from .team_lifecycle import (
         allocate_teammate,
         check_role_in_selected_agents,
@@ -571,6 +585,32 @@ def _check_agent_dispatch(
         for operation in state.get("operations") or []
     }:
         confirmation = state["merchant_confirmation"]
+
+        # A local auto-confirmed run carries no pasted token, so its single
+        # proposal receipt is what one dispatch attempt spends. Reserve it
+        # atomically here, at the last point before this dispatch is
+        # accepted, so a concurrent second attempt cannot also claim it.
+        if (
+            str(
+                state.get(MERCHANT_CONFIRMATION_MODE_FIELD)
+                or MERCHANT_CONFIRMATION_MODE_MANUAL
+            )
+            == MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        ):
+            reservation = reserve_receipt(
+                session_id,
+                confirmation.get("confirmation_hash"),
+            )
+
+            if not reservation.accepted:
+                return deny(
+                    "Blocked: the local auto-confirm proposal receipt could "
+                    f"not be reserved ({reservation.reason}). Nothing was "
+                    "dispatched; generate a fresh proposal, or switch back "
+                    "to manual confirmation with "
+                    "`/merchant-confirmation on`."
+                )
+
         state["merchant_dispatch_spent"] = True
         state["merchant_dispatch"] = {
             "operation": MERCHANT_APPLY_OPERATION,

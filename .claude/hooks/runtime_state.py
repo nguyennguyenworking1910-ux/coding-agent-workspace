@@ -45,6 +45,21 @@ _MAX_SESSION_ID_LENGTH = 64
 
 _SECRET_PLACEHOLDER = "[redacted]"
 
+# How the run obtained its Merchant confirmation. MANUAL is the default for
+# every session and means the user pasted the exact `--merchant-confirmation`
+# token. LOCAL_AUTO means a session-scoped, loopback-only, opt-in proposal
+# receipt supplied the same confirmation metadata instead; it changes nothing
+# else about proposal binding, hashing, policy validation, or one-use
+# authorization. The field is written only for a LOCAL_AUTO run, so a manual
+# run keeps exactly the document it has always had.
+MERCHANT_CONFIRMATION_MODE_FIELD = "merchant_confirmation_mode"
+MERCHANT_CONFIRMATION_MODE_MANUAL = "MANUAL"
+MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO = "LOCAL_AUTO"
+MERCHANT_CONFIRMATION_MODES = (
+    MERCHANT_CONFIRMATION_MODE_MANUAL,
+    MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+)
+
 # Targeted rather than clever: each pattern matches a credential shape, not
 # "anything long". A false negative leaves a secret in a local file; a false
 # positive corrupts the request the run is classified from.
@@ -119,6 +134,7 @@ def new_state(
     confirmed: bool,
     operations: list[str] | None = None,
     merchant_confirmation: dict[str, Any] | None = None,
+    merchant_confirmation_mode: str = MERCHANT_CONFIRMATION_MODE_MANUAL,
     run_id: str = "",
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
@@ -175,6 +191,11 @@ def new_state(
             if (value := merchant_confirmation.get(key)) is not None
             or key == "expected_version"
         }
+
+    if merchant_confirmation_mode == MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO:
+        state[MERCHANT_CONFIRMATION_MODE_FIELD] = (
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        )
 
     return state
 

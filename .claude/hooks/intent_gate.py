@@ -28,6 +28,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import (  # noqa: E402
         CLAUDE_DIR,
+        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+        MERCHANT_CONFIRMATION_MODE_MANUAL,
         new_state,
         redact_secrets,
         save_state,
@@ -35,15 +37,25 @@ if __package__ in (None, ""):
     from team_lifecycle import (  # noqa: E402
         load_team_state,
     )
+    from merchant_confirmation_preferences import (  # noqa: E402
+        authorize_local_auto_apply,
+        handle_toggle_command,
+    )
 else:
     from .runtime_state import (
         CLAUDE_DIR,
+        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+        MERCHANT_CONFIRMATION_MODE_MANUAL,
         new_state,
         redact_secrets,
         save_state,
     )
     from .team_lifecycle import (
         load_team_state,
+    )
+    from .merchant_confirmation_preferences import (
+        authorize_local_auto_apply,
+        handle_toggle_command,
     )
 
 HOOK_EVENT_NAME = "UserPromptSubmit"
@@ -321,6 +333,19 @@ def run(
     if not isinstance(prompt, str):
         return {}
 
+    # `/merchant-confirmation` is a session-local preference switch. It never
+    # reaches the intent parser, never creates a team, and never touches
+    # Merchant data: the hook applies it and reports the outcome instead of
+    # letting the prompt run.
+    toggle_report = handle_toggle_command(
+        prompt,
+        payload.get("session_id"),
+        dict(environment),
+    )
+
+    if toggle_report is not None:
+        return block(toggle_report)
+
     try:
         parsed = parse_prompt(prompt)
     except ValueError as error:
@@ -385,6 +410,7 @@ def run(
         for agent in envelope_payload.get("selected_agents") or []
     ]
     merchant_apply = "merchant_apply" in operations
+    merchant_confirmation_mode = MERCHANT_CONFIRMATION_MODE_MANUAL
 
     if merchant_confirmation_token is not None:
         if not merchant_confirmation_token:
@@ -434,6 +460,9 @@ def run(
         envelope_payload["merchant_confirmation"] = (
             merchant_confirmation
         )
+        envelope_payload["merchant_confirmation_mode"] = (
+            MERCHANT_CONFIRMATION_MODE_MANUAL
+        )
     elif merchant_apply:
         if confirmed:
             return block(
@@ -442,10 +471,34 @@ def run(
                 "by the proposal. Nothing was dispatched."
             )
 
-        return block(
-            "Merchant apply requires the exact confirmation token emitted "
-            f"by a prior proposal. Resubmit with {MERCHANT_CONFIRM_FLAG}. "
-            "Nothing was dispatched."
+        # Local development may disable manual token entry for a narrow set of
+        # commands. The receipt supplies exactly the confirmation metadata a
+        # pasted token would have supplied; nothing downstream is relaxed.
+        local_auto = authorize_local_auto_apply(
+            payload.get("session_id"),
+            request,
+            envelope_payload,
+            dict(environment),
+        )
+
+        if not local_auto.authorized:
+            return block(
+                "Merchant apply requires the exact confirmation token "
+                f"emitted by a prior proposal. Resubmit with "
+                f"{MERCHANT_CONFIRM_FLAG}. Local auto-confirm did not "
+                f"authorize this apply: {local_auto.reason}. Nothing was "
+                "dispatched."
+            )
+
+        confirmed = True
+        merchant_confirmation_mode = (
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        )
+        envelope_payload["merchant_confirmation"] = (
+            local_auto.confirmation
+        )
+        envelope_payload["merchant_confirmation_mode"] = (
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
         )
 
     if envelope_payload.get("requires_confirmation") and not confirmed:
@@ -486,6 +539,7 @@ def run(
             merchant_confirmation=envelope_payload.get(
                 "merchant_confirmation"
             ),
+            merchant_confirmation_mode=merchant_confirmation_mode,
             run_id=run_id,
         ),
     )

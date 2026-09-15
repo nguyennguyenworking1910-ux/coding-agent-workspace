@@ -32,7 +32,16 @@ from claude.agents.tools.merchant.cli_contract import (
     issue_runtime_apply_authorization,
     normalize_command,
 )
-from claude.hooks.runtime_state import locked_state
+from claude.hooks.merchant_confirmation_preferences import (
+    MODE_LOCAL_AUTO,
+    MODE_MANUAL,
+    consume_receipt,
+)
+from claude.hooks.runtime_state import (
+    MERCHANT_CONFIRMATION_MODE_FIELD,
+    MERCHANT_CONFIRMATION_MODES,
+    locked_state,
+)
 
 
 MERCHANT_APPLY_OPERATION = "merchant_apply"
@@ -61,9 +70,18 @@ def invoke_confirmed_merchant_apply(
     """
 
     prepared = _prepare_exact_apply(arguments)
-    confirmation, dispatch_receipt = _reserve_authorization(
-        _validated_state(trusted_state)
-    )
+    state = _validated_state(trusted_state)
+
+    if _confirmation_mode(state) == MODE_LOCAL_AUTO:
+        # A local auto-confirmed run has a session-scoped proposal receipt to
+        # spend, and only the session entry point can spend it. Refusing here
+        # keeps receipt consumption on the one path that performs it.
+        raise MerchantRuntimeHandoffError(
+            "A local auto-confirmed Merchant apply must use the session "
+            "handoff so its proposal receipt is consumed"
+        )
+
+    confirmation, dispatch_receipt = _reserve_authorization(state)
     authorization = issue_runtime_apply_authorization(
         confirmation,
         dispatch_receipt,
@@ -98,6 +116,7 @@ def invoke_confirmed_merchant_session_apply(
     prepared = _prepare_exact_apply(arguments)
     confirmation: dict[str, Any] | None = None
     dispatch_receipt: dict[str, Any] | None = None
+    confirmation_mode = MODE_MANUAL
 
     # Persist the spend before constructing the capability or entering the
     # database adapter. Holding the file lock only for reservation keeps other
@@ -108,9 +127,24 @@ def invoke_confirmed_merchant_session_apply(
                 "No trusted Merchant run state exists for this session"
             )
 
-        confirmation, dispatch_receipt = _reserve_authorization(
-            _validated_state(persisted_state)
+        state = _validated_state(persisted_state)
+        confirmation_mode = _confirmation_mode(state)
+        confirmation, dispatch_receipt = _reserve_authorization(state)
+
+    if confirmation_mode == MODE_LOCAL_AUTO:
+        # The run-state slot is already spent, so this attempt is the one
+        # attempt whatever happens next. Spending the proposal receipt now
+        # keeps a crash, timeout, or uncertain outcome non-replayable.
+        consumption = consume_receipt(
+            session_id,
+            confirmation["confirmation_hash"],
         )
+
+        if not consumption.accepted:
+            raise MerchantRuntimeHandoffError(
+                "The local auto-confirm proposal receipt could not be "
+                f"consumed: {consumption.reason}"
+            )
 
     authorization = issue_runtime_apply_authorization(
         confirmation,
@@ -233,7 +267,23 @@ def _validated_state(
             "Trusted run state has no Merchant dispatch receipt"
         )
 
+    if (
+        state.get(MERCHANT_CONFIRMATION_MODE_FIELD, MODE_MANUAL)
+        not in MERCHANT_CONFIRMATION_MODES
+    ):
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state carries an unknown confirmation mode"
+        )
+
     return state
+
+
+def _confirmation_mode(state: Mapping[str, Any]) -> str:
+    """Return how this run was confirmed; an absent field means MANUAL."""
+
+    return str(
+        state.get(MERCHANT_CONFIRMATION_MODE_FIELD) or MODE_MANUAL
+    )
 
 
 def _prepare_runtime_apply(
