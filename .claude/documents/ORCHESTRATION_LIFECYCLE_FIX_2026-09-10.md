@@ -17,12 +17,14 @@ This continuously created new tmux/psmux panes and made terminal management diff
 
 **Root Cause:** The system treated every `/solve` run as requiring a new team, rather than recognizing that Claude Code has one session-scoped Agent Team. There was no persistent record of which teammates already existed, so there was no opportunity for reuse.
 
-### Problem 2: Unrecognized Result Delivery
-The lead might receive a teammate's final answer through automatic delivery (final-answer notification) or through task completion updates, but only accepted explicit `SendMessage` calls as valid result delivery.
+### Problem 2: Ambiguous and Duplicated Result Delivery
+The Agent Team UI displays the teammate's natural final answer, while the
+runtime can independently observe a `SendMessage` tool call. Treating an idle
+notification as proof of an automatic report caused both duplicated terminal
+content and false completion when no hook-verifiable report existed.
 
-This caused false "Your result was not delivered" messages even when the report had already arrived.
-
-**Root Cause:** The system didn't track delivery sources or deduplicate when both automatic and explicit delivery occurred for the same task.
+**Root Cause:** `TeammateIdle` was incorrectly treated as a report even though
+the hook event is a lifecycle signal and does not contain the complete result.
 
 ---
 
@@ -63,7 +65,8 @@ Enhanced the per-run state document with:
 - **Unique `run_id`:** Generated UUID for each `/solve` run
 - **Result ledger:** Keyed by `run_id + task_id + agent_name`, tracks which reports have been received
 
-This ensures that automatic delivery and explicit `SendMessage` for the same task are treated as one logical delivery (idempotent).
+This ensures repeated accepted `SendMessage` events for the same task are
+treated as one logical delivery (idempotent).
 
 ### 3. Teammate Reuse Logic (Updated: `team_lifecycle.py`)
 
@@ -84,15 +87,13 @@ Check if role already has a teammate in this session:
 
 ### 4. Updated Result Delivery Contract (solve.md)
 
-Changed from: "SendMessage is the only result delivery path"
+`SendMessage` to `team-lead` is the single machine-verifiable report path.
+After it succeeds, the teammate's natural final answer is only the short
+`RESULT_DELIVERED` acknowledgement, so split panes remain visible without
+printing the full report twice.
 
-To: "Accept complete results through either automatic delivery OR SendMessage"
-
-**New Language in solve.md:**
-- Clarifies that automatic final-answer delivery is accepted
-- Explains idempotent result ledger deduplication
-- Defines when recovery messages are sent (only if no report received)
-- Emphasizes that result delivery happens once; no resend/redo after lead acknowledgment
+If `TeammateIdle` fires first, the hook exits with code 2, keeps the same
+teammate active, and asks it to send its existing report without redoing work.
 
 ### 5. Cleanup and Session Management (Updated: `cleanup_state.py`)
 
@@ -194,12 +195,11 @@ The updated language replaces absolute statements ("pane text never delivers res
 ✅ Idle canonical teammate is reused  
 ✅ Busy canonical teammate blocks new dispatch  
 ✅ Role not in `selected_agents` cannot be reused  
-✅ Automatic final-answer delivery marks report received  
 ✅ Explicit `SendMessage` delivery marks report received  
-✅ Both delivery forms produce one logical report (idempotent)  
+✅ Repeated `SendMessage` events produce one logical report (idempotent)
 ✅ `TaskUpdate(completed)` without report content does not falsely complete delivery  
 ✅ No recovery message sent after report received  
-✅ Missing report delivery causes exactly one recovery message  
+✅ Missing delivery blocks idle and records one recovery initiation
 ✅ Mismatched `run_id`, `task_id`, or agent name is rejected  
 ✅ `Stop` hook clears run state, preserves team state  
 ✅ `SessionEnd` hook clears both run and team state  
@@ -212,7 +212,8 @@ The updated language replaces absolute statements ("pane text never delivers res
 
 ### What Changed
 - Teammates are now reused across `/solve` runs (canonical names only)
-- Result delivery is deduplicated (automatic + SendMessage = one result)
+- Result delivery is canonical (`SendMessage`) and idempotent
+- Natural final answers are compact acknowledgements, avoiding duplicated reports
 - Team state persists for the session; run state clears after each run
 
 ### What Stayed the Same
@@ -237,7 +238,7 @@ The updated language replaces absolute statements ("pane text never delivers res
 
 3. **Lock timeouts are intentional:** If a lock times out (10s default), returning `None` is the right behavior. It means another hook is taking too long, and we should not block the session indefinitely.
 
-4. **Result ledger keys are deterministic:** Using `run_id + task_id + agent_name` means duplicate reports with matching keys are safe to drop. The source (automatic vs. SendMessage) is noted but both are treated identically.
+4. **Result ledger keys are deterministic:** Using `run_id + task_id + agent_name` means duplicate accepted `SendMessage` events with matching keys are safe to drop. Lifecycle notifications never create report entries.
 
 ---
 

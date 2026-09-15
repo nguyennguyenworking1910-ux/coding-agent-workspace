@@ -61,7 +61,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "*",
+        "matcher": "SendMessage",
         "hooks": [
           {
             "type": "command",

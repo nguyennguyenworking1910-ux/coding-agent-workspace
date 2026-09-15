@@ -174,21 +174,34 @@ exist.
 Do not invent or depend on a custom `team_name`. Use the current session's automatically managed
 team and distinguish teammates by their stable `name` values.
 
-For every id in `selected_agents`:
+Route every id in `selected_agents` from `TEAM_STATE_SNAPSHOT_JSON` before
+calling a dispatch tool:
 
-1. Invoke `Agent` in Agent Team teammate mode.
-2. Set `subagent_type` to the exact selected agent id.
-3. Set a stable canonical teammate `name`: exactly one role per name, no suffixes (reviewer,
-   coder, bug-fixer, diagnostician, red-team, group-sales-manager, merchant-manager, scheduler).
-4. Supply a complete bounded assignment as the teammate prompt, including the mandatory
-   result-delivery contract in section 8.
-5. Give it one bounded task through the shared team task list when task tools are exposed.
+1. If `exists` is false, invoke `Agent` in Agent Team teammate mode, set
+   `subagent_type` to the exact selected agent id, and set `name` to that same
+   canonical id.
+2. If its status is exactly `IDLE_REUSABLE`, do not call `Agent`. Send the
+   complete new assignment directly to that exact canonical teammate with
+   `SendMessage`.
+3. If its status is `CREATED`, `DISPATCHED`, `RUNNING`, `REPORT_RECEIVED`,
+   `ACKNOWLEDGED`, `FAILED`, or unknown, stop and report the conflict. A report
+   can arrive just before the prior task becomes idle, so only
+   `IDLE_REUSABLE` is safe. Do not create a replacement or suffixed name.
+4. In either create or reuse path, supply the same complete bounded assignment,
+   including the result-delivery contract in section 8.
+5. Give it one bounded task through the shared team task list when task tools
+   are exposed.
 
-The direct semantic instruction is:
+For a teammate that does not yet exist, the direct semantic instruction is:
 
 > Spawn one named Agent Team teammate for each `selected_agents` entry, using the corresponding
 > project agent type and a stable canonical teammate name. Use the current session-scoped Agent
 > Team. Do not use an ordinary subagent.
+
+For an existing reusable teammate, the direct semantic instruction is:
+
+> Send the new bounded assignment to the existing canonical teammate with
+> `SendMessage`. Do not invoke `Agent`, create another pane, or add a suffix.
 
 The following are forbidden:
 
@@ -390,24 +403,28 @@ Every teammate assignment must end with this semantic instruction:
 
 > When your task finishes, return a complete final answer.
 > 
-> **Result delivery:** The lead accepts your complete result through either:
-> - automatic final-answer delivery when your work completes naturally;
-> - `SendMessage` to `team-lead` with your complete report in the body.
+> **Result delivery:** Send your complete report exactly once through
+> `SendMessage` to `team-lead`. This is the only machine-verifiable delivery
+> path and the only path that satisfies the result ledger.
 > 
-> If both delivery forms arrive, the report ledger deduplicates them as one logical result.
+> After `SendMessage` succeeds, your natural final answer must contain only
+> `RESULT_DELIVERED` (optionally followed by the task ID). Do not repeat the
+> full report in the final answer because the Agent Team UI displays it again.
 > 
 > Before a timeout, mark your task completed with `TaskUpdate` if a task exists.
-> Ensure your complete report reaches the lead through one of the accepted forms above.
+> Ensure your complete report reaches the lead through `SendMessage` before
+> becoming idle.
 > 
 > Include in your result: all findings, changed files, verification or test results, failures, 
 > and unresolved work. Do not rely on pane text or status updates alone: the complete report 
-> must be delivered through the forms named above.
+> must be delivered through `SendMessage`.
 > 
-> A task status update (`TaskUpdate`) or idle notification without report content is not a 
-> complete result and will trigger a recovery message; do not discard your report.
+> A task status update (`TaskUpdate`), pane output, final-answer notification,
+> or idle notification is not a ledger result. If delivery is missing, the
+> `TeammateIdle` hook keeps you active and asks you to send the existing report.
 
-The lead will only send a recovery message if no complete result was received through automatic 
-delivery or `SendMessage`. Once the lead acknowledges your report, do not resend or redo work.
+Once `SendMessage` has been recorded, the lead must not request the report again.
+Do not resend or redo work after the lead acknowledges it.
 
 ## 9. Coordinate safely and collect reports
 
@@ -423,28 +440,28 @@ explicit disjoint ownership, or sequence their tasks. Two writing teammates must
 same file in the same round.
 
 **Idempotent result ledger:** Maintain a report ledger keyed by `run_id + task_id + agent_name`.
-Accept a teammate's result as delivered only when the lead receives a complete final answer 
-through either:
+Accept a teammate's result as delivered only after a successful explicit
+`SendMessage` to `team-lead` with a non-empty complete report in the body.
 
-1. automatic final-answer delivery when the teammate's work completes; or
-2. explicit `SendMessage` to `team-lead` with the complete report in the body.
+`TaskUpdate`, pane output, automatic final-answer notifications, and
+`TeammateIdle` are coordination or UI signals only. They do not contain a
+hook-verifiable complete report and must not set `result_received`.
 
-`TaskUpdate` status updates and `idle_notification` are coordination signals only; a status 
-change without report content does not count as result delivery.
+Repeated `SendMessage` events for the same task are idempotent. Process the
+result once and keep one `sendmessage` delivery source in the ledger.
 
-When both automatic delivery and `SendMessage` occur for the same task, treat them as one logical 
-result (idempotent). Store the delivery source but do not process the result twice.
-
-**Recovery behavior:** If a teammate becomes idle and no complete result was received, send 
-exactly one bounded recovery message:
+**Recovery behavior:** If a teammate becomes idle before a complete
+`SendMessage` report is recorded, the `TeammateIdle` hook exits with code 2,
+keeps that same teammate active, and sends this bounded feedback to it:
 
 > Your result was not delivered to the lead. Send your complete existing report now through
 > `SendMessage` to `team-lead`; do not redo the task.
 
-After that one recovery message, wait for either the complete report or an explicit delivery
-failure. Do not create a replacement, do not repeat the work in the lead, and do not synthesize
-or shut down the teammate based only on an idle notification. All recovery coordination remains
-subject to the envelope's remaining tool-call budget.
+The ledger records that recovery was initiated. The lead must not issue a
+second manual request, create a replacement, repeat the work, or synthesize a
+result. A repeated idle attempt remains blocked until the same teammate sends
+the existing report or reports an explicit delivery failure. All recovery
+coordination remains subject to the envelope's remaining tool-call budget.
 
 When a teammate fails:
 

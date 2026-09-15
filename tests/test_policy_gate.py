@@ -44,6 +44,7 @@ class PolicyGateAgentDispatchTests(unittest.TestCase):
     def test_apply_call_allows_create_decision(self):
         """Agent dispatch for new role is allowed (CREATE decision)."""
         state = {
+            "run_id": "run-1",
             "selected_agents": ["reviewer"],
             "limits": {"max_members": 1, "max_total_tool_calls": 10},
             "members_used": [],
@@ -55,12 +56,63 @@ class PolicyGateAgentDispatchTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(state["members_used"], ["reviewer"])
 
+        record = team_lifecycle.load_team_state(
+            self.session_id
+        )["teammates"]["reviewer"]
+        self.assertEqual(record["status"], "RUNNING")
+        self.assertEqual(record["current_run_id"], "run-1")
+        self.assertEqual(record["current_task_id"], "run-1:reviewer")
+
+    def test_create_without_run_id_fails_closed(self):
+        """A teammate cannot be created without an exact run binding."""
+        state = {
+            "selected_agents": ["reviewer"],
+            "limits": {"max_members": 1, "max_total_tool_calls": 10},
+            "members_used": [],
+        }
+
+        result = policy_gate.apply_call(
+            state,
+            "Agent",
+            {"subagent_type": "reviewer", "name": "reviewer"},
+            self.session_id,
+        )
+
+        self.assertIsNotNone(result)
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("requires the current run_id", reason)
+        self.assertIsNone(
+            team_lifecycle.load_team_state(self.session_id)
+        )
+
+    def test_member_limit_denial_does_not_create_team_state(self):
+        """Budget validation runs before lifecycle state reservation."""
+        state = {
+            "run_id": "run-1",
+            "selected_agents": ["reviewer"],
+            "limits": {"max_members": 0, "max_total_tool_calls": 10},
+            "members_used": [],
+        }
+
+        result = policy_gate.apply_call(
+            state,
+            "Agent",
+            {"subagent_type": "reviewer", "name": "reviewer"},
+            self.session_id,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIsNone(
+            team_lifecycle.load_team_state(self.session_id)
+        )
+
     def test_apply_call_denies_reuse_decision(self):
         """Agent dispatch for idle teammate is denied with SendMessage instruction."""
         decision, name = allocate_teammate(self.session_id, "reviewer", "reviewer")
         mark_teammate_idle_reusable(self.session_id, "reviewer")
 
         state = {
+            "run_id": "run-2",
             "selected_agents": ["reviewer"],
             "limits": {"max_members": 1, "max_total_tool_calls": 10},
             "members_used": ["reviewer"],
@@ -79,6 +131,7 @@ class PolicyGateAgentDispatchTests(unittest.TestCase):
         mark_teammate_running(self.session_id, "reviewer", "run-1", "task-1")
 
         state = {
+            "run_id": "run-2",
             "selected_agents": ["reviewer"],
             "limits": {"max_members": 1, "max_total_tool_calls": 10},
             "members_used": ["reviewer"],

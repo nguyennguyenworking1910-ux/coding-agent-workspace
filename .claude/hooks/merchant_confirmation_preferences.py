@@ -18,8 +18,8 @@ What this module owns:
 
 What it deliberately never stores: the confirmation token, the raw proposal
 payload, credentials, connection strings, or any other sensitive Merchant
-value. Only the nine redacted confirmation fields, their receipt state, and
-two timestamps reach disk.
+value. Only the nine redacted confirmation fields, one hashed primary-entity
+binding, their receipt state, and two timestamps reach disk.
 
 Persistence mirrors `team_lifecycle.py`: one JSON document per session under
 `.claude/runtime/merchant_confirmation/`, a `FileLock` around every
@@ -31,11 +31,13 @@ no usable receipt.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -117,6 +119,16 @@ LOCAL_AUTO_COMMANDS = frozenset(
     }
 )
 
+# LOCAL_AUTO binds the user's apply request to the same primary entity as the
+# proposal. Only a SHA-256 digest of the field/value pair reaches disk; the
+# raw UUID stays in the proposal output and in the user's request.
+LOCAL_AUTO_ENTITY_FIELDS = {
+    "project create": "project_id",
+    "project update": "project_id",
+    "step update": "step_id",
+}
+ENTITY_BINDING_FIELDS = frozenset({"field", "sha256"})
+
 CONFIRMATION_FIELDS = (
     "contract_version",
     "confirmation_version",
@@ -142,6 +154,7 @@ _EXPECTED_VERSION_PATTERN = re.compile(
     r"(?i)\bexpected[ _-]?version\b\s*(?:is|are|=|:)?\s*"
     r"(?P<value>\d+|null|none)\b"
 )
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _TOGGLE_PATTERN = re.compile(
     r"^" + re.escape(SLASH_COMMAND) + r"(?P<rest>[\s\S]*)$"
 )
@@ -347,23 +360,27 @@ def clear_preferences(session_id: Any) -> bool:
     with no inherited receipt.
     """
 
-    removed = False
+    if not valid_session_id(session_id):
+        return False
 
-    for path in (
-        preferences_path(session_id),
-        preferences_lock_path(session_id),
-    ):
-        try:
-            path.unlink()
-            removed = removed or path.name.endswith(".json")
-        except FileNotFoundError:
-            continue
-        except OSError:
-            # A lock file still held on Windows is not worth failing over; the
-            # document carrying the mode and receipt is gone.
-            continue
+    try:
+        preferences_dir().mkdir(parents=True, exist_ok=True)
+        lock = FileLock(
+            str(preferences_lock_path(session_id)),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
-    return removed
+        with lock:
+            try:
+                preferences_path(session_id).unlink()
+            except FileNotFoundError:
+                return False
+
+            return True
+    except (Timeout, OSError):
+        # Leave the document untouched when exclusive cleanup cannot be
+        # established. A later SessionEnd or manual-mode toggle can retry.
+        return False
 
 
 def current_mode(session_id: Any) -> str:
@@ -410,6 +427,17 @@ def _receipt_confirmation(
     document: Any,
     required_state: str,
 ) -> dict[str, Any] | None:
+    validated = _validated_receipt(document, required_state)
+
+    return None if validated is None else validated[0]
+
+
+def _validated_receipt(
+    document: Any,
+    required_state: str,
+) -> tuple[dict[str, Any], dict[str, str]] | None:
+    """Return valid confirmation and entity binding for one receipt state."""
+
     if not isinstance(document, dict):
         return None
 
@@ -421,7 +449,20 @@ def _receipt_confirmation(
     if receipt.get("state") != required_state:
         return None
 
-    return validate_confirmation_metadata(receipt.get("confirmation"))
+    confirmation = validate_confirmation_metadata(receipt.get("confirmation"))
+
+    if confirmation is None:
+        return None
+
+    entity_binding = _validate_entity_binding(
+        receipt.get("entity_binding"),
+        confirmation["command"],
+    )
+
+    if entity_binding is None:
+        return None
+
+    return confirmation, entity_binding
 
 
 def check_local_auto_prerequisites(
@@ -616,12 +657,15 @@ def _enable_local_auto(
             "dispatched."
         )
 
-    with locked_preferences(session_id, create=True) as document:
-        if document is None:
-            return _lock_failure_message()
+    try:
+        with locked_preferences(session_id, create=True) as document:
+            if document is None:
+                return _lock_failure_message()
 
-        document["mode"] = MODE_LOCAL_AUTO
-        document["receipt"] = None
+            document["mode"] = MODE_LOCAL_AUTO
+            document["receipt"] = None
+    except OSError:
+        return _persist_failure_message()
 
     return (
         f"Merchant confirmation mode: {MODE_LOCAL_AUTO} (local development "
@@ -639,6 +683,21 @@ def _lock_failure_message() -> str:
         "Merchant confirmation toggle rejected: the session preference could "
         f"not be locked. The session remains in {MODE_MANUAL} mode and "
         "nothing was dispatched."
+    )
+
+
+def _persist_failure_message() -> str:
+    return (
+        "Merchant confirmation toggle rejected: the session preference could "
+        f"not be persisted. The session remains in {MODE_MANUAL} mode and "
+        "nothing was dispatched."
+    )
+
+
+def _receipt_persist_failure() -> ReceiptOutcome:
+    return ReceiptOutcome(
+        False,
+        "the session confirmation state could not be persisted",
     )
 
 
@@ -775,15 +834,81 @@ def _redaction_is_consistent(
         return False
 
 
+def _canonical_uuid(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _entity_binding_digest(field: str, identifier: str) -> str:
+    canonical = f"{field}:{identifier}".encode("ascii")
+
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _proposal_entity_binding(
+    result: Any,
+    confirmation: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Derive a non-reversible primary-entity binding from one proposal."""
+
+    command = confirmation.get("command")
+    field = LOCAL_AUTO_ENTITY_FIELDS.get(str(command))
+    payload = result.get("payload") if isinstance(result, Mapping) else None
+
+    if field is None or not isinstance(payload, Mapping):
+        return None
+
+    identifier = _canonical_uuid(payload.get(field))
+
+    if identifier is None:
+        return None
+
+    return {
+        "field": field,
+        "sha256": _entity_binding_digest(field, identifier),
+    }
+
+
+def _validate_entity_binding(
+    binding: Any,
+    command: Any,
+) -> dict[str, str] | None:
+    """Validate the minimal entity binding stored beside a receipt."""
+
+    if not isinstance(binding, Mapping):
+        return None
+
+    if set(binding) != ENTITY_BINDING_FIELDS:
+        return None
+
+    expected_field = LOCAL_AUTO_ENTITY_FIELDS.get(str(command))
+    field = binding.get("field")
+    digest = binding.get("sha256")
+
+    if field != expected_field:
+        return None
+
+    if not isinstance(digest, str) or _SHA256_PATTERN.fullmatch(digest) is None:
+        return None
+
+    return {"field": field, "sha256": digest}
+
+
 def capture_proposal_receipt(
     session_id: Any,
     result: Any,
 ) -> ReceiptOutcome:
     """Store one validated proposal receipt for a LOCAL_AUTO session.
 
-    Only the nine confirmation fields are persisted. Any older receipt for the
-    session is replaced, so a newer proposal always supersedes an earlier one
-    and no stale receipt can outlive it.
+    Only the nine confirmation fields and a hashed primary-entity binding are
+    persisted. Any older receipt for the session is replaced, so a newer
+    proposal always supersedes an earlier one and no stale receipt can outlive
+    it.
     """
 
     confirmation = validate_proposal_result(result)
@@ -794,24 +919,36 @@ def capture_proposal_receipt(
             "the proposal result is not a validated runtime proposal",
         )
 
-    with locked_preferences(session_id) as document:
-        if document is None:
-            return ReceiptOutcome(
-                False,
-                "no lockable session confirmation preference exists",
-            )
+    entity_binding = _proposal_entity_binding(result, confirmation)
 
-        if document.get("mode") != MODE_LOCAL_AUTO:
-            return ReceiptOutcome(
-                False,
-                "the session is not in LOCAL_AUTO mode",
-            )
+    if entity_binding is None:
+        return ReceiptOutcome(
+            False,
+            "the proposal has no valid primary-entity binding",
+        )
 
-        document["receipt"] = {
-            "state": RECEIPT_AVAILABLE,
-            "captured_at": _now(),
-            "confirmation": confirmation,
-        }
+    try:
+        with locked_preferences(session_id) as document:
+            if document is None:
+                return ReceiptOutcome(
+                    False,
+                    "no lockable session confirmation preference exists",
+                )
+
+            if document.get("mode") != MODE_LOCAL_AUTO:
+                return ReceiptOutcome(
+                    False,
+                    "the session is not in LOCAL_AUTO mode",
+                )
+
+            document["receipt"] = {
+                "state": RECEIPT_AVAILABLE,
+                "captured_at": _now(),
+                "confirmation": confirmation,
+                "entity_binding": entity_binding,
+            }
+    except OSError:
+        return _receipt_persist_failure()
 
     return ReceiptOutcome(True)
 
@@ -830,49 +967,61 @@ def reserve_receipt(
     if not isinstance(confirmation_hash, str) or not confirmation_hash:
         return ReceiptOutcome(False, "no confirmation hash was supplied")
 
-    with locked_preferences(session_id) as document:
-        if document is None:
-            return ReceiptOutcome(
-                False,
-                "no lockable session confirmation preference exists",
+    try:
+        with locked_preferences(session_id) as document:
+            if document is None:
+                return ReceiptOutcome(
+                    False,
+                    "no lockable session confirmation preference exists",
+                )
+
+            if document.get("mode") != MODE_LOCAL_AUTO:
+                return ReceiptOutcome(
+                    False,
+                    "the session is not in LOCAL_AUTO mode",
+                )
+
+            receipt = document.get("receipt")
+
+            if not isinstance(receipt, dict):
+                return ReceiptOutcome(False, "no proposal receipt exists")
+
+            state = receipt.get("state")
+
+            if state != RECEIPT_AVAILABLE:
+                return ReceiptOutcome(
+                    False,
+                    f"the proposal receipt is already {state}",
+                )
+
+            confirmation = validate_confirmation_metadata(
+                receipt.get("confirmation")
             )
 
-        if document.get("mode") != MODE_LOCAL_AUTO:
-            return ReceiptOutcome(
-                False,
-                "the session is not in LOCAL_AUTO mode",
-            )
+            if confirmation is None:
+                return ReceiptOutcome(
+                    False,
+                    "the stored confirmation metadata is malformed",
+                )
 
-        receipt = document.get("receipt")
+            if _validate_entity_binding(
+                receipt.get("entity_binding"),
+                confirmation["command"],
+            ) is None:
+                return ReceiptOutcome(
+                    False,
+                    "the stored primary-entity binding is malformed",
+                )
 
-        if not isinstance(receipt, dict):
-            return ReceiptOutcome(False, "no proposal receipt exists")
+            if confirmation["confirmation_hash"] != confirmation_hash:
+                return ReceiptOutcome(
+                    False,
+                    "the proposal receipt does not match this confirmation",
+                )
 
-        state = receipt.get("state")
-
-        if state != RECEIPT_AVAILABLE:
-            return ReceiptOutcome(
-                False,
-                f"the proposal receipt is already {state}",
-            )
-
-        confirmation = validate_confirmation_metadata(
-            receipt.get("confirmation")
-        )
-
-        if confirmation is None:
-            return ReceiptOutcome(
-                False,
-                "the stored confirmation metadata is malformed",
-            )
-
-        if confirmation["confirmation_hash"] != confirmation_hash:
-            return ReceiptOutcome(
-                False,
-                "the proposal receipt does not match this confirmation",
-            )
-
-        receipt["state"] = RECEIPT_RESERVED
+            receipt["state"] = RECEIPT_RESERVED
+    except OSError:
+        return _receipt_persist_failure()
 
     return ReceiptOutcome(True)
 
@@ -893,45 +1042,57 @@ def consume_receipt(
     if not isinstance(confirmation_hash, str) or not confirmation_hash:
         return ReceiptOutcome(False, "no confirmation hash was supplied")
 
-    with locked_preferences(session_id) as document:
-        if document is None:
-            return ReceiptOutcome(
-                False,
-                "no lockable session confirmation preference exists",
+    try:
+        with locked_preferences(session_id) as document:
+            if document is None:
+                return ReceiptOutcome(
+                    False,
+                    "no lockable session confirmation preference exists",
+                )
+
+            receipt = document.get("receipt")
+
+            if not isinstance(receipt, dict):
+                return ReceiptOutcome(False, "no proposal receipt exists")
+
+            state = receipt.get("state")
+            confirmation = validate_confirmation_metadata(
+                receipt.get("confirmation")
             )
 
-        receipt = document.get("receipt")
+            if (
+                confirmation is None
+                or confirmation["confirmation_hash"] != confirmation_hash
+            ):
+                return ReceiptOutcome(
+                    False,
+                    "the proposal receipt does not match this confirmation",
+                )
 
-        if not isinstance(receipt, dict):
-            return ReceiptOutcome(False, "no proposal receipt exists")
+            if _validate_entity_binding(
+                receipt.get("entity_binding"),
+                confirmation["command"],
+            ) is None:
+                return ReceiptOutcome(
+                    False,
+                    "the stored primary-entity binding is malformed",
+                )
 
-        state = receipt.get("state")
-        confirmation = validate_confirmation_metadata(
-            receipt.get("confirmation")
-        )
+            if state not in (RECEIPT_AVAILABLE, RECEIPT_RESERVED):
+                return ReceiptOutcome(
+                    False,
+                    f"the proposal receipt is already {state}",
+                )
 
-        if (
-            confirmation is None
-            or confirmation["confirmation_hash"] != confirmation_hash
-        ):
-            return ReceiptOutcome(
-                False,
-                "the proposal receipt does not match this confirmation",
-            )
+            receipt["state"] = RECEIPT_CONSUMED
 
-        if state not in (RECEIPT_AVAILABLE, RECEIPT_RESERVED):
-            return ReceiptOutcome(
-                False,
-                f"the proposal receipt is already {state}",
-            )
-
-        receipt["state"] = RECEIPT_CONSUMED
-
-        if state != RECEIPT_RESERVED:
-            return ReceiptOutcome(
-                False,
-                "the proposal receipt was not reserved before dispatch",
-            )
+            if state != RECEIPT_RESERVED:
+                return ReceiptOutcome(
+                    False,
+                    "the proposal receipt was not reserved before dispatch",
+                )
+    except OSError:
+        return _receipt_persist_failure()
 
     return ReceiptOutcome(True)
 
@@ -997,16 +1158,23 @@ def authorize_local_auto_apply(
         )
 
     document = load_preferences(session_id)
-    state = receipt_state(session_id)
-    confirmation = _receipt_confirmation(document, RECEIPT_AVAILABLE)
+    receipt = document.get("receipt") if isinstance(document, dict) else None
+    state = receipt.get("state") if isinstance(receipt, dict) else None
+    validated = _validated_receipt(document, RECEIPT_AVAILABLE)
 
-    if confirmation is None:
+    if validated is None:
         return LocalAutoAuthorization(
             None,
             "no unspent proposal receipt exists for this session"
             if state is None
-            else f"the session proposal receipt is {state}",
+            else (
+                "the session proposal receipt is malformed"
+                if state == RECEIPT_AVAILABLE
+                else f"the session proposal receipt is {state}"
+            ),
         )
+
+    confirmation, entity_binding = validated
 
     if confirmation["operation"] != MERCHANT_APPLY_OPERATION:
         return LocalAutoAuthorization(
@@ -1027,20 +1195,19 @@ def authorize_local_auto_apply(
             "auto-confirm and still requires the manual token",
         )
 
-    return _match_request_to_receipt(request, confirmation)
+    return _match_request_to_receipt(
+        request,
+        confirmation,
+        entity_binding,
+    )
 
 
 def _match_request_to_receipt(
     request: Any,
     confirmation: dict[str, Any],
+    entity_binding: dict[str, str],
 ) -> LocalAutoAuthorization:
     text = request if isinstance(request, str) else ""
-
-    if not _UUID_PATTERN.search(text):
-        return LocalAutoAuthorization(
-            None,
-            "the apply request states no exact identifier",
-        )
 
     requested_command, command_error = requested_command_from_request(text)
 
@@ -1051,6 +1218,30 @@ def _match_request_to_receipt(
         return LocalAutoAuthorization(
             None,
             "the requested command does not match the proposal receipt",
+        )
+
+    identifier, identifier_error = requested_entity_identifier_from_request(
+        text,
+        requested_command,
+        entity_binding["field"],
+    )
+
+    if identifier_error is not None:
+        return LocalAutoAuthorization(None, identifier_error)
+
+    if identifier is None:
+        return LocalAutoAuthorization(
+            None,
+            "the apply request states no valid primary identifier",
+        )
+
+    if _entity_binding_digest(entity_binding["field"], identifier) != (
+        entity_binding["sha256"]
+    ):
+        return LocalAutoAuthorization(
+            None,
+            "the requested primary identifier does not match the proposal "
+            "receipt",
         )
 
     (
@@ -1069,6 +1260,58 @@ def _match_request_to_receipt(
         )
 
     return LocalAutoAuthorization(dict(confirmation))
+
+
+def requested_entity_identifier_from_request(
+    request: str,
+    command: str,
+    field: str,
+) -> tuple[str | None, str | None]:
+    """Read the command's exact primary UUID from an apply request.
+
+    The preferred form is an explicit ``project_id``/``step_id`` label. For
+    update commands, the CLI-shaped positional form immediately following the
+    command is also accepted. Project creation has no positional project id,
+    so its generated ``project_id`` must be labeled explicitly.
+    """
+
+    label = r"[ _-]?".join(re.escape(part) for part in field.split("_"))
+    labeled = re.compile(
+        rf"(?i)\b{label}\b\s*(?:is|=|:)?\s*(?P<value>{_UUID_PATTERN.pattern})"
+    )
+    values = {
+        identifier
+        for match in labeled.finditer(request)
+        if (identifier := _canonical_uuid(match.group("value"))) is not None
+    }
+
+    if command in {"project update", "step update"}:
+        command_pattern = r"\s+".join(
+            re.escape(part) for part in command.split()
+        )
+        positional = re.compile(
+            rf"(?i)\b{command_pattern}\b\s+(?P<value>{_UUID_PATTERN.pattern})"
+        )
+        values.update(
+            identifier
+            for match in positional.finditer(request)
+            if (
+                identifier := _canonical_uuid(match.group("value"))
+            )
+            is not None
+        )
+
+    if not values:
+        return None, (
+            f"the apply request does not state an exact {field}"
+        )
+
+    if len(values) > 1:
+        return None, (
+            f"the apply request states more than one {field}"
+        )
+
+    return values.pop(), None
 
 
 def requested_command_from_request(

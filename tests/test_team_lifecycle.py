@@ -249,6 +249,34 @@ class TeamStateCleanupTests(unittest.TestCase):
         result = clear_team_state("nonexistent-session")
         self.assertFalse(result)
 
+    def test_clear_timeout_preserves_team_state(self):
+        """Cleanup fails closed while another hook owns the lock."""
+        from filelock import Timeout
+
+        with patch("team_lifecycle.FileLock") as lock_class:
+            lock_class.return_value.__enter__.side_effect = Timeout(
+                "busy-team-state"
+            )
+
+            self.assertFalse(clear_team_state(self.session_id))
+
+        self.assertIsNotNone(
+            team_lifecycle.load_team_state(self.session_id)
+        )
+
+    def test_new_team_state_can_be_created_after_cleanup(self):
+        """Retaining the lock file does not prevent a later session write."""
+        self.assertTrue(clear_team_state(self.session_id))
+
+        decision, name = allocate_teammate(
+            self.session_id,
+            "reviewer",
+            "reviewer",
+        )
+
+        self.assertEqual(decision, TeammateAllocationDecision.CREATE)
+        self.assertEqual(name, "reviewer")
+
 
 class TeammateAllocationDecisionTests(unittest.TestCase):
     """Test explicit TeammateAllocationDecision enum."""
@@ -293,6 +321,26 @@ class TeammateAllocationDecisionTests(unittest.TestCase):
         decision2, name2 = allocate_teammate(self.session_id, "reviewer", "reviewer")
         self.assertEqual(decision2, TeammateAllocationDecision.BUSY)
         self.assertEqual(name2, name1)
+
+    def test_report_received_is_not_reusable_until_idle(self):
+        """A late idle event from the old task must not affect a new run."""
+        allocate_teammate(self.session_id, "reviewer", "reviewer")
+        mark_teammate_running(
+            self.session_id,
+            "reviewer",
+            "run-1",
+            "task-1",
+        )
+        mark_report_received(self.session_id, "reviewer", "task-1")
+
+        decision, name = allocate_teammate(
+            self.session_id,
+            "reviewer",
+            "reviewer",
+        )
+
+        self.assertEqual(decision, TeammateAllocationDecision.BUSY)
+        self.assertEqual(name, "reviewer")
 
     def test_allocate_returns_denied_on_lock_timeout(self):
         """Lock timeout should return DENIED decision."""

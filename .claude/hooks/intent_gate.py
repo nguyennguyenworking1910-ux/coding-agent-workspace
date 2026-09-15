@@ -592,7 +592,14 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
-    output = run(payload)
+    try:
+        output = run(payload)
+    except Exception:  # noqa: BLE001 - hook infrastructure fails closed
+        output = block(
+            "Controlled request denied because authorization state could not "
+            "be persisted safely. No agents were dispatched. Fix the local "
+            "hook state directory and resubmit."
+        )
 
     if output:
         print(json.dumps(output, ensure_ascii=False))

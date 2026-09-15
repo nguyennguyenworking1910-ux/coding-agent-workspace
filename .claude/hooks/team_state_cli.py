@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,7 +27,7 @@ else:
     )
 
 
-def check_teammate_available(session_id: str, role: str) -> dict[str, any]:
+def check_teammate_available(session_id: str, role: str) -> dict[str, Any]:
     """Check if a teammate for a given role exists and is reusable (legacy)."""
     status = get_teammate_status(session_id, role)
 
@@ -37,7 +38,7 @@ def check_teammate_available(session_id: str, role: str) -> dict[str, any]:
             "message": f"Role '{role}' not yet created in this session.",
         }
 
-    if status in ("IDLE_REUSABLE", "ACKNOWLEDGED", "REPORT_RECEIVED"):
+    if status == "IDLE_REUSABLE":
         return {
             "available": True,
             "status": status,
@@ -51,7 +52,11 @@ def check_teammate_available(session_id: str, role: str) -> dict[str, any]:
     }
 
 
-def allocate_teammate_cli(session_id: str, role: str, canonical_name: str) -> dict[str, any]:
+def allocate_teammate_cli(
+    session_id: str,
+    role: str,
+    canonical_name: str,
+) -> dict[str, Any]:
     """Allocate a teammate with explicit decision (CREATE, REUSE, BUSY, DENIED)."""
     from team_lifecycle import TeammateAllocationDecision
 

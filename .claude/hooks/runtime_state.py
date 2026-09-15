@@ -18,6 +18,8 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -36,6 +38,10 @@ STATE_DIR_ENV_VAR = "CLAUDE_RUNTIME_STATE_DIR"
 # Seconds to wait for the lock. Long enough for a concurrent hook to finish its
 # read-modify-write, short enough that a stale lock cannot hang a tool call.
 LOCK_TIMEOUT_SECONDS = 10.0
+
+IS_WINDOWS = os.name == "nt"
+REPLACE_RETRY_ATTEMPTS = 5
+REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08)
 
 # A session id reaches us from the harness and is used to build a file name, so
 # everything outside this set is replaced rather than trusted.
@@ -217,17 +223,47 @@ def load_state(session_id: Any) -> dict[str, Any] | None:
     return state if isinstance(state, dict) else None
 
 
+def replace_with_retry(temporary: Path, destination: Path) -> None:
+    """Atomically replace a run-state file with bounded Windows retry."""
+    for attempt in range(REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(temporary, destination)
+            return
+        except PermissionError:
+            if not IS_WINDOWS or attempt == REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+
+            time.sleep(REPLACE_RETRY_BACKOFF_SECONDS[attempt])
+
+
 def save_state(session_id: Any, state: dict[str, Any]) -> None:
-    """Write the state atomically, so a killed hook cannot truncate it."""
+    """Write state atomically without sharing a temporary pathname."""
     path = state_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    temporary = path.with_suffix(".json.tmp")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temporary = Path(temporary_name)
+    replaced = False
 
-    with temporary.open("w", encoding="utf-8") as state_file:
-        json.dump(state, state_file, ensure_ascii=False, indent=2)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as state_file:
+            json.dump(state, state_file, ensure_ascii=False, indent=2)
+            state_file.flush()
+            os.fsync(state_file.fileno())
 
-    os.replace(temporary, path)
+        replace_with_retry(temporary, path)
+        replaced = True
+    finally:
+        if not replaced:
+            try:
+                temporary.unlink()
+            except OSError:
+                # Preserve the original save exception.
+                pass
 
 
 @contextmanager
@@ -262,18 +298,27 @@ def locked_state(session_id: Any) -> Iterator[dict[str, Any] | None]:
 
 
 def clear_state(session_id: Any) -> bool:
-    """Remove the state and its lock. A missing file is not an error."""
-    removed = False
+    """Remove run state only while holding its exclusive session lock.
 
-    for path in (state_path(session_id), lock_path(session_id)):
-        try:
-            path.unlink()
-            removed = removed or path.name.endswith(".json")
-        except FileNotFoundError:
-            continue
-        except OSError:
-            # A lock file still held on Windows is not worth failing over; the
-            # state document is what makes a run "active", and it is gone.
-            continue
+    The lock file is deliberately retained. Deleting a lock pathname while
+    holding it can let another process create a different lock at the same
+    path and enter the critical section concurrently.
+    """
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        lock = FileLock(
+            str(lock_path(session_id)),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
-    return removed
+        with lock:
+            try:
+                state_path(session_id).unlink()
+            except FileNotFoundError:
+                return False
+
+            return True
+    except (Timeout, OSError):
+        # Cleanup must never race an active hook. Preserve state so a later
+        # cleanup attempt can remove it under exclusive ownership.
+        return False

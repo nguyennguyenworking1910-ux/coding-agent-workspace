@@ -1,15 +1,16 @@
 ﻿#!/usr/bin/env python3
-"""PostToolUse and TeammateIdle hooks: idempotent teammate result delivery.
+"""PostToolUse and TeammateIdle hooks: exact teammate result delivery.
 
-Handles two result delivery paths:
-1. PostToolUse: intercepts successful SendMessage tool calls from teammates
-2. TeammateIdle: automatic final-answer delivery when a teammate finishes
+`SendMessage` to `team-lead` is the single machine-verifiable result path.
+`TeammateIdle` is only a lifecycle signal: it never invents a result. If a
+teammate tries to become idle before sending its report, the hook exits with
+code 2 and asks it to send the existing report without repeating the task.
 
-Uses deduplication key: run_id + task_id + canonical_teammate_name
-- If both sources deliver, stores both but processes one logical result
-- TaskUpdate (status-only) does not count as a complete result
+Uses deduplication key: run_id + task_id + canonical_teammate_name.
+- Repeated SendMessage delivery is one logical result
+- TaskUpdate and TeammateIdle do not count as complete results
 - Once result_received is true, no recovery request is allowed
-- recovery_sent flag prevents multiple recovery requests
+- recovery_sent records that delivery recovery was initiated
 
 Updates both run state (result ledger) and team state (lifecycle status).
 When result is received, marks team state REPORT_RECEIVED.
@@ -32,7 +33,7 @@ if __package__ in (None, ""):
     from team_lifecycle import (  # noqa: E402
         load_team_state,
         mark_report_received,
-        mark_teammate_idle_reusable,
+        release_reported_teammate_to_idle,
     )
     from merchant_confirmation_preferences import (  # noqa: E402
         MERCHANT_MANAGER_AGENT,
@@ -44,7 +45,7 @@ else:
     from .team_lifecycle import (
         load_team_state,
         mark_report_received,
-        mark_teammate_idle_reusable,
+        release_reported_teammate_to_idle,
     )
     from .merchant_confirmation_preferences import (
         MERCHANT_MANAGER_AGENT,
@@ -54,6 +55,16 @@ else:
 
 
 HOOK_EVENT_NAMES = ("PostToolUse", "TeammateIdle")
+
+MISSING_RESULT_FEEDBACK = (
+    "Your result was not delivered to the lead. Send your complete existing "
+    "report now through SendMessage to team-lead; do not redo the task. "
+    "After SendMessage succeeds, finish with only: RESULT_DELIVERED."
+)
+PENDING_RESULT_FEEDBACK = (
+    "Result delivery is still incomplete. Send the existing report once "
+    "through SendMessage to team-lead; do not repeat the task."
+)
 
 
 def record_teammate_result(
@@ -66,7 +77,7 @@ def record_teammate_result(
 
     Deduplication key: run_id + task_id + teammate_name
     Returns True if this is a first result delivery, False if already delivered.
-    Multiple delivery sources (automatic + SendMessage) are tracked in the same record.
+    Repeated accepted deliveries are tracked as one logical result.
     """
     run_id = state.get("run_id", "")
     ledger = state.get("result_ledger", {})
@@ -86,7 +97,8 @@ def record_teammate_result(
     else:
         ledger[dedup_key]["result_received"] = True
 
-    ledger[dedup_key]["delivery_sources"].append(source)
+    if source not in ledger[dedup_key]["delivery_sources"]:
+        ledger[dedup_key]["delivery_sources"].append(source)
     state["result_ledger"] = ledger
 
     return is_new_result
@@ -130,8 +142,62 @@ def mark_recovery_sent(
     return True
 
 
+def _coalesced_text(mapping: dict[str, Any], *fields: str) -> str:
+    """Return one unambiguous non-empty text value across alias fields."""
+    values = []
+
+    for field in fields:
+        value = mapping.get(field)
+
+        if value is None:
+            continue
+
+        text = str(value).strip()
+
+        if text:
+            values.append(text)
+
+    if not values or any(value != values[0] for value in values[1:]):
+        return ""
+
+    return values[0]
+
+
+def trusted_post_tool_sender(payload: dict[str, Any]) -> str:
+    """Return the harness-authenticated sender for a nested tool call.
+
+    PostToolUse identifies a subagent/teammate with agent_id and agent_type.
+    Values inside tool_input are agent-controlled and are never sender proof.
+    """
+    agent_id = str(payload.get("agent_id") or "").strip()
+    agent_type = str(payload.get("agent_type") or "").strip()
+
+    if not (agent_id and agent_type):
+        return ""
+
+    return agent_type
+
+
+def active_task_id(session_id: Any, teammate_name: str) -> str:
+    """Resolve the current task because TeammateIdle carries no task_id."""
+    team_state = load_team_state(session_id)
+
+    if not isinstance(team_state, dict):
+        return ""
+
+    record = (team_state.get("teammates") or {}).get(teammate_name)
+
+    if not isinstance(record, dict):
+        return ""
+
+    if record.get("canonical_name") != teammate_name:
+        return ""
+
+    return str(record.get("current_task_id") or "").strip()
+
+
 def handle_post_tool_use(
-    state: dict[str, Any],
+    state: dict[str, Any] | None,
     payload: dict[str, Any],
     session_id: Any = None,
 ) -> None:
@@ -152,46 +218,87 @@ def handle_post_tool_use(
     if not isinstance(tool_input, dict):
         return
 
-    to_field = str(tool_input.get("to") or "").strip()
+    to_field = _coalesced_text(tool_input, "recipient", "to")
 
     if to_field != "team-lead":
         return
 
-    teammate_name = str(tool_input.get("from_teammate") or "").strip()
+    teammate_name = trusted_post_tool_sender(payload)
 
     if not teammate_name:
-        teammate_name = str(payload.get("teammate_name") or "").strip()
+        return
+
+    message = _coalesced_text(tool_input, "content", "message")
+
+    if not message:
+        return
 
     task_id = str(tool_input.get("task_id") or "")
 
     if not task_id:
-        task_id = payload.get("task_id") or ""
+        task_id = str(payload.get("task_id") or "").strip()
+
+    current_task_id = active_task_id(session_id, teammate_name)
+
+    if current_task_id:
+        if task_id and task_id != current_task_id:
+            return
+
+        task_id = current_task_id
 
     if teammate_name and task_id:
-        record_teammate_result(state, teammate_name, task_id, "sendmessage")
+        if state is not None:
+            record_teammate_result(
+                state,
+                teammate_name,
+                task_id,
+                "sendmessage",
+            )
 
         if session_id:
             mark_report_received(session_id, teammate_name, task_id, "sendmessage")
 
 
 def handle_teammate_idle(
-    state: dict[str, Any],
+    state: dict[str, Any] | None,
     payload: dict[str, Any],
     session_id: Any = None,
-) -> None:
-    """Handle TeammateIdle: automatic final-answer delivery or idle transition.
+) -> str:
+    """Handle TeammateIdle as a delivery quality gate.
 
-    When a teammate becomes idle, check if a result was already received.
-    - If result was received in this task, mark team state IDLE_REUSABLE for reuse
-    - If no result yet, record as automatic delivery (should not happen in normal flow)
-
-    Updates both run-level result ledger and team lifecycle state.
+    Return an empty string when idle is allowed. Return feedback when the
+    teammate must remain active and deliver its existing report first. The
+    successful path uses session-scoped team state because Stop may already
+    have cleared the completed run's state document.
     """
     teammate_name = str(payload.get("teammate_name") or "").strip()
     task_id = str(payload.get("task_id") or "").strip()
 
+    if not teammate_name:
+        return ""
+
+    if session_id:
+        released, _ = release_reported_teammate_to_idle(
+            session_id,
+            teammate_name,
+        )
+
+        if released:
+            return ""
+
+    current_task_id = active_task_id(session_id, teammate_name)
+
+    if current_task_id:
+        if task_id and task_id != current_task_id:
+            return ""
+
+        task_id = current_task_id
+
     if not (teammate_name and task_id):
-        return
+        return ""
+
+    if state is None:
+        return MISSING_RESULT_FEEDBACK
 
     run_id = state.get("run_id", "")
     ledger = state.get("result_ledger", {})
@@ -201,47 +308,42 @@ def handle_teammate_idle(
 
     if result_already_received:
         if session_id:
-            mark_teammate_idle_reusable(session_id, teammate_name)
-    else:
-        record_teammate_result(state, teammate_name, task_id, "automatic")
-        if session_id:
-            mark_report_received(session_id, teammate_name, task_id, "automatic")
+            mark_report_received(
+                session_id,
+                teammate_name,
+                task_id,
+                "sendmessage",
+            )
+            released, _ = release_reported_teammate_to_idle(
+                session_id,
+                teammate_name,
+            )
+
+            if not released:
+                team_state = load_team_state(session_id)
+                teammate_record = None
+
+                if isinstance(team_state, dict):
+                    teammate_record = (
+                        team_state.get("teammates", {})
+                    ).get(teammate_name)
+
+                if isinstance(teammate_record, dict):
+                    return PENDING_RESULT_FEEDBACK
+
+        return ""
+
+    recovery_is_new = mark_recovery_sent(state, teammate_name, task_id)
+    return (
+        MISSING_RESULT_FEEDBACK
+        if recovery_is_new
+        else PENDING_RESULT_FEEDBACK
+    )
 
 
 def merchant_report_sender(payload: dict[str, Any]) -> str:
-    """Resolve who delivered this report, preferring the harness field.
-
-    `teammate_name` comes from the harness. `from_teammate` is self-declared
-    by the caller, so it is accepted only when the harness supplied nothing
-    and the session team state actually holds a canonical teammate with that
-    name and role. Either way the name must be the canonical
-    `merchant-manager`.
-    """
-    harness_name = str(payload.get("teammate_name") or "").strip()
-
-    if harness_name:
-        return harness_name
-
-    tool_input = payload.get("tool_input")
-    declared = ""
-
-    if isinstance(tool_input, dict):
-        declared = str(tool_input.get("from_teammate") or "").strip()
-
-    if not declared:
-        return ""
-
-    team_state = load_team_state(payload.get("session_id"))
-
-    if not isinstance(team_state, dict):
-        return ""
-
-    record = (team_state.get("teammates") or {}).get(declared)
-
-    if not isinstance(record, dict) or record.get("role") != declared:
-        return ""
-
-    return declared
+    """Resolve the sender only from harness-authenticated hook fields."""
+    return trusted_post_tool_sender(payload)
 
 
 def embedded_json_objects(text: str) -> list[Any]:
@@ -291,7 +393,7 @@ def handle_merchant_proposal_receipt(
     if not isinstance(tool_input, dict):
         return False
 
-    if str(tool_input.get("to") or "").strip() != "team-lead":
+    if _coalesced_text(tool_input, "recipient", "to") != "team-lead":
         return False
 
     if merchant_report_sender(payload) != MERCHANT_MANAGER_AGENT:
@@ -312,9 +414,9 @@ def handle_merchant_proposal_receipt(
     if selected_agents != [MERCHANT_MANAGER_AGENT]:
         return False
 
-    message = tool_input.get("message")
+    message = _coalesced_text(tool_input, "content", "message")
 
-    if not isinstance(message, str):
+    if not message:
         return False
 
     candidates = [
@@ -346,15 +448,28 @@ def main() -> int:
     if hook_event not in HOOK_EVENT_NAMES:
         return 0
 
-    with locked_state(session_id) as state:
-        if state is None:
-            return 0
+    idle_feedback = ""
 
+    with locked_state(session_id) as state:
         if hook_event == "PostToolUse":
             handle_post_tool_use(state, payload, session_id)
-            handle_merchant_proposal_receipt(state, payload, session_id)
+
+            if state is not None:
+                handle_merchant_proposal_receipt(
+                    state,
+                    payload,
+                    session_id,
+                )
         elif hook_event == "TeammateIdle":
-            handle_teammate_idle(state, payload, session_id)
+            idle_feedback = handle_teammate_idle(
+                state,
+                payload,
+                session_id,
+            )
+
+    if idle_feedback:
+        print(idle_feedback, file=sys.stderr)
+        return 2
 
     return 0
 

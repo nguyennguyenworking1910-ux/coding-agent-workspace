@@ -225,19 +225,30 @@ def locked_team_state(session_id: Any) -> Iterator[dict[str, Any] | None]:
 
 
 def clear_team_state(session_id: Any) -> bool:
-    """Remove team state and its lock. Returns True if team state was removed."""
-    removed = False
+    """Remove team state while holding its exclusive session lock.
 
-    for path in (team_state_path(session_id), team_lock_path(session_id)):
-        try:
-            path.unlink()
-            removed = removed or path.name.endswith(".json")
-        except FileNotFoundError:
-            continue
-        except OSError:
-            continue
+    Keep the lock file as the stable synchronization object for this session.
+    Removing its pathname while locked could allow a concurrent process to
+    create a second lock and write state after SessionEnd cleanup.
+    """
+    try:
+        team_state_dir().mkdir(parents=True, exist_ok=True)
+        lock = FileLock(
+            str(team_lock_path(session_id)),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
-    return removed
+        with lock:
+            try:
+                team_state_path(session_id).unlink()
+            except FileNotFoundError:
+                return False
+
+            return True
+    except (Timeout, OSError):
+        # Preserve state if exclusive cleanup cannot be established. A later
+        # SessionEnd cleanup can safely retry.
+        return False
 
 
 def allocate_teammate(
@@ -279,11 +290,7 @@ def allocate_teammate(
         name, record = existing
         status = record.get("status", "")
 
-        if status in (
-            TeammateLifecycleStatus.IDLE_REUSABLE.value,
-            TeammateLifecycleStatus.ACKNOWLEDGED.value,
-            TeammateLifecycleStatus.REPORT_RECEIVED.value,
-        ):
+        if status == TeammateLifecycleStatus.IDLE_REUSABLE.value:
             # Teammate is idle/reusable, mark as reused
             record["status"] = TeammateLifecycleStatus.DISPATCHED.value
             record["current_run_id"] = None
@@ -341,6 +348,64 @@ def mark_teammate_running(
         return True
 
 
+def reserve_reusable_teammate(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> tuple[bool, str]:
+    """Atomically reserve an existing idle teammate for a new run.
+
+    Returns ``(reserved, prior_status)``. A reservation already owned by the
+    same run/task is idempotent. A teammate owned by another run fails closed.
+    """
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, TeammateAllocationDecision.DENIED.value
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if record.get("canonical_name") != teammate_name:
+            return False, "NON_CANONICAL"
+
+        prior_status = str(record.get("status") or "UNKNOWN")
+        current_run_id = str(record.get("current_run_id") or "")
+        current_task_id = str(record.get("current_task_id") or "")
+
+        if (
+            prior_status
+            in (
+                TeammateLifecycleStatus.DISPATCHED.value,
+                TeammateLifecycleStatus.RUNNING.value,
+            )
+            and current_run_id == run_id
+            and current_task_id == task_id
+        ):
+            return True, prior_status
+
+        reusable_statuses = (
+            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+        )
+        unbound_dispatch = (
+            prior_status == TeammateLifecycleStatus.DISPATCHED.value
+            and not current_run_id
+            and not current_task_id
+        )
+
+        if prior_status not in reusable_statuses and not unbound_dispatch:
+            return False, prior_status
+
+        record["status"] = TeammateLifecycleStatus.RUNNING.value
+        record["current_run_id"] = run_id
+        record["current_task_id"] = task_id
+        record["result_received"] = False
+        record["report_source"] = None
+        return True, prior_status
+
+
 def mark_report_received(
     session_id: Any,
     teammate_name: str,
@@ -374,6 +439,60 @@ def mark_report_received(
         return True
 
 
+def release_reported_teammate_to_idle(
+    session_id: Any,
+    teammate_name: str,
+) -> tuple[bool, str]:
+    """Atomically release one authenticated, reported teammate for reuse.
+
+    The run-state document is intentionally not consulted here. Claude Code
+    fires ``Stop`` before ``TeammateIdle`` and the Stop hook clears run state,
+    while team state is session-scoped and remains available. Only an exact
+    canonical teammate with a bound run/task and a SendMessage-backed report
+    may cross this boundary.
+    """
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, TeammateAllocationDecision.DENIED.value
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if record.get("canonical_name") != teammate_name:
+            return False, "NON_CANONICAL"
+
+        prior_status = str(record.get("status") or "UNKNOWN")
+
+        if prior_status == TeammateLifecycleStatus.IDLE_REUSABLE.value:
+            return True, prior_status
+
+        if prior_status not in (
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        ):
+            return False, prior_status
+
+        if (
+            record.get("result_received") is not True
+            or record.get("report_source") != "sendmessage"
+        ):
+            return False, prior_status
+
+        run_id = str(record.get("current_run_id") or "").strip()
+        task_id = str(record.get("current_task_id") or "").strip()
+
+        if not (run_id and task_id):
+            return False, "UNBOUND_REPORT"
+
+        record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+        record["last_completed_task_id"] = task_id
+        record["current_task_id"] = None
+        record["current_run_id"] = None
+        return True, prior_status
+
+
 def mark_teammate_acknowledged(
     session_id: Any,
     teammate_name: str,
@@ -390,7 +509,6 @@ def mark_teammate_acknowledged(
             return False
 
         record["status"] = TeammateLifecycleStatus.ACKNOWLEDGED.value
-        record["current_task_id"] = None
         return True
 
 
@@ -409,7 +527,13 @@ def mark_teammate_idle_reusable(
         if record is None:
             return False
 
+        current_task_id = str(record.get("current_task_id") or "").strip()
+
         record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+
+        if current_task_id:
+            record["last_completed_task_id"] = current_task_id
+
         record["current_task_id"] = None
         record["current_run_id"] = None
         return True

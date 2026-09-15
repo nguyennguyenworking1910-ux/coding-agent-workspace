@@ -39,6 +39,7 @@ if __package__ in (None, ""):
         allocate_teammate,
         check_role_in_selected_agents,
         mark_teammate_running,
+        reserve_reusable_teammate,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
     )
@@ -54,6 +55,7 @@ else:
         allocate_teammate,
         check_role_in_selected_agents,
         mark_teammate_running,
+        reserve_reusable_teammate,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
     )
@@ -351,6 +353,7 @@ def apply_call(
     tool_name: str,
     tool_input: dict[str, Any],
     session_id: str | None = None,
+    sender_agent_type: str = "",
 ) -> dict[str, Any] | None:
     """Count the call, mutate `state`, and return a decision when one is needed.
 
@@ -426,6 +429,17 @@ def apply_call(
     if tool_name in AGENT_TOOL_NAMES:
         return _check_agent_dispatch(state, tool_input, session_id)
 
+    if tool_name == "SendMessage":
+        message_decision = _check_teammate_message(
+            state,
+            tool_input,
+            session_id,
+            sender_agent_type,
+        )
+
+        if message_decision is not None:
+            return message_decision
+
     if risk_level == RISK_READ_ONLY:
         if tool_name in FILE_WRITE_TOOLS:
             return deny(
@@ -455,6 +469,117 @@ def apply_call(
                 f"Blocked: {tool_name} mutates an external system and the run is not "
                 "confirmed. Resubmit the request with `--confirm` to authorize it."
             )
+
+    return None
+
+
+def _coalesced_text(
+    mapping: dict[str, Any],
+    *fields: str,
+) -> str:
+    """Return one non-empty value only when aliases are unambiguous."""
+    values = []
+
+    for field in fields:
+        value = mapping.get(field)
+
+        if value is None:
+            continue
+
+        text = str(value).strip()
+
+        if text:
+            values.append(text)
+
+    if not values or any(value != values[0] for value in values[1:]):
+        return ""
+
+    return values[0]
+
+
+def _run_task_id(state: dict[str, Any], teammate_name: str) -> str:
+    """Build the internal task binding for one teammate in this run."""
+    run_id = str(state.get("run_id") or "").strip()
+
+    if not run_id:
+        return ""
+
+    return f"{run_id}:{teammate_name}"
+
+
+def _check_teammate_message(
+    state: dict[str, Any],
+    tool_input: dict[str, Any],
+    session_id: str | None,
+    sender_agent_type: str,
+) -> dict[str, Any] | None:
+    """Authorize a lead assignment to one existing canonical teammate."""
+    recipient = _coalesced_text(tool_input, "recipient", "to")
+
+    if recipient == "team-lead":
+        return None
+
+    if not recipient:
+        return deny(
+            "Blocked: SendMessage has no unambiguous recipient. Use exactly "
+            "one matching recipient/to value."
+        )
+
+    if sender_agent_type:
+        return deny(
+            "Blocked: only the team lead may assign work to a teammate. "
+            "Teammates may report only to team-lead."
+        )
+
+    selected_agents = [
+        str(agent) for agent in state.get("selected_agents") or []
+    ]
+
+    if recipient not in selected_agents:
+        return deny(
+            f"Blocked: teammate '{recipient}' is not in selected_agents "
+            f"({', '.join(selected_agents) or 'none'})."
+        )
+
+    if not session_id:
+        return deny(
+            "Blocked: teammate reuse requires a valid session id."
+        )
+
+    task_id = _run_task_id(state, recipient)
+
+    if not task_id:
+        return deny(
+            "Blocked: teammate reuse requires the current run_id."
+        )
+
+    members_used = [str(member) for member in state.get("members_used") or []]
+
+    if recipient not in members_used:
+        max_members = _limit(state, "max_members")
+
+        if max_members is not None and len(members_used) + 1 > max_members:
+            return deny(
+                f"Blocked: reusing teammate '{recipient}' would exceed the "
+                f"max_members limit of {max_members}."
+            )
+
+    reserved, prior_status = reserve_reusable_teammate(
+        session_id,
+        recipient,
+        str(state.get("run_id") or ""),
+        task_id,
+    )
+
+    if not reserved:
+        return deny(
+            f"Blocked: teammate '{recipient}' is not reusable "
+            f"(status={prior_status}). Do not create a suffixed replacement."
+        )
+
+    if recipient not in members_used:
+        members_used.append(recipient)
+        state["members_used"] = members_used
 
     return None
 
@@ -532,6 +657,27 @@ def _check_agent_dispatch(
             "reported and stop."
         )
 
+    task_id = _run_task_id(state, requested_teammate_name)
+
+    if session_id and not task_id:
+        return deny(
+            "Blocked: Agent Team dispatch requires the current run_id so the "
+            "teammate can be bound before work starts."
+        )
+
+    members_used = [str(member) for member in state.get("members_used") or []]
+
+    if requested_teammate_name not in members_used:
+        max_members = _limit(state, "max_members")
+
+        if max_members is not None and len(members_used) + 1 > max_members:
+            return deny(
+                f"Blocked: dispatching teammate '{requested_teammate_name}' would make "
+                f"{len(members_used) + 1} members, over the {max_members} allowed for "
+                f"task_class {state.get('task_class')}. Already dispatched: "
+                f"{', '.join(members_used) or 'none'}."
+            )
+
     if session_id:
         decision, teammate_name = allocate_teammate(session_id, subagent_type, canonical_name)
 
@@ -564,19 +710,18 @@ def _check_agent_dispatch(
                 f"'{subagent_type}'. Request a fresh dispatch."
             )
 
-    members_used = [str(member) for member in state.get("members_used") or []]
-
-    if requested_teammate_name not in members_used:
-        max_members = _limit(state, "max_members")
-
-        if max_members is not None and len(members_used) + 1 > max_members:
+        if not mark_teammate_running(
+            session_id,
+            requested_teammate_name,
+            str(state.get("run_id") or ""),
+            task_id,
+        ):
             return deny(
-                f"Blocked: dispatching teammate '{requested_teammate_name}' would make "
-                f"{len(members_used) + 1} members, over the {max_members} allowed for "
-                f"task_class {state.get('task_class')}. Already dispatched: "
-                f"{', '.join(members_used) or 'none'}."
+                "Blocked: the new teammate could not be bound to the current "
+                "run safely. Nothing may rely on this dispatch result."
             )
 
+    if requested_teammate_name not in members_used:
         members_used.append(requested_teammate_name)
         state["members_used"] = members_used
 
@@ -883,7 +1028,13 @@ def main() -> int:
 
     with locked_state(session_id) as state:
         if state is not None:
-            output = apply_call(state, tool_name, tool_input, session_id)
+            output = apply_call(
+                state,
+                tool_name,
+                tool_input,
+                session_id,
+                str(payload.get("agent_type") or "").strip(),
+            )
 
     if output:
         print(json.dumps(output, ensure_ascii=False))
