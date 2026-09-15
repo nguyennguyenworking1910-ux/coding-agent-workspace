@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -42,6 +44,17 @@ DEFAULT_TEAM_STATE_DIR = CLAUDE_DIR / "runtime" / "team_state"
 TEAM_STATE_DIR_ENV_VAR = "CLAUDE_TEAM_STATE_DIR"
 
 LOCK_TIMEOUT_SECONDS = 10.0
+
+IS_WINDOWS = os.name == "nt"
+
+# On Windows, os.replace can fail with PermissionError (WinError 5 / 32) while
+# an antivirus scanner or an indexer still holds a transient handle on the
+# temporary file or the destination. The handle is released within
+# milliseconds, so a short bounded retry converts a spurious failure into a
+# successful atomic replacement. Other platforms never see this and must fail
+# immediately.
+REPLACE_RETRY_ATTEMPTS = 5
+REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08)
 
 
 class TeammateLifecycleStatus(str, Enum):
@@ -112,17 +125,55 @@ def load_team_state(session_id: Any) -> dict[str, Any] | None:
     return state if isinstance(state, dict) else None
 
 
+def _replace_with_retry(temporary: Path, destination: Path) -> None:
+    """Atomically replace destination with temporary.
+
+    The replacement stays atomic: the destination is never unlinked first and
+    there is no non-atomic fallback write. Only a transient Windows
+    PermissionError is retried, a bounded number of times.
+    """
+    for attempt in range(REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(temporary, destination)
+            return
+        except PermissionError:
+            if not IS_WINDOWS or attempt == REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+
+            time.sleep(REPLACE_RETRY_BACKOFF_SECONDS[attempt])
+
+
 def save_team_state(session_id: Any, state: dict[str, Any]) -> None:
     """Write team state atomically."""
     path = team_state_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    temporary = path.with_suffix(".json.tmp")
+    # A unique name in the destination directory. A fixed "<session>.json.tmp"
+    # lets a retry or a second writer collide on one scratch file, and
+    # os.replace is only atomic within a single filesystem.
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temporary = Path(temporary_name)
+    replaced = False
 
-    with temporary.open("w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
-    os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
+        replaced = True
+    finally:
+        if not replaced:
+            # Never mask the failure that brought us here.
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def new_team_state() -> dict[str, Any]:

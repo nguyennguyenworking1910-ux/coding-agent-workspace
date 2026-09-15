@@ -1,5 +1,6 @@
 """Tests for session-scoped Agent Team lifecycle and result ledger."""
 
+import json
 import os
 import sys
 import tempfile
@@ -479,6 +480,334 @@ class ConcurrentReservationTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0][1], TeammateAllocationDecision.REUSE)
         self.assertEqual(results[1][1], TeammateAllocationDecision.BUSY)
+
+
+class AtomicTeamStatePersistenceTests(unittest.TestCase):
+    """Regression tests for atomic save_team_state on Windows.
+
+    os.replace intermittently raised PermissionError (WinError 5) because a
+    fixed "<session>.json.tmp" name collided between writers and retries, and
+    because the temporary file was not flushed and fsynced before replacement.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_env = os.environ.get(TEAM_STATE_DIR_ENV_VAR)
+        os.environ[TEAM_STATE_DIR_ENV_VAR] = self.temp_dir.name
+        self.session_id = "test-session"
+        self.state_dir = Path(self.temp_dir.name)
+        self.state_path = team_lifecycle.team_state_path(self.session_id)
+
+    def tearDown(self):
+        if self.original_env is None:
+            os.environ.pop(TEAM_STATE_DIR_ENV_VAR, None)
+        else:
+            os.environ[TEAM_STATE_DIR_ENV_VAR] = self.original_env
+        self.temp_dir.cleanup()
+
+    def temporary_files(self):
+        """Every scratch file save_team_state could have left behind."""
+        return sorted(
+            entry.name
+            for entry in self.state_dir.iterdir()
+            if entry.name.endswith(".tmp")
+        )
+
+    # A. Normal save and replacement preserves valid JSON.
+    def test_save_writes_valid_json_and_leaves_no_temporary_file(self):
+        state = {"teammates": {"reviewer": init_teammate_record("reviewer", "reviewer")}}
+
+        team_lifecycle.save_team_state(self.session_id, state)
+
+        self.assertTrue(self.state_path.exists())
+        with self.state_path.open("r", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), state)
+        self.assertEqual(self.temporary_files(), [])
+
+    def test_save_uses_a_unique_temporary_name_in_the_destination_directory(self):
+        """The scratch file is unique and a sibling of the destination."""
+        observed = []
+        real_replace = os.replace
+
+        def record(source, destination):
+            observed.append((Path(source), Path(destination)))
+            real_replace(source, destination)
+
+        with patch("team_lifecycle.os.replace", side_effect=record):
+            team_lifecycle.save_team_state(self.session_id, {"teammates": {}})
+            team_lifecycle.save_team_state(self.session_id, {"teammates": {}})
+
+        first, second = observed
+        self.assertNotEqual(first[0].name, second[0].name)
+        self.assertNotEqual(first[0].name, f"{self.state_path.name}.tmp")
+        for source, destination in observed:
+            self.assertEqual(source.parent, self.state_path.parent)
+            self.assertEqual(destination, self.state_path)
+
+    # B. First os.replace raises PermissionError; the next attempt succeeds.
+    def test_transient_permission_error_is_retried_and_succeeds(self):
+        state = {"teammates": {"coder": init_teammate_record("coder", "coder")}}
+        real_replace = os.replace
+        attempts = []
+
+        def flaky(source, destination):
+            attempts.append(source)
+            if len(attempts) == 1:
+                raise PermissionError(5, "Access is denied")
+            real_replace(source, destination)
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep") as sleep:
+                with patch("team_lifecycle.os.replace", side_effect=flaky):
+                    team_lifecycle.save_team_state(self.session_id, state)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(
+            sleep.call_args.args[0],
+            team_lifecycle.REPLACE_RETRY_BACKOFF_SECONDS[0],
+        )
+
+        with self.state_path.open("r", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), state)
+        self.assertEqual(self.temporary_files(), [])
+
+    # C. Persistent PermissionError is raised after the bounded retry limit.
+    def test_persistent_permission_error_is_raised_after_bounded_retries(self):
+        def always_denied(source, destination):
+            raise PermissionError(5, "Access is denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep") as sleep:
+                with patch(
+                    "team_lifecycle.os.replace",
+                    side_effect=always_denied,
+                ) as replace:
+                    with self.assertRaises(PermissionError):
+                        team_lifecycle.save_team_state(
+                            self.session_id,
+                            {"teammates": {}},
+                        )
+
+        self.assertEqual(
+            replace.call_count,
+            team_lifecycle.REPLACE_RETRY_ATTEMPTS,
+        )
+        self.assertEqual(
+            sleep.call_count,
+            team_lifecycle.REPLACE_RETRY_ATTEMPTS - 1,
+        )
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            list(team_lifecycle.REPLACE_RETRY_BACKOFF_SECONDS),
+        )
+
+    def test_permission_error_is_not_retried_off_windows(self):
+        """Non-Windows platforms re-raise immediately."""
+        def always_denied(source, destination):
+            raise PermissionError(13, "Permission denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", False):
+            with patch("team_lifecycle.time.sleep") as sleep:
+                with patch(
+                    "team_lifecycle.os.replace",
+                    side_effect=always_denied,
+                ) as replace:
+                    with self.assertRaises(PermissionError):
+                        team_lifecycle.save_team_state(
+                            self.session_id,
+                            {"teammates": {}},
+                        )
+
+        self.assertEqual(replace.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_non_permission_errors_are_not_retried(self):
+        """Only PermissionError is transient; other OSErrors fail at once."""
+        def failed(source, destination):
+            raise OSError(28, "No space left on device")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep") as sleep:
+                with patch(
+                    "team_lifecycle.os.replace",
+                    side_effect=failed,
+                ) as replace:
+                    with self.assertRaises(OSError):
+                        team_lifecycle.save_team_state(
+                            self.session_id,
+                            {"teammates": {}},
+                        )
+
+        self.assertEqual(replace.call_count, 1)
+        sleep.assert_not_called()
+
+    # D. Failed replacement leaves the previous state file unchanged.
+    def test_failed_replacement_leaves_previous_state_unchanged(self):
+        original = {
+            "teammates": {"reviewer": init_teammate_record("reviewer", "reviewer")}
+        }
+        team_lifecycle.save_team_state(self.session_id, original)
+
+        def always_denied(source, destination):
+            raise PermissionError(5, "Access is denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep"):
+                with patch("team_lifecycle.os.replace", side_effect=always_denied):
+                    with self.assertRaises(PermissionError):
+                        team_lifecycle.save_team_state(
+                            self.session_id,
+                            {"teammates": {"coder": init_teammate_record("coder", "coder")}},
+                        )
+
+        self.assertTrue(self.state_path.exists())
+        with self.state_path.open("r", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), original)
+        self.assertEqual(
+            team_lifecycle.load_team_state(self.session_id),
+            original,
+        )
+
+    # E. Failed replacement leaves no generated temporary files.
+    def test_failed_replacement_leaves_no_temporary_files(self):
+        def always_denied(source, destination):
+            raise PermissionError(5, "Access is denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep"):
+                with patch("team_lifecycle.os.replace", side_effect=always_denied):
+                    with self.assertRaises(PermissionError):
+                        team_lifecycle.save_team_state(
+                            self.session_id,
+                            {"teammates": {}},
+                        )
+
+        self.assertEqual(self.temporary_files(), [])
+
+    def test_cleanup_failure_does_not_mask_the_original_error(self):
+        """An unlink that fails must not replace the PermissionError."""
+        def always_denied(source, destination):
+            raise PermissionError(5, "Access is denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep"):
+                with patch("team_lifecycle.os.replace", side_effect=always_denied):
+                    with patch.object(
+                        Path,
+                        "unlink",
+                        side_effect=OSError(5, "Access is denied"),
+                    ):
+                        with self.assertRaises(PermissionError):
+                            team_lifecycle.save_team_state(
+                                self.session_id,
+                                {"teammates": {}},
+                            )
+
+    def test_save_failure_inside_lock_leaves_state_readable(self):
+        """locked_team_state holds the lock across the whole save."""
+        original = {"teammates": {}}
+        team_lifecycle.save_team_state(self.session_id, original)
+
+        def always_denied(source, destination):
+            raise PermissionError(5, "Access is denied")
+
+        with patch.object(team_lifecycle, "IS_WINDOWS", True):
+            with patch("team_lifecycle.time.sleep"):
+                with patch("team_lifecycle.os.replace", side_effect=always_denied):
+                    with self.assertRaises(PermissionError):
+                        with team_lifecycle.locked_team_state(
+                            self.session_id,
+                        ) as state:
+                            state["teammates"]["reviewer"] = init_teammate_record(
+                                "reviewer",
+                                "reviewer",
+                            )
+
+        self.assertEqual(
+            team_lifecycle.load_team_state(self.session_id),
+            original,
+        )
+        self.assertEqual(self.temporary_files(), [])
+
+        # The lock is released, so the next writer still succeeds.
+        decision, name = allocate_teammate(self.session_id, "reviewer", "reviewer")
+        self.assertEqual(decision, TeammateAllocationDecision.CREATE)
+
+
+class RepeatedTeamStateWriteTests(unittest.TestCase):
+    """Many real saves in one directory must never collide on a scratch file."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_env = os.environ.get(TEAM_STATE_DIR_ENV_VAR)
+        os.environ[TEAM_STATE_DIR_ENV_VAR] = self.temp_dir.name
+        self.session_id = "test-session"
+
+    def tearDown(self):
+        if self.original_env is None:
+            os.environ.pop(TEAM_STATE_DIR_ENV_VAR, None)
+        else:
+            os.environ[TEAM_STATE_DIR_ENV_VAR] = self.original_env
+        self.temp_dir.cleanup()
+
+    def test_repeated_lifecycle_writes_stay_consistent(self):
+        allocate_teammate(self.session_id, "reviewer", "reviewer")
+
+        for index in range(25):
+            mark_teammate_running(
+                self.session_id,
+                "reviewer",
+                f"run-{index}",
+                f"task-{index}",
+            )
+            mark_report_received(self.session_id, "reviewer", f"task-{index}")
+            mark_teammate_acknowledged(self.session_id, "reviewer")
+            mark_teammate_idle_reusable(self.session_id, "reviewer")
+
+        self.assertEqual(
+            get_teammate_status(self.session_id, "reviewer"),
+            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+        )
+        self.assertEqual(
+            sorted(
+                entry.name
+                for entry in Path(self.temp_dir.name).iterdir()
+                if entry.name.endswith(".tmp")
+            ),
+            [],
+        )
+
+    def test_concurrent_writers_never_corrupt_state(self):
+        allocate_teammate(self.session_id, "reviewer", "reviewer")
+        errors = []
+        barrier = threading.Barrier(4)
+
+        def write(index):
+            barrier.wait()
+            try:
+                for _ in range(10):
+                    mark_teammate_running(
+                        self.session_id,
+                        "reviewer",
+                        f"run-{index}",
+                        f"task-{index}",
+                    )
+                    mark_teammate_idle_reusable(self.session_id, "reviewer")
+            except Exception as error:  # noqa: BLE001 - recorded and re-asserted
+                errors.append(error)
+
+        threads = [threading.Thread(target=write, args=(index,)) for index in range(4)]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        state = team_lifecycle.load_team_state(self.session_id)
+        self.assertIsNotNone(state)
+        self.assertIn("reviewer", state["teammates"])
 
 
 if __name__ == "__main__":

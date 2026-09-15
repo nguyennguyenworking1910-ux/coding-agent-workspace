@@ -256,28 +256,17 @@ class MerchantStepTransitionRepository:
                         project,
                         transition_plan.target_status,
                     ):
-                        merchant_uuid = uuid.UUID(project["merchant_id"])
-                        cursor.execute(
-                            """
-                            SELECT version FROM merchant_ops.merchants
-                            WHERE id = %s
-                            """,
-                            (merchant_uuid,),
-                        )
-                        merchant_version_row = cursor.fetchone()
-                        merchant_version = (
-                            merchant_version_row["version"]
-                            if merchant_version_row
-                            else 1
-                        )
-
+                        # The merchant version comes from the persisted
+                        # authorization snapshot. The activation re-reads the
+                        # merchant FOR UPDATE and rejects any drift against it.
                         activate_merchant_in_workflow_transaction(
                             cursor,
                             project["merchant_id"],
-                            merchant_version,
+                            project["merchant_version"],
                             project,
                             current_step,
                             steps,
+                            dependencies,
                         )
 
                     event_id = uuid.uuid4()
@@ -357,10 +346,24 @@ class MerchantStepTransitionRepository:
             SELECT
                 project.id,
                 project.merchant_id,
-                project.requires_procurement
+                project.project_type,
+                project.workflow_variant,
+                project.workflow_template_version_id,
+                project.requires_procurement,
+                template.id AS template_id,
+                template.name AS template_name,
+                template.variant AS template_variant,
+                template.version AS template_version,
+                merchant.id AS merchant_row_id,
+                merchant.account_status AS merchant_account_status,
+                merchant.version AS merchant_version
             FROM merchant_ops.project_steps AS step
             JOIN merchant_ops.projects AS project
               ON project.id = step.project_id
+            JOIN merchant_ops.workflow_templates AS template
+              ON template.id = project.workflow_template_version_id
+            JOIN merchant_ops.merchants AS merchant
+              ON merchant.id = project.merchant_id
             WHERE step.id = %s
             FOR UPDATE OF project
             """,
@@ -389,6 +392,12 @@ class MerchantStepTransitionRepository:
                 step.template_step_id,
                 step.branch_key,
                 step.step_name,
+                template_step.id AS template_step_row_id,
+                template_step.template_id
+                    AS template_step_template_id,
+                template_step.name AS template_step_name,
+                template_step.branch_key
+                    AS template_step_branch_key,
                 template_step.step_type,
                 step.status,
                 step.sequence_number,
