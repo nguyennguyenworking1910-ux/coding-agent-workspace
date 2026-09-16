@@ -52,6 +52,9 @@ package-dir = {"claude" = ".claude"}
 claude = ["**/*.py"]
 
 [tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
 markers = [
     "integration: tests requiring live external services and explicit opt-in",
 ]

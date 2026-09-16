@@ -201,28 +201,52 @@ def init_teammate_record(
 
 
 @contextmanager
-def locked_team_state(session_id: Any) -> Iterator[dict[str, Any] | None]:
+def locked_team_state(
+    session_id: Any,
+) -> Iterator[dict[str, Any] | None]:
     """Yield team state under an exclusive lock, persisting any changes.
 
     Creates a new state document if one doesn't exist yet.
     """
     directory = team_state_dir()
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     try:
-        lock = FileLock(str(team_lock_path(session_id)), timeout=LOCK_TIMEOUT_SECONDS)
+        lock = FileLock(
+            str(team_lock_path(session_id)),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
         with lock:
-            state = load_team_state(session_id)
+            state = load_team_state(
+                session_id
+            )
 
             if state is None:
                 state = new_team_state()
 
+            # Keep the authoritative lead/session owner in the
+            # persisted team-state document. This is required for
+            # later tmux pane -> lead-session reconciliation.
+            state["session_id"] = str(
+                session_id or ""
+            ).strip()
+
             yield state
-            save_team_state(session_id, state)
+
+            # IMPORTANT:
+            # Persist every lifecycle mutation while the same
+            # exclusive lock is still held.
+            save_team_state(
+                session_id,
+                state,
+            )
+
     except Timeout:
         yield None
-
 
 def clear_team_state(session_id: Any) -> bool:
     """Remove team state while holding its exclusive session lock.
@@ -587,3 +611,160 @@ def check_role_in_selected_agents(
 ) -> bool:
     """Check whether a role is authorized in the current run."""
     return role in selected_agents
+
+def find_unique_active_teammate_owner(
+    teammate_name: str,
+) -> tuple[str | None, dict[str, Any] | None, str]:
+    """Find exactly one lead session currently owning this teammate.
+
+    This is used only for pane-backed teammates whose hook session_id belongs
+    to the pane rather than the lead session.
+
+    Returns:
+        (session_id, teammate_record, resolution)
+
+    resolution:
+        FOUND
+        NOT_FOUND
+        AMBIGUOUS
+    """
+    name = str(teammate_name or "").strip()
+
+    if not name:
+        return None, None, "NOT_FOUND"
+
+    matches: list[tuple[str, dict[str, Any]]] = []
+
+    directory = team_state_dir()
+
+    try:
+        paths = list(directory.glob("*.json"))
+    except OSError:
+        return None, None, "NOT_FOUND"
+
+    active_statuses = {
+        TeammateLifecycleStatus.RUNNING.value,
+        TeammateLifecycleStatus.REPORT_RECEIVED.value,
+        TeammateLifecycleStatus.ACKNOWLEDGED.value,
+    }
+
+    for path in paths:
+        try:
+            candidate = json.loads(
+                path.read_text(encoding="utf-8")
+            )
+        except (
+            OSError,
+            json.JSONDecodeError,
+        ):
+            continue
+
+        if not isinstance(candidate, dict):
+            continue
+
+        record = (
+            candidate.get("teammates", {})
+        ).get(name)
+
+        if not isinstance(record, dict):
+            continue
+
+        if record.get("canonical_name") != name:
+            continue
+
+        status = str(
+            record.get("status") or ""
+        )
+
+        if status not in active_statuses:
+            continue
+
+        owner_session_id = str(
+            candidate.get("session_id") or ""
+        ).strip()
+
+        if not owner_session_id:
+            continue
+
+        matches.append(
+            (
+                owner_session_id,
+                dict(record),
+            )
+        )
+
+    if len(matches) == 1:
+        session_id, record = matches[0]
+        return session_id, record, "FOUND"
+
+    if len(matches) > 1:
+        return None, None, "AMBIGUOUS"
+
+    return None, None, "NOT_FOUND"
+
+def mark_bound_report_received(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+    source: str = "sendmessage",
+) -> bool:
+    """Mark a report received only when run/task binding still matches."""
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False
+
+        record = (
+            state.get("teammates", {})
+        ).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False
+
+        if (
+            record.get("canonical_name")
+            != teammate_name
+        ):
+            return False
+
+        prior_status = str(
+            record.get("status") or ""
+        )
+
+        if prior_status not in {
+            TeammateLifecycleStatus.RUNNING.value,
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        }:
+            return False
+
+        current_run_id = str(
+            record.get("current_run_id") or ""
+        )
+
+        current_task_id = str(
+            record.get("current_task_id") or ""
+        )
+
+        if current_run_id != str(run_id):
+            return False
+
+        if current_task_id != str(task_id):
+            return False
+
+        if record.get("result_received") is True:
+            return (
+                record.get("report_source")
+                == source
+            )
+
+        record["result_received"] = True
+        record["status"] = (
+            TeammateLifecycleStatus
+            .REPORT_RECEIVED
+            .value
+        )
+        record["report_source"] = source
+
+        return True

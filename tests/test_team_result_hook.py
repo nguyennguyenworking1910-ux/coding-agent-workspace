@@ -21,7 +21,12 @@ from runtime_state import (
     clear_state,
     STATE_DIR_ENV_VAR,
 )
-
+from team_lifecycle import (
+    TeammateLifecycleStatus,
+    allocate_teammate,
+    load_team_state,
+    mark_teammate_running,
+)
 
 class TeamResultHookTests(unittest.TestCase):
     """Test team_result_hook idempotent result delivery."""
@@ -37,6 +42,19 @@ class TeamResultHookTests(unittest.TestCase):
         os.environ["CLAUDE_TEAM_STATE_DIR"] = self.team_state_temp.name
         self.session_id = "test-session"
         self.run_id = "test-run-1"
+        self.original_pending_result_env = (
+            os.environ.get(
+                "CLAUDE_PENDING_TEAM_RESULT_DIR"
+            )
+        )
+
+        self.pending_result_temp = (
+            tempfile.TemporaryDirectory()
+        )
+
+        os.environ[
+            "CLAUDE_PENDING_TEAM_RESULT_DIR"
+        ] = self.pending_result_temp.name
 
     def tearDown(self):
         if self.original_env is None:
@@ -54,6 +72,17 @@ class TeamResultHookTests(unittest.TestCase):
         clear_state(self.session_id)
         self.temp_dir.cleanup()
         self.team_state_temp.cleanup()
+        if self.original_pending_result_env is None:
+            os.environ.pop(
+                "CLAUDE_PENDING_TEAM_RESULT_DIR",
+                None,
+            )
+        else:
+            os.environ[
+                "CLAUDE_PENDING_TEAM_RESULT_DIR"
+            ] = self.original_pending_result_env
+
+        self.pending_result_temp.cleanup()
 
     def setup_run_state(self):
         """Create run state for testing."""
@@ -521,6 +550,148 @@ class TeamResultHookTests(unittest.TestCase):
         self.assertIn("SendMessage", self.last_stderr)
         self.assertEqual(
             get_teammate_status(self.session_id, "reviewer"),
+            TeammateLifecycleStatus.RUNNING.value,
+        )
+
+    def test_tmux_pane_result_reconciles_on_teammate_idle(self):
+        lead_session_id = "lead-session"
+        pane_session_id = "reviewer-pane-session"
+
+        decision, teammate_name = allocate_teammate(
+            lead_session_id,
+            "reviewer",
+            "reviewer",
+        )
+
+        self.assertEqual(
+            teammate_name,
+            "reviewer",
+        )
+
+        self.assertTrue(
+            mark_teammate_running(
+                lead_session_id,
+                "reviewer",
+                "run-1",
+                "task-1",
+            )
+        )
+
+        sendmessage_input = {
+            "hook_event_name": "PostToolUse",
+            "session_id": pane_session_id,
+
+            # Intentionally no agent_id / agent_type.
+            "tool_name": "SendMessage",
+            "tool_use_id": "tool-send-1",
+            "tool_input": {
+                "recipient": "team-lead",
+                "content": "README review complete",
+            },
+        }
+
+        self.assertEqual(
+            self.run_hook(
+                sendmessage_input
+            ),
+            0,
+        )
+
+        team_state = load_team_state(
+            lead_session_id
+        )
+
+        self.assertEqual(
+            team_state["teammates"]["reviewer"]["status"],
+            TeammateLifecycleStatus.RUNNING.value,
+        )
+
+        idle_input = {
+            "hook_event_name": "TeammateIdle",
+            "session_id": pane_session_id,
+            "teammate_name": "reviewer",
+        }
+
+        self.assertEqual(
+            self.run_hook(
+                idle_input
+            ),
+            0,
+        )
+
+        team_state = load_team_state(
+            lead_session_id
+        )
+
+        reviewer = (
+            team_state["teammates"]["reviewer"]
+        )
+
+        self.assertEqual(
+            reviewer["status"],
+            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+        )
+
+        self.assertTrue(
+            reviewer["result_received"]
+        )
+
+        self.assertEqual(
+            reviewer["report_source"],
+            "sendmessage",
+        )
+
+        self.assertIsNone(
+            reviewer["current_run_id"]
+        )
+
+        self.assertIsNone(
+            reviewer["current_task_id"]
+        )
+
+        self.assertEqual(
+            reviewer["last_completed_task_id"],
+            "task-1",
+        )
+
+    def test_tmux_idle_without_sendmessage_stays_running(self):
+        lead_session_id = "lead-session"
+        pane_session_id = "reviewer-pane-session"
+
+        allocate_teammate(
+            lead_session_id,
+            "reviewer",
+            "reviewer",
+        )
+
+        mark_teammate_running(
+            lead_session_id,
+            "reviewer",
+            "run-1",
+            "task-1",
+        )
+
+        idle_input = {
+            "hook_event_name": "TeammateIdle",
+            "session_id": pane_session_id,
+            "teammate_name": "reviewer",
+        }
+
+        exit_code = self.run_hook(
+            idle_input
+        )
+
+        self.assertEqual(
+            exit_code,
+            2,
+        )
+
+        team_state = load_team_state(
+            lead_session_id
+        )
+
+        self.assertEqual(
+            team_state["teammates"]["reviewer"]["status"],
             TeammateLifecycleStatus.RUNNING.value,
         )
 

@@ -13,7 +13,12 @@ import pytest
 
 from app.ingestion.chat_scanner import ChatScanner, ChatScanError
 from app.ingestion.claude_transcript_loader import ClaudeTranscriptLoader
-
+RAG_SERVER_ROOT = Path(__file__).resolve().parents[1]
+INGEST_CHATS_SCRIPT = (
+    RAG_SERVER_ROOT
+    / "scripts"
+    / "ingest_chats.py"
+)
 
 class TestChatIngestionBasics:
     """Test basic chat ingestion functionality."""
@@ -26,7 +31,7 @@ class TestChatIngestionBasics:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
             ],
@@ -49,7 +54,7 @@ class TestChatIngestionBasics:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -111,7 +116,7 @@ class TestChatIngestionBasics:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--since-days",
@@ -167,7 +172,7 @@ class TestChatIngestionBasics:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -213,7 +218,7 @@ class TestChatIngestionBasics:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -263,7 +268,7 @@ class TestChatIngestionSecrets:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -314,7 +319,7 @@ class TestChatIngestionFiltering:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--session-id",
@@ -347,7 +352,7 @@ class TestChatIngestionFiltering:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--session-id",
@@ -373,7 +378,7 @@ class TestChatIngestionFiltering:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--since-days",
@@ -416,7 +421,7 @@ class TestChatIngestionFiltering:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--since-days",
@@ -470,7 +475,7 @@ class TestChatIngestionRepository:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),  # We're scanning repo1
                 "--dry-run",
@@ -530,7 +535,7 @@ class TestChatIngestionNoDatabaseCalls:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -589,7 +594,7 @@ class TestChatIngestionNoDatabaseCalls:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -645,7 +650,7 @@ class TestChatIngestionChunking:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -716,7 +721,7 @@ class TestChatIngestionStats:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -752,7 +757,7 @@ class TestChatIngestionApplyMode:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--dry-run",
@@ -776,7 +781,7 @@ class TestChatIngestionApplyMode:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--apply",
@@ -809,7 +814,7 @@ class TestChatIngestionApplyMode:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--session-id",
@@ -838,7 +843,7 @@ class TestChatIngestionApplyMode:
         result = subprocess.run(
             [
                 sys.executable,
-                "rag-server/scripts/ingest_chats.py",
+                str(INGEST_CHATS_SCRIPT),
                 "--root",
                 str(repo_root),
                 "--apply",

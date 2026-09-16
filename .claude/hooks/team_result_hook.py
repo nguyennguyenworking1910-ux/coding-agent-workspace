@@ -31,7 +31,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import locked_state  # noqa: E402
     from team_lifecycle import (  # noqa: E402
+        find_unique_active_teammate_owner,
         load_team_state,
+        mark_bound_report_received,
         mark_report_received,
         release_reported_teammate_to_idle,
     )
@@ -40,10 +42,17 @@ if __package__ in (None, ""):
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
     )
+    from tmux_result_receipt import (
+        clear_pending_result,
+        load_pending_result,
+        stage_pending_result,
+    )
 else:
     from .runtime_state import locked_state
     from .team_lifecycle import (
+        find_unique_active_teammate_owner,
         load_team_state,
+        mark_bound_report_received,
         mark_report_received,
         release_reported_teammate_to_idle,
     )
@@ -51,6 +60,11 @@ else:
         MERCHANT_MANAGER_AGENT,
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
+    )
+    from tmux_result_receipt import (
+        clear_pending_result,
+        load_pending_result,
+        stage_pending_result,
     )
 
 
@@ -223,12 +237,46 @@ def handle_post_tool_use(
     if to_field != "team-lead":
         return
 
-    teammate_name = trusted_post_tool_sender(payload)
+    message = _coalesced_text(
+        tool_input,
+        "content",
+        "message",
+    )
 
-    if not teammate_name:
+    if not message:
         return
 
-    message = _coalesced_text(tool_input, "content", "message")
+    teammate_name = trusted_post_tool_sender(
+        payload
+    )
+
+    if not teammate_name:
+        # tmux/pane-backed teammates currently have no authenticated
+        # agent_id/agent_type in PostToolUse. Do NOT trust tool_input
+        # for sender identity. Stage the successful SendMessage under
+        # this pane session and bind it later through TeammateIdle.
+        if session_id:
+            stage_pending_result(
+                session_id=session_id,
+                message=message,
+                tool_use_id=str(
+                    payload.get(
+                        "tool_use_id"
+                    )
+                    or ""
+                ),
+                task_id_hint=str(
+                    tool_input.get(
+                        "task_id"
+                    )
+                    or payload.get(
+                        "task_id"
+                    )
+                    or ""
+                ),
+            )
+
+        return
 
     if not message:
         return
@@ -278,12 +326,127 @@ def handle_teammate_idle(
         return ""
 
     if session_id:
-        released, _ = release_reported_teammate_to_idle(
-            session_id,
-            teammate_name,
+        direct_team_state = load_team_state(session_id)
+
+        if direct_team_state is not None:
+            released, _ = release_reported_teammate_to_idle(
+                session_id,
+                teammate_name,
+            )
+
+            if released:
+                return ""
+
+        # tmux fallback:
+        # TeammateIdle gives us the trusted teammate_name, while its
+        # session_id belongs to the pane. Resolve the unique lead session
+        # that currently owns this canonical teammate.
+        (
+            owner_session_id,
+            owner_record,
+            owner_resolution,
+        ) = find_unique_active_teammate_owner(
+            teammate_name
         )
 
-        if released:
+        if owner_resolution == "AMBIGUOUS":
+            return (
+                "Cannot safely reconcile this teammate because more than "
+                "one active lead session owns the same canonical teammate. "
+                "Do not start new work."
+            )
+
+        if (
+            owner_resolution == "FOUND"
+            and owner_session_id
+            and isinstance(
+                owner_record,
+                dict,
+            )
+            and str(owner_session_id) != str(session_id)
+        ):
+            pending_result = (
+                load_pending_result(
+                    session_id
+                )
+                if session_id
+                else None
+            )
+
+            if pending_result is None:
+                return MISSING_RESULT_FEEDBACK
+
+            owner_run_id = str(
+                owner_record.get(
+                    "current_run_id"
+                )
+                or ""
+            ).strip()
+
+            owner_task_id = str(
+                owner_record.get(
+                    "current_task_id"
+                )
+                or ""
+            ).strip()
+
+            if not (
+                owner_run_id
+                and owner_task_id
+            ):
+                return PENDING_RESULT_FEEDBACK
+
+            marked = mark_bound_report_received(
+                owner_session_id,
+                teammate_name,
+                owner_run_id,
+                owner_task_id,
+                "sendmessage",
+            )
+
+            if not marked:
+                return PENDING_RESULT_FEEDBACK
+
+            # Update the lead run ledger when it still exists.
+            # Stop may already have removed it, in which case team state
+            # remains the authoritative completion record.
+            if str(owner_session_id) == str(
+                session_id
+            ):
+                if state is not None:
+                    record_teammate_result(
+                        state,
+                        teammate_name,
+                        owner_task_id,
+                        "sendmessage",
+                    )
+            else:
+                with locked_state(
+                    owner_session_id
+                ) as owner_state:
+                    if owner_state is not None:
+                        record_teammate_result(
+                            owner_state,
+                            teammate_name,
+                            owner_task_id,
+                            "sendmessage",
+                        )
+
+            released, _ = (
+                release_reported_teammate_to_idle(
+                    owner_session_id,
+                    teammate_name,
+                )
+            )
+
+            if not released:
+                return PENDING_RESULT_FEEDBACK
+
+            if session_id:
+                clear_pending_result(
+                    session_id
+                )
+
             return ""
 
     current_task_id = active_task_id(session_id, teammate_name)
