@@ -61,7 +61,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "SendMessage",
+        "matcher": "SendMessage|Bash|PowerShell",
         "hooks": [
           {
             "type": "command",

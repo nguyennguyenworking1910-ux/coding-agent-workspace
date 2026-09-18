@@ -567,8 +567,23 @@ def _check_teammate_message(
     reserved, prior_status = reserve_reusable_teammate(
         session_id,
         recipient,
-        str(state.get("run_id") or ""),
+        str(
+            state.get(
+                "run_id"
+            )
+            or ""
+        ),
         task_id,
+        operations=[
+            str(operation)
+            for operation in (
+                state.get(
+                    "operations"
+                )
+                or []
+            )
+        ],
+        selected_agents=selected_agents,
     )
 
     if not reserved:
@@ -713,8 +728,23 @@ def _check_agent_dispatch(
         if not mark_teammate_running(
             session_id,
             requested_teammate_name,
-            str(state.get("run_id") or ""),
+            str(
+                state.get(
+                    "run_id"
+                )
+                or ""
+            ),
             task_id,
+            operations=[
+                str(operation)
+                for operation in (
+                    state.get(
+                        "operations"
+                    )
+                    or []
+                )
+            ],
+            selected_agents=selected_agents,
         ):
             return deny(
                 "Blocked: the new teammate could not be bound to the current "

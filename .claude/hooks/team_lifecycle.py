@@ -197,6 +197,8 @@ def init_teammate_record(
         "last_completed_task_id": None,
         "report_source": None,
         "result_received": False,
+        "authorized_operations": [],
+        "authorized_selected_agents": [],
     }
 
 
@@ -321,6 +323,8 @@ def allocate_teammate(
             record["current_task_id"] = None
             record["result_received"] = False
             record["report_source"] = None
+            record["authorized_operations"] = []
+            record["authorized_selected_agents"] = []
             return TeammateAllocationDecision.REUSE, name
 
         # Teammate exists but is busy or failed
@@ -354,8 +358,19 @@ def mark_teammate_running(
     teammate_name: str,
     run_id: str,
     task_id: str,
+    operations: list[str] | None = None,
+    selected_agents: list[str] | None = None,
 ) -> bool:
     """Mark a teammate as currently running a task. Returns success."""
+    operations_snapshot = [
+        str(operation)
+        for operation in (operations or [])
+    ]
+    selected_agents_snapshot = [
+        str(agent)
+        for agent in (selected_agents or [])
+    ]
+
     with locked_team_state(session_id) as state:
         if state is None:
             return False
@@ -366,9 +381,14 @@ def mark_teammate_running(
         if record is None:
             return False
 
+        if record.get("canonical_name") != teammate_name:
+            return False
+
         record["status"] = TeammateLifecycleStatus.RUNNING.value
         record["current_run_id"] = run_id
         record["current_task_id"] = task_id
+        record["authorized_operations"] = operations_snapshot
+        record["authorized_selected_agents"] = selected_agents_snapshot
         return True
 
 
@@ -377,12 +397,23 @@ def reserve_reusable_teammate(
     teammate_name: str,
     run_id: str,
     task_id: str,
+    operations: list[str] | None = None,
+    selected_agents: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Atomically reserve an existing idle teammate for a new run.
 
     Returns ``(reserved, prior_status)``. A reservation already owned by the
     same run/task is idempotent. A teammate owned by another run fails closed.
     """
+    operations_snapshot = [
+        str(operation)
+        for operation in (operations or [])
+    ]
+    selected_agents_snapshot = [
+        str(agent)
+        for agent in (selected_agents or [])
+    ]
+
     with locked_team_state(session_id) as state:
         if state is None:
             return False, TeammateAllocationDecision.DENIED.value
@@ -408,6 +439,27 @@ def reserve_reusable_teammate(
             and current_run_id == run_id
             and current_task_id == task_id
         ):
+            existing_operations = [
+                str(operation)
+                for operation in (
+                    record.get("authorized_operations")
+                    or []
+                )
+            ]
+            existing_selected_agents = [
+                str(agent)
+                for agent in (
+                    record.get("authorized_selected_agents")
+                    or []
+                )
+            ]
+
+            if (
+                existing_operations != operations_snapshot
+                or existing_selected_agents != selected_agents_snapshot
+            ):
+                return False, "AUTHORIZATION_MISMATCH"
+
             return True, prior_status
 
         reusable_statuses = (
@@ -427,6 +479,8 @@ def reserve_reusable_teammate(
         record["current_task_id"] = task_id
         record["result_received"] = False
         record["report_source"] = None
+        record["authorized_operations"] = operations_snapshot
+        record["authorized_selected_agents"] = selected_agents_snapshot
         return True, prior_status
 
 
@@ -490,6 +544,8 @@ def release_reported_teammate_to_idle(
         prior_status = str(record.get("status") or "UNKNOWN")
 
         if prior_status == TeammateLifecycleStatus.IDLE_REUSABLE.value:
+            record["authorized_operations"] = []
+            record["authorized_selected_agents"] = []
             return True, prior_status
 
         if prior_status not in (
@@ -514,6 +570,8 @@ def release_reported_teammate_to_idle(
         record["last_completed_task_id"] = task_id
         record["current_task_id"] = None
         record["current_run_id"] = None
+        record["authorized_operations"] = []
+        record["authorized_selected_agents"] = []
         return True, prior_status
 
 
@@ -560,6 +618,8 @@ def mark_teammate_idle_reusable(
 
         record["current_task_id"] = None
         record["current_run_id"] = None
+        record["authorized_operations"] = []
+        record["authorized_selected_agents"] = []
         return True
 
 
@@ -584,6 +644,8 @@ def mark_teammate_failed(
             record["failure_reason"] = reason
         record["current_task_id"] = None
         record["current_run_id"] = None
+        record["authorized_operations"] = []
+        record["authorized_selected_agents"] = []
         return True
 
 
