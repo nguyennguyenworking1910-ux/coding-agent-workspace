@@ -565,11 +565,26 @@ class IntentParser:
             operations,
         )
 
+        explicit_proposal_only = (
+            self._has_explicit_merchant_proposal_only(
+                normalize_text(raw_request)
+            )
+        )
+
         merchant_risk_reconciled = (
             merchant_operation
             in MERCHANT_NON_MUTATING_OPERATIONS
-            and decision.risk_level
-            == RiskLevel.WRITE
+            and local_risk
+            == RiskLevel.READ_ONLY
+            and (
+                decision.risk_level
+                == RiskLevel.WRITE
+                or (
+                    decision.risk_level
+                    == RiskLevel.EXTERNAL_WRITE
+                    and explicit_proposal_only
+                )
+            )
         )
 
         if merchant_risk_reconciled:
@@ -607,8 +622,8 @@ class IntentParser:
 
         if merchant_risk_reconciled:
             reasons.append(
-                "Merchant read/proposal risk was normalized from local "
-                "source WRITE to non-mutating operational risk"
+                "Merchant non-mutating intent reconciled model risk "
+                "to deterministic local operational risk"
             )
 
         if (
@@ -818,6 +833,29 @@ class IntentParser:
             ),
         )
 
+    @staticmethod
+    def _has_explicit_merchant_proposal_only(
+        text: str,
+    ) -> bool:
+        patterns = (
+            r"--propose\b",
+            r"\bproposal only\b",
+            r"\bpropose only\b",
+            r"\bdo not\s+(?:apply|execute|persist)\b",
+            r"\bdon'?t\s+(?:apply|execute|persist)\b",
+            r"\bwithout\s+(?:applying|executing|persisting)\b",
+            r"\bno\s+(?:apply|execution|persistence)\b",
+
+            # Vietnamese after normalize_text().
+            r"\bchi de xuat\b",
+            r"\bkhong\s+(?:ap dung|thuc thi|ghi|luu)\b",
+        )
+
+        return any(
+            re.search(pattern, text)
+            for pattern in patterns
+        )
+
     @classmethod
     def _reconcile_merchant_intent(
         cls,
@@ -835,12 +873,11 @@ class IntentParser:
             for operation in operations
             if operation in MERCHANT_OPERATIONS
         ]
-        merchant_candidates = list(model_operations)
+        merchant_candidates = list(
+            model_operations
+        )
 
-        if local_operation:
-            merchant_candidates.append(local_operation)
-
-        if not merchant_candidates:
+        if not merchant_candidates and not local_operation:
             if Domain.MERCHANT.value in domains:
                 reconciled_domains = unique_values(
                     [
@@ -871,10 +908,17 @@ class IntentParser:
                 None,
             )
 
-        merchant_operation = max(
-            merchant_candidates,
-            key=lambda operation: OPERATION_PRIORITY[operation],
-        )
+        if local_operation:
+            # Deterministic local Merchant semantics take precedence
+            # over probabilistic model classification.
+            merchant_operation = local_operation
+        else:
+            merchant_operation = max(
+                merchant_candidates,
+                key=lambda operation: OPERATION_PRIORITY[
+                    operation
+                ],
+            )
         reconciled_domains = unique_values(
             [
                 Domain.MERCHANT.value,
@@ -956,6 +1000,11 @@ class IntentParser:
             )
         ):
             return None
+
+        if IntentParser._has_explicit_merchant_proposal_only(
+            text
+        ):
+            return Operation.MERCHANT_PROPOSE.value
 
         apply_patterns = (
             r"--apply\b",

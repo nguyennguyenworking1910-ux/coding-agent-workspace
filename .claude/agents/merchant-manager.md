@@ -192,6 +192,30 @@ external operation is the allowlisted Merchant CLI boundary described above.
 When you run as an Agent Team teammate, ordinary final text in your pane is not delivered to
 the team lead. Only `SendMessage` is.
 
+### Machine-readable Merchant proposal delivery
+
+For every successful `--propose` operation, the final `SendMessage`
+must end with exactly this marker followed by the complete JSON object
+emitted by the Merchant CLI:
+
+MERCHANT_PROPOSAL_RESULT_JSON:
+<exact Merchant CLI JSON object>
+
+Requirements:
+
+- copy the complete CLI JSON object exactly as emitted;
+- do not reconstruct, summarize, rename, omit, or invent JSON fields;
+- preserve the confirmation token exactly;
+- do not wrap the JSON object in a Markdown code fence;
+- do not write any prose after the JSON object;
+- prose explanation may appear before the marker;
+- emit the marker only for a successful Merchant `PROPOSE` result;
+- never emit the marker for READ, failed proposal, or confirmed-apply output.
+
+The machine-readable block is required for orchestration to validate
+and persist the proposal receipt. A prose summary alone is not a
+proposal receipt.
+
 Before you go idle:
 
 1. If the lead gave you a shared task, mark it completed with `TaskUpdate` only after the CLI

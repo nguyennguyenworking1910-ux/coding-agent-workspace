@@ -513,6 +513,118 @@ class IntentParserTest(unittest.TestCase):
             msg="Local WRITE does not require confirmation",
         )
 
+    def test_explicit_proposal_only_overrides_model_apply(self):
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[
+                Operation.MERCHANT_APPLY,
+            ],
+            domains=[
+                Domain.MERCHANT,
+            ],
+        )
+
+        request = (
+            "Prepare a proposal only to create a Merchant account "
+            'with code GATE11_TMUX_02 and name "Gate 11 TMUX Test 02". '
+            "Use the runtime Merchant database. Proposal only. "
+            "Do not apply or persist any Merchant change."
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(request)
+
+        self.assertEqual(
+            result.operations,
+            ["merchant_propose"],
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.READ_ONLY,
+        )
+
+        self.assertEqual(
+            result.selected_agents,
+            ["merchant-manager"],
+        )
+
+        self.assertFalse(
+            result.requires_confirmation
+        )
+
+
+    def test_explicit_apply_still_remains_apply(self):
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[
+                Operation.MERCHANT_PROPOSE,
+            ],
+            domains=[
+                Domain.MERCHANT,
+            ],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Apply the previously generated Merchant proposal "
+            "to runtime now."
+        )
+
+        self.assertEqual(
+            result.operations,
+            ["merchant_apply"],
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+
+        self.assertTrue(
+            result.requires_confirmation
+        )
+
+
+    def test_proposal_only_does_not_hide_other_external_write(
+        self,
+    ):
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+            operations=[
+                Operation.MERCHANT_APPLY,
+            ],
+            domains=[
+                Domain.MERCHANT,
+            ],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Prepare a proposal only to create a Merchant account "
+            "but do not apply it, then send email with the result."
+        )
+
+        self.assertEqual(
+            result.operations,
+            ["merchant_propose"],
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.EXTERNAL_WRITE,
+        )
+
+        self.assertTrue(
+            result.requires_confirmation
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

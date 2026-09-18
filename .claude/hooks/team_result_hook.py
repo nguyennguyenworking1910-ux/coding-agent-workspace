@@ -29,7 +29,10 @@ from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from runtime_state import locked_state  # noqa: E402
+    from runtime_state import (
+        load_state,
+        locked_state,
+    )  # noqa: E402
     from team_lifecycle import (  # noqa: E402
         find_unique_active_teammate_owner,
         load_team_state,
@@ -48,7 +51,10 @@ if __package__ in (None, ""):
         stage_pending_result,
     )
 else:
-    from .runtime_state import locked_state
+    from runtime_state import (
+        load_state,
+        locked_state,
+    )
     from .team_lifecycle import (
         find_unique_active_teammate_owner,
         load_team_state,
@@ -79,7 +85,9 @@ PENDING_RESULT_FEEDBACK = (
     "Result delivery is still incomplete. Send the existing report once "
     "through SendMessage to team-lead; do not repeat the task."
 )
-
+MERCHANT_PROPOSAL_RESULT_MARKER = (
+    "MERCHANT_PROPOSAL_RESULT_JSON:"
+)
 
 def record_teammate_result(
     state: dict[str, Any],
@@ -155,8 +163,10 @@ def mark_recovery_sent(
 
     return True
 
-
-def _coalesced_text(mapping: dict[str, Any], *fields: str) -> str:
+def _coalesced_text(
+    mapping: dict[str, Any],
+    *fields: str,
+) -> str:
     """Return one unambiguous non-empty text value across alias fields."""
     values = []
 
@@ -171,11 +181,41 @@ def _coalesced_text(mapping: dict[str, Any], *fields: str) -> str:
         if text:
             values.append(text)
 
-    if not values or any(value != values[0] for value in values[1:]):
+    if (
+        not values
+        or any(
+            value != values[0]
+            for value in values[1:]
+        )
+    ):
         return ""
 
     return values[0]
 
+def send_message_body(
+    tool_input: dict[str, Any],
+) -> str:
+    """Return the canonical SendMessage report body.
+
+    Current Claude Code Agent Team payloads may expose
+    `message` as the complete report and `content` as a
+    short compatibility/display value.
+    """
+
+    message = tool_input.get("message")
+
+    if isinstance(message, str):
+        message = message.strip()
+
+        if message:
+            return message
+
+    content = tool_input.get("content")
+
+    if isinstance(content, str):
+        return content.strip()
+
+    return ""
 
 def trusted_post_tool_sender(payload: dict[str, Any]) -> str:
     """Return the harness-authenticated sender for a nested tool call.
@@ -237,10 +277,8 @@ def handle_post_tool_use(
     if to_field != "team-lead":
         return
 
-    message = _coalesced_text(
+    message = send_message_body(
         tool_input,
-        "content",
-        "message",
     )
 
     if not message:
@@ -251,30 +289,116 @@ def handle_post_tool_use(
     )
 
     if not teammate_name:
-        # tmux/pane-backed teammates currently have no authenticated
-        # agent_id/agent_type in PostToolUse. Do NOT trust tool_input
-        # for sender identity. Stage the successful SendMessage under
-        # this pane session and bind it later through TeammateIdle.
-        if session_id:
-            stage_pending_result(
-                session_id=session_id,
-                message=message,
-                tool_use_id=str(
-                    payload.get(
-                        "tool_use_id"
-                    )
-                    or ""
-                ),
-                task_id_hint=str(
-                    tool_input.get(
-                        "task_id"
-                    )
-                    or payload.get(
-                        "task_id"
-                    )
-                    or ""
-                ),
+        # Pane-backed teammates do not have agent_id, so agent_type is
+        # NOT accepted as authenticated sender identity.
+        #
+        # It is only a harness-provided role hint used to locate exactly
+        # one currently active lifecycle owner. The later TeammateIdle
+        # event still supplies the trusted canonical teammate_name.
+        tmux_role_hint = str(
+            payload.get("agent_type") or ""
+        ).strip()
+
+        if not (
+            session_id
+            and tmux_role_hint
+        ):
+            return
+
+        (
+            owner_session_id,
+            owner_record,
+            owner_resolution,
+        ) = find_unique_active_teammate_owner(
+            tmux_role_hint
+        )
+
+        if (
+            owner_resolution != "FOUND"
+            or not owner_session_id
+            or not isinstance(
+                owner_record,
+                dict,
             )
+        ):
+            return
+
+        owner_run_id = str(
+            owner_record.get(
+                "current_run_id"
+            )
+            or ""
+        ).strip()
+
+        owner_task_id = str(
+            owner_record.get(
+                "current_task_id"
+            )
+            or ""
+        ).strip()
+
+        if not (
+            owner_run_id
+            and owner_task_id
+        ):
+            return
+
+        owner_run_state = load_state(
+            owner_session_id
+        )
+
+        owner_operations: list[str] = []
+        owner_selected_agents: list[str] = []
+
+        if (
+            isinstance(
+                owner_run_state,
+                dict,
+            )
+            and str(
+                owner_run_state.get(
+                    "run_id"
+                )
+                or ""
+            ).strip()
+            == owner_run_id
+        ):
+            owner_operations = [
+                str(operation)
+                for operation in (
+                    owner_run_state.get(
+                        "operations"
+                    )
+                    or []
+                )
+            ]
+
+            owner_selected_agents = [
+                str(agent)
+                for agent in (
+                    owner_run_state.get(
+                        "selected_agents"
+                    )
+                    or []
+                )
+            ]
+
+        stage_pending_result(
+            session_id=session_id,
+            message=message,
+            tool_use_id=str(
+                payload.get(
+                    "tool_use_id"
+                )
+                or ""
+            ),
+            owner_session_id=owner_session_id,
+            teammate_name=tmux_role_hint,
+            run_id=owner_run_id,
+            task_id=owner_task_id,
+            operations=owner_operations,
+            selected_agents=owner_selected_agents,
+        )
 
         return
 
@@ -305,6 +429,64 @@ def handle_post_tool_use(
 
         if session_id:
             mark_report_received(session_id, teammate_name, task_id, "sendmessage")
+
+    proposal = merchant_proposal_from_tool_response(
+        payload
+    )
+
+    if proposal is not None:
+        role_hint = str(
+            payload.get("agent_type") or ""
+        ).strip()
+
+        if role_hint != MERCHANT_MANAGER_AGENT:
+            return
+
+        (
+            owner_session_id,
+            owner_record,
+            resolution,
+        ) = find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+
+        if (
+            resolution != "FOUND"
+            or not owner_session_id
+            or not isinstance(owner_record, dict)
+        ):
+            return
+
+        run_id = str(
+            owner_record.get("current_run_id")
+            or ""
+        ).strip()
+
+        task_id = str(
+            owner_record.get("current_task_id")
+            or ""
+        ).strip()
+
+        if not run_id or not task_id:
+            return
+
+        # Also verify current lead authorization snapshot:
+        # operations == ["merchant_propose"]
+        # selected_agents == ["merchant-manager"]
+
+        stage_pending_merchant_proposal(
+            pane_session_id=session_id,
+            owner_session_id=owner_session_id,
+            teammate_name=MERCHANT_MANAGER_AGENT,
+            run_id=run_id,
+            task_id=task_id,
+            tool_use_id=str(
+                payload.get("tool_use_id") or ""
+            ),
+            proposal=proposal,
+        )
+
+        return
 
 
 def handle_teammate_idle(
@@ -396,6 +578,42 @@ def handle_teammate_idle(
             ):
                 return PENDING_RESULT_FEEDBACK
 
+            receipt_matches_owner = (
+                str(
+                    pending_result.get(
+                        "owner_session_id"
+                    )
+                    or ""
+                ).strip()
+                == str(
+                    owner_session_id
+                ).strip()
+                and str(
+                    pending_result.get(
+                        "teammate_name"
+                    )
+                    or ""
+                ).strip()
+                == teammate_name
+                and str(
+                    pending_result.get(
+                        "run_id"
+                    )
+                    or ""
+                ).strip()
+                == owner_run_id
+                and str(
+                    pending_result.get(
+                        "task_id"
+                    )
+                    or ""
+                ).strip()
+                == owner_task_id
+            )
+
+            if not receipt_matches_owner:
+                return MISSING_RESULT_FEEDBACK
+
             marked = mark_bound_report_received(
                 owner_session_id,
                 teammate_name,
@@ -403,6 +621,38 @@ def handle_teammate_idle(
                 owner_task_id,
                 "sendmessage",
             )
+
+            if (
+                teammate_name
+                == MERCHANT_MANAGER_AGENT
+            ):
+                proposal_context = {
+                    "run_id": owner_run_id,
+                    "operations": list(
+                        pending_result.get(
+                            "operations"
+                        )
+                        or []
+                    ),
+                    "selected_agents": list(
+                        pending_result.get(
+                            "selected_agents"
+                        )
+                        or []
+                    ),
+                }
+
+                capture_merchant_proposal_from_message(
+                    proposal_context,
+                    owner_session_id,
+                    teammate_name,
+                    str(
+                        pending_result.get(
+                            "message"
+                        )
+                        or ""
+                    ),
+                )
 
             if not marked:
                 return PENDING_RESULT_FEEDBACK
@@ -503,6 +753,45 @@ def handle_teammate_idle(
         else PENDING_RESULT_FEEDBACK
     )
 
+def merchant_proposal_from_tool_response(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    if str(payload.get("tool_name") or "") not in {
+        "Bash",
+        "PowerShell",
+    }:
+        return None
+
+    response = payload.get("tool_response")
+
+    if isinstance(response, dict):
+        stdout = response.get("stdout")
+    elif isinstance(response, str):
+        stdout = response
+    else:
+        return None
+
+    if not isinstance(stdout, str):
+        return None
+
+    text = stdout.strip()
+
+    if not text:
+        return None
+
+    try:
+        candidate = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(candidate, dict):
+        return None
+
+    if validate_proposal_result(candidate) is None:
+        return None
+
+    return candidate
+
 
 def merchant_report_sender(payload: dict[str, Any]) -> str:
     """Resolve the sender only from harness-authenticated hook fields."""
@@ -534,6 +823,52 @@ def embedded_json_objects(text: str) -> list[Any]:
 
     return objects
 
+def capture_merchant_proposal_from_message(
+    state: dict[str, Any],
+    session_id: Any,
+    teammate_name: str,
+    message: str,
+) -> bool:
+    """Capture one Merchant proposal after sender/lifecycle authentication."""
+
+    if teammate_name != MERCHANT_MANAGER_AGENT:
+        return False
+
+    operations = [
+        str(operation)
+        for operation in state.get("operations") or []
+    ]
+
+    selected_agents = [
+        str(agent)
+        for agent in state.get("selected_agents") or []
+    ]
+
+    if operations != [MERCHANT_PROPOSE_OPERATION]:
+        return False
+
+    if selected_agents != [MERCHANT_MANAGER_AGENT]:
+        return False
+
+    report = str(message or "").strip()
+
+    if not report:
+        return False
+
+    candidate = (
+        merchant_proposal_candidate_from_message(
+            message
+        )
+    )
+
+    if candidate is None:
+        return False
+
+    return capture_proposal_receipt(
+        session_id,
+        candidate,
+    ).accepted
+
 
 def handle_merchant_proposal_receipt(
     state: dict[str, Any],
@@ -559,41 +894,75 @@ def handle_merchant_proposal_receipt(
     if _coalesced_text(tool_input, "recipient", "to") != "team-lead":
         return False
 
-    if merchant_report_sender(payload) != MERCHANT_MANAGER_AGENT:
+    teammate_name = merchant_report_sender(
+        payload
+    )
+
+    if teammate_name != MERCHANT_MANAGER_AGENT:
         return False
 
-    # The envelope, not the message, establishes that this session was doing
-    # exclusive Merchant proposal work.
-    operations = [
-        str(operation) for operation in state.get("operations") or []
-    ]
-    selected_agents = [
-        str(agent) for agent in state.get("selected_agents") or []
-    ]
-
-    if operations != [MERCHANT_PROPOSE_OPERATION]:
-        return False
-
-    if selected_agents != [MERCHANT_MANAGER_AGENT]:
-        return False
-
-    message = _coalesced_text(tool_input, "content", "message")
+    message = _coalesced_text(
+        tool_input,
+        "content",
+        "message",
+    )
 
     if not message:
         return False
 
-    candidates = [
-        candidate
-        for candidate in embedded_json_objects(message)
-        if "confirmation_token" in candidate
-    ]
+    return capture_merchant_proposal_from_message(
+        state,
+        session_id,
+        teammate_name,
+        message,
+    )
 
-    # More than one proposal in a single report is ambiguous about which one
-    # a later apply would mean.
-    if len(candidates) != 1:
-        return False
+def merchant_proposal_candidate_from_message(
+    message: str,
+) -> dict[str, Any] | None:
+    report = str(message or "").strip()
 
-    return capture_proposal_receipt(session_id, candidates[0]).accepted
+    if report.count(
+        MERCHANT_PROPOSAL_RESULT_MARKER
+    ) != 1:
+        return None
+
+    _, encoded = report.split(
+        MERCHANT_PROPOSAL_RESULT_MARKER,
+        1,
+    )
+
+    encoded = encoded.strip()
+
+    if not encoded:
+        return None
+
+    try:
+        candidate, end = (
+            json.JSONDecoder().raw_decode(
+                encoded
+            )
+        )
+    except json.JSONDecodeError:
+        return None
+
+    # Machine-readable proposal must be the final
+    # content after the marker.
+    if encoded[end:].strip():
+        return None
+
+    if not isinstance(candidate, dict):
+        return None
+
+    if not str(
+        candidate.get(
+            "confirmation_token"
+        )
+        or ""
+    ).strip():
+        return None
+
+    return candidate
 
 
 def main() -> int:

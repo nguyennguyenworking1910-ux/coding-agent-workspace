@@ -75,12 +75,18 @@ def stage_pending_result(
     session_id: Any,
     message: str,
     tool_use_id: str = "",
-    task_id_hint: str = "",
+    owner_session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+    operations: list[str] | None = None,
+    selected_agents: list[str] | None = None,
 ) -> bool:
-    """Stage an unbound tmux SendMessage receipt.
+    """Stage one exactly-bound tmux SendMessage receipt.
 
-    Sender identity is intentionally NOT accepted here.
-    TeammateIdle will provide the trusted teammate_name later.
+    agent_type may be used by the caller only to locate a unique
+    active owner. It is not sufficient by itself to authenticate
+    completion. TeammateIdle later confirms the canonical teammate.
     """
 
     pane_session_id = str(
@@ -89,7 +95,30 @@ def stage_pending_result(
 
     report = str(message or "").strip()
 
-    if not pane_session_id or not report:
+    bound_owner_session_id = str(
+        owner_session_id or ""
+    ).strip()
+
+    bound_teammate_name = str(
+        teammate_name or ""
+    ).strip()
+
+    bound_run_id = str(
+        run_id or ""
+    ).strip()
+
+    bound_task_id = str(
+        task_id or ""
+    ).strip()
+
+    if not (
+        pane_session_id
+        and report
+        and bound_owner_session_id
+        and bound_teammate_name
+        and bound_run_id
+        and bound_task_id
+    ):
         return False
 
     directory = pending_result_dir()
@@ -111,6 +140,16 @@ def stage_pending_result(
         timeout=LOCK_TIMEOUT_SECONDS,
     )
 
+    bound_operations = [
+        str(operation)
+        for operation in (operations or [])
+    ]
+
+    bound_selected_agents = [
+        str(agent)
+        for agent in (selected_agents or [])
+    ]
+
     payload = {
         "pane_session_id": pane_session_id,
         "recipient": "team-lead",
@@ -118,10 +157,16 @@ def stage_pending_result(
         "tool_use_id": str(
             tool_use_id or ""
         ).strip(),
-        "task_id_hint": str(
-            task_id_hint or ""
-        ).strip(),
+
+        # Exact lifecycle binding captured at SendMessage time.
+        "owner_session_id": bound_owner_session_id,
+        "teammate_name": bound_teammate_name,
+        "run_id": bound_run_id,
+        "task_id": bound_task_id,
+
         "created_at": time.time(),
+        "operations": bound_operations,
+        "selected_agents": bound_selected_agents,
     }
 
     temporary: Path | None = None
@@ -241,6 +286,57 @@ def load_pending_result(
     if not str(
         payload.get("message") or ""
     ).strip():
+        return None
+
+    binding_fields = (
+        "owner_session_id",
+        "teammate_name",
+        "run_id",
+        "task_id",
+    )
+
+    for field in binding_fields:
+        if not str(
+            payload.get(field) or ""
+        ).strip():
+            return None
+
+    operations = payload.get(
+        "operations"
+    )
+
+    selected_agents = payload.get(
+        "selected_agents"
+    )
+
+    if not isinstance(
+        operations,
+        list,
+    ):
+        return None
+
+    if not isinstance(
+        selected_agents,
+        list,
+    ):
+        return None
+
+    if any(
+        not isinstance(
+            operation,
+            str,
+        )
+        for operation in operations
+    ):
+        return None
+
+    if any(
+        not isinstance(
+            agent,
+            str,
+        )
+        for agent in selected_agents
+    ):
         return None
 
     return payload

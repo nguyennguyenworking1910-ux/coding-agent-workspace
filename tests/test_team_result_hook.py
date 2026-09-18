@@ -581,15 +581,20 @@ class TeamResultHookTests(unittest.TestCase):
             "hook_event_name": "PostToolUse",
             "session_id": pane_session_id,
 
-            # Intentionally no agent_id / agent_type.
+            # Current tmux contract:
+            # no agent_id, but harness supplies agent_type.
+            "agent_type": "reviewer",
+
             "tool_name": "SendMessage",
             "tool_use_id": "tool-send-1",
             "tool_input": {
                 "recipient": "team-lead",
-                "content": "README review complete",
+                "to": "team-lead",
+                "content": "Result delivered",
+                "message": "README review complete",
             },
         }
-
+        
         self.assertEqual(
             self.run_hook(
                 sendmessage_input
@@ -654,6 +659,37 @@ class TeamResultHookTests(unittest.TestCase):
             "task-1",
         )
 
+    def test_conflicting_recipient_aliases_are_rejected(self):
+        self.setup_run_state()
+
+        hook_input = {
+            "hook_event_name": "PostToolUse",
+            "session_id": self.session_id,
+            "agent_id": "agent-reviewer-1",
+            "agent_type": "reviewer",
+            "tool_name": "SendMessage",
+            "tool_input": {
+                "recipient": "team-lead",
+                "to": "someone-else",
+                "task_id": "task-1",
+                "message": "Complete report",
+            },
+        }
+
+        self.assertEqual(
+            self.run_hook(hook_input),
+            0,
+        )
+
+        with locked_state(
+            self.session_id
+        ) as state:
+            self.assertEqual(
+                state.get("result_ledger", {}),
+                {},
+            )
+
+
     def test_tmux_idle_without_sendmessage_stays_running(self):
         lead_session_id = "lead-session"
         pane_session_id = "reviewer-pane-session"
@@ -694,6 +730,119 @@ class TeamResultHookTests(unittest.TestCase):
             team_state["teammates"]["reviewer"]["status"],
             TeammateLifecycleStatus.RUNNING.value,
         )
+
+    def test_send_message_body_prefers_full_message(self):
+        tool_input = {
+            "recipient": "team-lead",
+            "to": "team-lead",
+            "content": (
+                "Proposal result delivered successfully."
+            ),
+            "message": (
+                "Full report\n"
+                "MERCHANT_PROPOSAL_RESULT_JSON:\n"
+                '{"success":true,'
+                '"confirmation_token":"token"}'
+            ),
+        }
+
+        self.assertEqual(
+            team_result_hook.send_message_body(
+                tool_input
+            ),
+            tool_input["message"],
+        )
+
+    def test_send_message_body_supports_legacy_content(self):
+        tool_input = {
+            "recipient": "team-lead",
+            "content": "Legacy complete report",
+        }
+
+        self.assertEqual(
+            team_result_hook.send_message_body(
+                tool_input
+            ),
+            "Legacy complete report",
+        )
+
+    def test_post_tool_use_accepts_distinct_message_and_content(
+        self,
+    ):
+        self.setup_run_state()
+
+        hook_input = {
+            "hook_event_name": "PostToolUse",
+            "session_id": self.session_id,
+            "agent_id": "agent-reviewer-1",
+            "agent_type": "reviewer",
+            "tool_name": "SendMessage",
+            "tool_input": {
+                "recipient": "team-lead",
+                "to": "team-lead",
+                "task_id": "task-1",
+                "content": "Short display text",
+                "message": "Full complete report",
+            },
+        }
+
+        self.assertEqual(
+            self.run_hook(hook_input),
+            0,
+        )
+
+        with locked_state(
+            self.session_id
+        ) as state:
+            ledger = state.get(
+                "result_ledger",
+                {},
+            )
+
+            key = (
+                f"{self.run_id}:"
+                "task-1:reviewer"
+            )
+
+            self.assertIn(
+                key,
+                ledger,
+            )
+
+    def test_conflicting_send_message_recipient_aliases_are_rejected(
+        self,
+    ):
+        self.setup_run_state()
+
+        hook_input = {
+            "hook_event_name": "PostToolUse",
+            "session_id": self.session_id,
+            "agent_id": "agent-reviewer-1",
+            "agent_type": "reviewer",
+            "tool_name": "SendMessage",
+            "tool_input": {
+                "recipient": "team-lead",
+                "to": "someone-else",
+                "task_id": "task-1",
+                "message": "Complete report",
+            },
+        }
+
+        self.assertEqual(
+            self.run_hook(hook_input),
+            0,
+        )
+
+        with locked_state(
+            self.session_id
+        ) as state:
+            self.assertEqual(
+                state.get(
+                    "result_ledger",
+                    {},
+                ),
+                {},
+            )
 
 
 class RegressionTeammateReuseCycleTests(unittest.TestCase):

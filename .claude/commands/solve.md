@@ -334,6 +334,39 @@ For an authorized Merchant assignment, require the teammate to use only the regi
 credential-free Merchant CLI interface and to include the redacted CLI JSON, exit outcome,
 confirmation state, failures, and unresolved work in its final `SendMessage` report.
 
+### Machine-readable Merchant proposal assignment contract
+
+For every assignment whose `authorized_mode` is `PROPOSE`, the lead must include
+the following result-delivery contract directly in the teammate assignment.
+Do not rely only on the static `.claude/agents/merchant-manager.md` definition,
+because an `IDLE_REUSABLE` teammate receives later work through `SendMessage`.
+
+For a successful Merchant proposal, the teammate's final `SendMessage` report
+must end with exactly:
+
+MERCHANT_PROPOSAL_RESULT_JSON:
+<exact JSON object emitted by the Merchant CLI>
+
+Requirements:
+
+- copy the complete successful CLI JSON object exactly as emitted;
+- preserve the CLI-emitted `confirmation_token` exactly in this transient
+  `SendMessage` report;
+- do not replace the token with `[REDACTED]`;
+- do not reconstruct, summarize, rename, omit, or invent JSON fields;
+- do not wrap the JSON object in a Markdown code fence;
+- prose may appear before the marker;
+- no prose or other content may appear after the JSON object;
+- emit the marker exactly once;
+- emit it only for a successful `PROPOSE` result;
+- never emit it for READ, failed proposal, or confirmed-apply output;
+- this contract applies identically to a newly created teammate and an
+  `IDLE_REUSABLE` teammate receiving its next task through `SendMessage`.
+
+The machine-readable block is required for orchestration proposal-receipt
+validation. A prose summary alone does not satisfy a successful Merchant
+proposal delivery contract.
+
 Every Merchant assignment must explicitly declare all of these fields in its prompt:
 
 - `database_target: runtime`;
@@ -393,6 +426,7 @@ Every teammate assignment must include:
 - remaining relevant limits;
 - instruction to report failures accurately;
 - the mandatory result-delivery instruction below.
+- for Merchant `PROPOSE`, the complete machine-readable Merchant proposal assignment contract from section 6;
 
 Teammates load project context, including `CLAUDE.md`, but do not inherit the lead's conversation
 history. Put all necessary task-specific context in the assignment.
