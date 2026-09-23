@@ -1117,12 +1117,51 @@ merchant list [--status ONBOARDING|ACTIVE|INACTIVE|SUSPENDED]
 ```
 Returns: Array of merchant objects (codes and names shown; contact data redacted)
 
+#### `merchant resolve --query <merchant-reference>`
+Resolve one semantic Merchant reference deterministically.
+
+```bash
+merchant resolve --query "<merchant-reference>"
+```
+Returns one machine-readable resolution result:
+
+RESOLVED — exact Merchant binding established
+AMBIGUOUS — multiple candidates; clarification required
+NOT_FOUND — no Merchant matched
+
+A downstream command that consumes merchant_id must use only a Merchant UUID
+established by a successful resolver result for the current task.
+
 #### `project list`
 List projects with optional filters
 ```bash
 project list [--merchant-id <id>] [--status PLANNED|IN_PROGRESS|BLOCKED|...]
 ```
 Returns: Array of project objects
+
+#### `project resolve --merchant-id <merchant_id> --query <project-reference>`
+Resolve one semantic Project reference deterministically inside one trusted
+Merchant scope.
+
+```bash
+project resolve \
+  --merchant-id <trusted-merchant-id> \
+  --query "<project-reference>"
+```
+
+The merchant_id must already have been established by the current task's
+successful merchant resolve.
+
+Returns one machine-readable Project resolution result:
+
+RESOLVED — exact Project binding established
+AMBIGUOUS — multiple same-Merchant candidates; clarification required
+NOT_FOUND — no Project matched inside the Merchant scope
+
+Do not use project list as a substitute for Project entity resolution.
+
+If the Project result is AMBIGUOUS or NOT_FOUND, do not invent, copy,
+select, or substitute a project_id.
 
 #### `project show <project_id>`
 Show complete project state including all active steps, document revisions, approvals, procurement
@@ -1145,12 +1184,21 @@ project blockers <project_id>
 ```
 Returns: Array of blocker objects (missing gates, failed dependencies, etc.)
 
-#### `project alerts <project_id>`
-List all alerts for a project (Phase 4A calculation only)
+#### `project alerts`
+List alerts globally or with optional Merchant / Project filters.
+
 ```bash
-project alerts <project_id>
+project alerts \
+  [<project_id>] \
+  [--merchant-id <merchant_id>] \
+  [--project-id <project_id>] \
+  [--alert-type <type>] \
+  [--due-date-before <date>]
 ```
-Returns: Array of alert objects (overdue, due-soon, blocked, missing gates)
+
+The positional project_id is retained for compatibility. Prefer
+--project-id for filtered reads. If both positional and --project-id are
+provided, they must identify the same Project.
 
 ### Write Commands
 Write commands follow a propose-apply pattern. The agent (not the CLI) controls confirmation.

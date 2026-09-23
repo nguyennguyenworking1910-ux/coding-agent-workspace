@@ -36,12 +36,13 @@ READ_COMMANDS = frozenset(
     {
         "completeness check",
         "merchant list",
+        "merchant resolve",
         "project alerts",
         "project blockers",
         "project history",
         "project list",
+        "project resolve",
         "project show",
-        "merchant resolve",
     }
 )
 

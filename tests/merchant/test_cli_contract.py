@@ -55,6 +55,7 @@ def test_command_allowlists_are_complete_and_disjoint():
         "completeness check",
         "merchant list",
         "merchant resolve",
+        "project resolve",
         "project alerts",
         "project blockers",
         "project history",

@@ -16,6 +16,7 @@ from .cli_contract import (
 from .entity_resolver import (
     resolve_merchant_entity,
 )
+from .project_entity_resolver import resolve_project_entity
 
 try:
     from claude.clients.merchant.read_repository import (
@@ -96,6 +97,29 @@ class MerchantReadCommands:
         return {
             "success": True,
             "mode": "RESOLUTION",
+            **resolution.to_dict(),
+        }
+
+    def project_resolve(
+        self,
+        *,
+        merchant_id: str,
+        query: str,
+    ) -> dict[str, Any]:
+        projects = self.repository.list_projects(
+            merchant_id=merchant_id,
+            status=None,
+        )
+
+        resolution = resolve_project_entity(
+            query,
+            merchant_id,
+            projects,
+        )
+
+        return {
+            "success": True,
+            "mode": "PROJECT_RESOLUTION",
             **resolution.to_dict(),
         }
 

@@ -94,6 +94,14 @@ if __package__ in (None, ""):
         validate_merchant_resolution_result,
         clear_pending_merchant_resolution,
     )
+    from tmux_merchant_resolution import (
+        load_pending_merchant_resolution,
+        pending_merchant_resolution_matches,
+    )
+
+    from tmux_project_resolution import (
+        stage_pending_project_resolution,
+    )
 
 else:
     from .runtime_state import (
@@ -140,6 +148,14 @@ else:
         stage_pending_merchant_resolution,
         validate_merchant_resolution_result,
         clear_pending_merchant_resolution,
+    )
+    from .tmux_merchant_resolution import (
+        load_pending_merchant_resolution,
+        pending_merchant_resolution_matches,
+    )
+
+    from .tmux_project_resolution import (
+        stage_pending_project_resolution,
     )
 
 
@@ -1143,6 +1159,401 @@ def _stage_exact_tmux_merchant_resolution(
     )
 
 
+def _stage_exact_tmux_project_resolution(
+    *,
+    payload: dict[str, Any],
+    pane_session_id: Any,
+    owner_session_id: Any,
+    teammate_name: Any,
+    run_id: Any,
+    task_id: Any,
+    authorized_operations: Any,
+) -> bool:
+    """Stage one exact Project resolution under a trusted Merchant binding."""
+
+    if not isinstance(payload, dict):
+        return False
+
+    pane_id = str(pane_session_id or "").strip()
+    owner_id = str(owner_session_id or "").strip()
+    teammate = str(teammate_name or "").strip()
+    owner_run_id = str(run_id or "").strip()
+    owner_task_id = str(task_id or "").strip()
+
+    if (
+        not pane_id
+        or not owner_id
+        or not teammate
+        or not owner_run_id
+        or not owner_task_id
+    ):
+        return False
+
+    if teammate != "merchant-manager":
+        return False
+
+    operations = [
+        str(operation).strip()
+        for operation in (authorized_operations or [])
+        if str(operation).strip()
+    ]
+
+    if len(operations) != 1:
+        return False
+
+    if operations[0] not in {
+        "merchant_read",
+        "merchant_propose",
+        "merchant_apply",
+    }:
+        return False
+
+    # -------------------------------------------------
+    # Accept only a direct Bash invocation.
+    # -------------------------------------------------
+
+    if str(payload.get("tool_name") or "").strip() != "Bash":
+        return False
+
+    tool_input = payload.get("tool_input")
+
+    if not isinstance(tool_input, dict):
+        return False
+
+    command = tool_input.get("command")
+
+    if not isinstance(command, str):
+        return False
+
+    command = command.strip()
+
+    if not command:
+        return False
+
+    # -------------------------------------------------
+    # Fail closed on shell composition.
+    #
+    # Project resolution staging must come from exactly
+    # one direct Merchant CLI command.
+    # -------------------------------------------------
+
+    forbidden_shell_tokens = (
+        "&&",
+        "||",
+        "|",
+        ";",
+        ">>",
+        ">",
+        "<",
+        "2>&1",
+        "2>>",
+        "2>",
+    )
+
+    if any(
+        token in command
+        for token in forbidden_shell_tokens
+    ):
+        return False
+
+    try:
+        tokens = shlex.split(
+            command,
+            posix=True,
+        )
+    except ValueError:
+        return False
+
+    if not tokens:
+        return False
+
+    # -------------------------------------------------
+    # Exact executable boundary:
+    #
+    # python .claude/agents/tools/merchant/agent_cli.py
+    #     project resolve ...
+    #
+    # Also permit python.exe because Windows may emit it.
+    # -------------------------------------------------
+
+    if len(tokens) < 4:
+        return False
+
+    executable = (
+        tokens[0]
+        .replace("\\", "/")
+        .lower()
+    )
+
+    if executable not in {
+        "python",
+        "python.exe",
+    }:
+        return False
+
+    script = (
+        tokens[1]
+        .replace("\\", "/")
+    )
+
+    if not script.endswith(
+        ".claude/agents/tools/"
+        "merchant/agent_cli.py"
+    ):
+        return False
+
+    cli_tokens = tokens[2:]
+
+    if (
+        len(cli_tokens) < 2
+        or cli_tokens[0] != "project"
+        or cli_tokens[1] != "resolve"
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Parse exactly:
+    #
+    # --merchant-id <UUID>
+    # --query <reference>
+    #
+    # No extra flags.
+    # -------------------------------------------------
+
+    merchant_id: str | None = None
+    query: str | None = None
+
+    seen_merchant_id = False
+    seen_query = False
+
+    index = 2
+
+    while index < len(cli_tokens):
+        token = cli_tokens[index]
+
+        if token == "--merchant-id":
+            if (
+                seen_merchant_id
+                or index + 1 >= len(cli_tokens)
+            ):
+                return False
+
+            merchant_id = str(
+                cli_tokens[index + 1]
+            ).strip()
+
+            if not merchant_id:
+                return False
+
+            seen_merchant_id = True
+            index += 2
+            continue
+
+        if token.startswith("--merchant-id="):
+            if seen_merchant_id:
+                return False
+
+            merchant_id = (
+                token.split("=", 1)[1]
+                .strip()
+            )
+
+            if not merchant_id:
+                return False
+
+            seen_merchant_id = True
+            index += 1
+            continue
+
+        if token == "--query":
+            if (
+                seen_query
+                or index + 1 >= len(cli_tokens)
+            ):
+                return False
+
+            query = str(
+                cli_tokens[index + 1]
+            ).strip()
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 2
+            continue
+
+        if token.startswith("--query="):
+            if seen_query:
+                return False
+
+            query = (
+                token.split("=", 1)[1]
+                .strip()
+            )
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 1
+            continue
+
+        # Unknown/extra argument.
+        return False
+
+    if (
+        merchant_id is None
+        or query is None
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Trusted Merchant parent binding.
+    # -------------------------------------------------
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return False
+
+    if not pending_merchant_resolution_matches(
+        merchant_receipt,
+        owner_session_id=owner_id,
+        teammate_name=teammate,
+        run_id=owner_run_id,
+        task_id=owner_task_id,
+    ):
+        return False
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return False
+
+    if (
+        merchant_resolution.get("status")
+        != "RESOLVED"
+    ):
+        return False
+
+    if (
+        merchant_resolution.get("resolved")
+        is not True
+    ):
+        return False
+
+    trusted_merchant_id = str(
+        merchant_resolution.get(
+            "merchant_id"
+        )
+        or ""
+    ).strip()
+
+    if not trusted_merchant_id:
+        return False
+
+    if merchant_id != trusted_merchant_id:
+        return False
+
+    # -------------------------------------------------
+    # Exact JSON stdout only.
+    # -------------------------------------------------
+
+    tool_response = payload.get(
+        "tool_response"
+    )
+
+    if not isinstance(
+        tool_response,
+        dict,
+    ):
+        return False
+
+    stdout = tool_response.get(
+        "stdout"
+    )
+
+    if not isinstance(stdout, str):
+        return False
+
+    stdout = stdout.strip()
+
+    if not stdout:
+        return False
+
+    try:
+        project_resolution = json.loads(
+            stdout
+        )
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
+
+    if not isinstance(
+        project_resolution,
+        dict,
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Exact CLI command ↔ CLI result binding.
+    # -------------------------------------------------
+
+    if (
+        project_resolution.get(
+            "merchant_id"
+        )
+        != trusted_merchant_id
+    ):
+        return False
+
+    if (
+        project_resolution.get(
+            "query"
+        )
+        != query
+    ):
+        return False
+
+    tool_use_id = str(
+        payload.get(
+            "tool_use_id"
+        )
+        or ""
+    ).strip()
+
+    if not tool_use_id:
+        return False
+
+    # tmux_project_resolution performs the complete
+    # RESOLVED / AMBIGUOUS / NOT_FOUND schema validation.
+    return stage_pending_project_resolution(
+        pane_session_id=pane_id,
+        owner_session_id=owner_id,
+        teammate_name=teammate,
+        run_id=owner_run_id,
+        task_id=owner_task_id,
+        merchant_id=trusted_merchant_id,
+        resolution=project_resolution,
+        tool_use_id=tool_use_id,
+    )
+
+
 def _clear_merchant_resolution_after_release(
     session_id: Any,
     teammate_name: str,
@@ -1675,6 +2086,265 @@ def _stage_exact_tmux_merchant_completeness(
             or ""
         ).strip(),
         result=result,
+    )
+
+
+def _project_resolve_invocation(
+    command: Any,
+) -> tuple[str, str] | None:
+    """Parse one exact direct project-resolve Merchant CLI invocation."""
+
+    if not isinstance(
+        command,
+        str,
+    ):
+        return None
+
+    command = command.strip()
+
+    if not command:
+        return None
+
+    # -------------------------------------------------
+    # Tokenize while exposing shell control operators.
+    #
+    # Quoted text remains quoted data, while real:
+    #
+    # |  ||  &&  ;  >  >>  <
+    #
+    # becomes punctuation tokens and can be rejected.
+    # -------------------------------------------------
+
+    try:
+        lexer = shlex.shlex(
+            command,
+            posix=True,
+            punctuation_chars="|&;<>",
+        )
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+
+        tokens = list(lexer)
+
+    except ValueError:
+        return None
+
+    if not tokens:
+        return None
+
+    forbidden_shell_tokens = {
+        "|",
+        "||",
+        "&",
+        "&&",
+        ";",
+        ">",
+        ">>",
+        "<",
+        "<<",
+    }
+
+    if any(
+        token in forbidden_shell_tokens
+        for token in tokens
+    ):
+        return None
+
+    # -------------------------------------------------
+    # Find exactly one Merchant agent_cli.py.
+    #
+    # Supports:
+    # python .claude/agents/tools/merchant/agent_cli.py
+    # python.exe ...
+    # .\.venv\Scripts\python.exe ...
+    # -------------------------------------------------
+
+    script_indexes = [
+        index
+        for index, token
+        in enumerate(tokens)
+        if (
+            token.replace(
+                "\\",
+                "/",
+            ).endswith(
+                ".claude/agents/tools/"
+                "merchant/agent_cli.py"
+            )
+        )
+    ]
+
+    if len(script_indexes) != 1:
+        return None
+
+    script_index = script_indexes[0]
+
+    # agent_cli.py must not be the executable itself.
+    if script_index == 0:
+        return None
+
+    executable = (
+        tokens[
+            script_index - 1
+        ]
+        .replace(
+            "\\",
+            "/",
+        )
+        .lower()
+    )
+
+    if not (
+        executable == "python"
+        or executable == "python.exe"
+        or executable.endswith(
+            "/python.exe"
+        )
+        or executable.endswith(
+            "/python"
+        )
+    ):
+        return None
+
+    cli_tokens = tokens[
+        script_index + 1:
+    ]
+
+    if (
+        len(cli_tokens) < 4
+        or cli_tokens[0:2]
+        != [
+            "project",
+            "resolve",
+        ]
+    ):
+        return None
+
+    merchant_id: str | None = None
+    query: str | None = None
+
+    seen_merchant_id = False
+    seen_query = False
+
+    index = 2
+
+    while index < len(
+        cli_tokens
+    ):
+        token = cli_tokens[index]
+
+        # ---------------------------------------------
+        # --merchant-id VALUE
+        # ---------------------------------------------
+
+        if token == "--merchant-id":
+            if (
+                seen_merchant_id
+                or index + 1
+                >= len(cli_tokens)
+            ):
+                return None
+
+            merchant_id = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not merchant_id:
+                return None
+
+            seen_merchant_id = True
+            index += 2
+            continue
+
+        # ---------------------------------------------
+        # --merchant-id=VALUE
+        # ---------------------------------------------
+
+        if token.startswith(
+            "--merchant-id="
+        ):
+            if seen_merchant_id:
+                return None
+
+            merchant_id = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not merchant_id:
+                return None
+
+            seen_merchant_id = True
+            index += 1
+            continue
+
+        # ---------------------------------------------
+        # --query VALUE
+        # ---------------------------------------------
+
+        if token == "--query":
+            if (
+                seen_query
+                or index + 1
+                >= len(cli_tokens)
+            ):
+                return None
+
+            query = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not query:
+                return None
+
+            seen_query = True
+            index += 2
+            continue
+
+        # ---------------------------------------------
+        # --query=VALUE
+        # ---------------------------------------------
+
+        if token.startswith(
+            "--query="
+        ):
+            if seen_query:
+                return None
+
+            query = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not query:
+                return None
+
+            seen_query = True
+            index += 1
+            continue
+
+        # Unknown / additional argument.
+        return None
+
+    if (
+        merchant_id is None
+        or query is None
+    ):
+        return None
+
+    return (
+        merchant_id,
+        query,
     )
 
 

@@ -351,6 +351,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--allow-reopen",
         action="store_true",
     )
+    project_resolve = project_actions.add_parser("resolve")
+    project_resolve.add_argument(
+        "--merchant-id",
+        required=True,
+    )
+    project_resolve.add_argument(
+        "--query",
+        required=True,
+    )
 
     step_parser = resources.add_parser("step")
     step_actions = step_parser.add_subparsers(
@@ -544,6 +553,11 @@ def dispatch_read_command(
     if command == "merchant resolve":
         return commands.merchant_resolve(
             args.query
+        )
+    if command == "project resolve":
+        return commands.project_resolve(
+            merchant_id=args.merchant_id,
+            query=args.query,
         )
     if command == "project list":
         return commands.project_list(

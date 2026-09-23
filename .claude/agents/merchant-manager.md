@@ -85,12 +85,13 @@ Only these read commands are authorized:
 | Request | CLI command |
 |---|---|
 | List merchants | `merchant list` |
-| List projects | `project list` |
-| Show one project | `project show` |
-| Show project audit history | `project history` |
-| Show project blockers | `project blockers` |
-| Show project alerts | `project alerts` |
 | Resolve Merchant reference | `merchant resolve --query "<merchant-reference>"` |
+| List projects | `project list` |
+| Resolve Project reference | `project resolve --merchant-id <trusted-merchant-id> --query "<project-reference>"` |
+| Show one project | `project show <project_id>` |
+| Show project audit history | `project history <project_id>` |
+| Show project blockers | `project blockers <project_id>` |
+| Show project alerts | `project alerts [<project_id>] [--merchant-id <merchant_id>] [--project-id <project_id>]` |
 
 For a read assignment:
 

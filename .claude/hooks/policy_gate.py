@@ -61,8 +61,16 @@ if __package__ in (None, ""):
     )
 
     from merchant_resolution_gate import (  # noqa: E402
-        BOUND,
+        BOUND as PROJECT_BOUND,
         bind_merchant_resolution_receipt,
+    )
+    from tmux_project_resolution import (
+        load_pending_project_resolution,
+    )
+
+    from project_resolution_gate import (
+        BOUND,
+        bind_project_resolution_receipt,
     )
 
 else:
@@ -93,8 +101,16 @@ else:
     )
 
     from .merchant_resolution_gate import (
-        BOUND,
+        BOUND as PROJECT_BOUND,
         bind_merchant_resolution_receipt,
+    )
+    from .tmux_project_resolution import (
+        load_pending_project_resolution,
+    )
+
+    from .project_resolution_gate import (
+        BOUND,
+        bind_project_resolution_receipt,
     )
 
 HOOK_EVENT_NAME = "PreToolUse"
@@ -489,6 +505,29 @@ def _canonical_merchant_uuid(
         return None
 
 
+def _canonical_project_uuid(
+    value: Any,
+) -> str | None:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return None
+
+    try:
+        return str(
+            uuid.UUID(
+                value.strip()
+            )
+        )
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
 def _merchant_id_from_cli_tokens(
     tokens: tuple[str, ...],
 ) -> tuple[str, str | None]:
@@ -572,6 +611,249 @@ def _merchant_id_from_cli_tokens(
         return (
             command,
             first_argument,
+        )
+
+    return command, None
+
+
+def _project_id_from_cli_tokens(
+    tokens: tuple[str, ...],
+) -> tuple[str, str | None]:
+    """Return normalized command and consumed Project id.
+
+    Supported Project-id forms:
+
+    Positional required:
+        project show <project_id>
+        project history <project_id>
+        project blockers <project_id>
+        project update <project_id>
+        document revision-create <project_id>
+        procurement update <project_id>
+
+    Project alerts compatibility forms:
+        project alerts <project_id>
+        project alerts --project-id <project_id>
+        project alerts --project-id=<project_id>
+
+    Optional positional Project scope:
+        integration identifier-set <merchant_id> [project_id]
+
+    Return semantics:
+
+    None
+        command does not consume a Project id.
+
+    ""
+        command attempted to consume a Project id but the invocation is
+        malformed or conflicting. Caller must fail closed.
+
+    UUID/text
+        supplied Project id to canonicalize and bind.
+    """
+
+    if len(tokens) < 4:
+        return "", None
+
+    command = (
+        f"{tokens[2]} {tokens[3]}"
+        .strip()
+        .lower()
+    )
+
+    arguments = tokens[4:]
+
+    # ------------------------------------------------------------
+    # Required positional Project-id commands.
+    # ------------------------------------------------------------
+
+    positional_project_commands = frozenset(
+        {
+            "project show",
+            "project history",
+            "project blockers",
+            "project update",
+            "document revision-create",
+            "procurement update",
+        }
+    )
+
+    if (
+        command
+        in positional_project_commands
+    ):
+        if not arguments:
+            return command, ""
+
+        project_id = arguments[0]
+
+        if project_id.startswith("-"):
+            return command, ""
+
+        return (
+            command,
+            project_id,
+        )
+
+    # ------------------------------------------------------------
+    # project alerts
+    #
+    # CLI contract:
+    #
+    # project alerts [legacy_project_id]
+    #                [--merchant-id UUID]
+    #                [--project-id UUID]
+    #                [...]
+    #
+    # Both positional and --project-id are accepted for backwards
+    # compatibility. If both exist they must identify the same
+    # Project; otherwise fail closed before argparse/command logic.
+    # ------------------------------------------------------------
+
+    if command == "project alerts":
+        legacy_project_id: str | None = None
+        filtered_project_id: str | None = None
+
+        if (
+            arguments
+            and not arguments[0].startswith("-")
+        ):
+            legacy_project_id = (
+                arguments[0]
+            )
+
+        index = 0
+
+        while index < len(
+            arguments
+        ):
+            token = arguments[index]
+
+            if token == "--project-id":
+                if filtered_project_id is not None:
+                    return command, ""
+
+                if (
+                    index + 1
+                    >= len(arguments)
+                ):
+                    return command, ""
+
+                value = str(
+                    arguments[
+                        index + 1
+                    ]
+                ).strip()
+
+                if (
+                    not value
+                    or value.startswith("-")
+                ):
+                    return command, ""
+
+                filtered_project_id = (
+                    value
+                )
+
+                index += 2
+                continue
+
+            if token.startswith(
+                "--project-id="
+            ):
+                if filtered_project_id is not None:
+                    return command, ""
+
+                value = (
+                    token.split(
+                        "=",
+                        1,
+                    )[1]
+                    .strip()
+                )
+
+                if not value:
+                    return command, ""
+
+                filtered_project_id = (
+                    value
+                )
+
+                index += 1
+                continue
+
+            index += 1
+
+        if (
+            legacy_project_id is not None
+            and filtered_project_id is not None
+            and legacy_project_id
+            != filtered_project_id
+        ):
+            return command, ""
+
+        if filtered_project_id is not None:
+            return (
+                command,
+                filtered_project_id,
+            )
+
+        if legacy_project_id is not None:
+            return (
+                command,
+                legacy_project_id,
+            )
+
+        # Global / merchant-filtered alert read.
+        # No Project binding required.
+        return command, None
+
+    # ------------------------------------------------------------
+    # integration identifier-set
+    #
+    # CLI contract:
+    #
+    # integration identifier-set
+    #     <merchant_id>
+    #     [project_id]
+    #     --type ...
+    #     --value ...
+    #     --scope ...
+    #
+    # merchant_id is enforced independently by Gate 12D.
+    # Project binding is required only when optional project_id exists.
+    # ------------------------------------------------------------
+
+    if (
+        command
+        == "integration identifier-set"
+    ):
+        if not arguments:
+            # Merchant gate will reject the missing merchant id.
+            return command, None
+
+        merchant_id = arguments[0]
+
+        if merchant_id.startswith("-"):
+            # Again, Merchant gate owns this invalidity.
+            return command, None
+
+        if len(arguments) < 2:
+            return command, None
+
+        possible_project_id = (
+            arguments[1]
+        )
+
+        if possible_project_id.startswith(
+            "-"
+        ):
+            # Merchant-scoped identifier only.
+            return command, None
+
+        return (
+            command,
+            possible_project_id,
         )
 
     return command, None
@@ -834,6 +1116,393 @@ def merchant_resolution_use_decision(
             "Blocked: --merchant-id does not match the exact Merchant "
             "resolved for this run/task. Do not copy or substitute a UUID "
             "from merchant list, prose, memory, or assignment text."
+        )
+
+    return None
+
+
+def project_resolution_use_decision(
+    payload: dict[str, Any],
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Require trusted Project resolver evidence before consuming project_id."""
+
+    sender_agent_type = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if (
+        sender_agent_type
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    tool_name = str(
+        payload.get(
+            "tool_name"
+        )
+        or ""
+    ).strip()
+
+    if tool_name not in {
+        "Bash",
+        "PowerShell",
+    }:
+        return None
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return None
+
+    command_text_value = (
+        tool_input.get(
+            "command"
+        )
+    )
+
+    tokens = (
+        _direct_merchant_agent_cli_tokens(
+            command_text_value
+        )
+    )
+
+    # ------------------------------------------------------------
+    # A Merchant CLI reference that is not one direct invocation
+    # must not bypass Project binding.
+    #
+    # This mirrors Merchant entity enforcement.
+    # ------------------------------------------------------------
+
+    if tokens is None:
+        raw_command = str(
+            command_text_value
+            or ""
+        )
+
+        normalized_raw = (
+            raw_command
+            .replace(
+                "\\",
+                "/",
+            )
+            .lower()
+        )
+
+        if (
+            "agents/tools/merchant/agent_cli.py"
+            in normalized_raw
+        ):
+            return deny(
+                "Blocked: Merchant CLI must be invoked directly. "
+                "Wrapper scripts, pipelines, redirects, shell chaining, "
+                "and reconstructed Merchant commands cannot consume "
+                "trusted Project entity bindings."
+            )
+
+        return None
+
+    (
+        merchant_command,
+        supplied_project_id,
+    ) = _project_id_from_cli_tokens(
+        tokens
+    )
+
+    # ------------------------------------------------------------
+    # Resolver itself establishes the Project evidence.
+    # ------------------------------------------------------------
+
+    if (
+        merchant_command
+        == "project resolve"
+    ):
+        return None
+
+    # ------------------------------------------------------------
+    # This command does not consume project_id within the 12E.6
+    # command surface.
+    #
+    # project alerts and integration identifier-set are completed
+    # separately in Gate 12E.7.
+    # ------------------------------------------------------------
+
+    if supplied_project_id is None:
+        return None
+
+    canonical_supplied_project_id = (
+        _canonical_project_uuid(
+            supplied_project_id
+        )
+    )
+
+    if (
+        canonical_supplied_project_id
+        is None
+    ):
+        return deny(
+            "Blocked: project_id must be a canonical Project UUID."
+        )
+
+    # ------------------------------------------------------------
+    # Find exact active Merchant task owner.
+    # ------------------------------------------------------------
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return deny(
+            "Blocked: Project entity binding has no unique active "
+            "Merchant task owner."
+        )
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return deny(
+            "Blocked: Project entity binding has no exact run/task identity."
+        )
+
+    pane_session_id = str(
+        session_id
+        or ""
+    ).strip()
+
+    if not pane_session_id:
+        return deny(
+            "Blocked: Project entity binding requires a session identity."
+        )
+
+    # ------------------------------------------------------------
+    # Step 1:
+    # Re-bind the trusted parent Merchant.
+    #
+    # The Project receipt must NEVER become a new source of Merchant
+    # authority by itself.
+    # ------------------------------------------------------------
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_session_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return deny(
+            "Blocked: Project binding requires an exact parent "
+            "Merchant resolver receipt. Run "
+            "`merchant resolve --query <merchant-reference>` first."
+        )
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: parent Merchant resolver evidence is malformed."
+        )
+
+    merchant_expected_query = (
+        merchant_resolution.get(
+            "query"
+        )
+    )
+
+    merchant_binding = (
+        bind_merchant_resolution_receipt(
+            merchant_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            expected_query=(
+                merchant_expected_query
+            ),
+        )
+    )
+
+    if (
+        not merchant_binding.accepted
+        or merchant_binding.outcome
+        != BOUND
+        or not merchant_binding.merchant_id
+    ):
+        reason = (
+            merchant_binding.question
+            or (
+                "parent Merchant resolver evidence does not establish "
+                "an exact trusted Merchant binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    trusted_merchant_id = (
+        merchant_binding.merchant_id
+    )
+
+    # ------------------------------------------------------------
+    # Step 2:
+    # Load exact Project receipt.
+    # ------------------------------------------------------------
+
+    project_receipt = (
+        load_pending_project_resolution(
+            pane_session_id
+        )
+    )
+
+    if project_receipt is None:
+        return deny(
+            "Blocked: this Merchant command consumes project_id "
+            "without an exact Project resolver receipt. Run "
+            "`project resolve --merchant-id <trusted-merchant-id> "
+            "--query <project-reference>` first."
+        )
+
+    project_resolution = (
+        project_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        project_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: Project resolver evidence is malformed."
+        )
+
+    project_expected_query = (
+        project_resolution.get(
+            "query"
+        )
+    )
+
+    # ------------------------------------------------------------
+    # Step 3:
+    # Bind Project under the exact already-bound Merchant.
+    # ------------------------------------------------------------
+
+    project_binding = (
+        bind_project_resolution_receipt(
+            project_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            trusted_merchant_id=(
+                trusted_merchant_id
+            ),
+            expected_query=(
+                project_expected_query
+            ),
+        )
+    )
+
+    if (
+        not project_binding.accepted
+        or project_binding.outcome
+        != PROJECT_BOUND
+    ):
+        reason = (
+            project_binding.question
+            or (
+                "Project resolver evidence does not authorize "
+                "an exact Project entity binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    # ------------------------------------------------------------
+    # Step 4:
+    # Exact command ↔ Project binding equality.
+    # ------------------------------------------------------------
+
+    if (
+        project_binding.project_id
+        != canonical_supplied_project_id
+    ):
+        return deny(
+            "Blocked: project_id does not match the exact Project "
+            "resolved for this run/task and Merchant. Do not copy or "
+            "substitute a Project UUID from project list, prose, memory, "
+            "assignment text, or another Merchant."
         )
 
     return None
@@ -1750,6 +2419,26 @@ def main() -> int:
         print(
             json.dumps(
                 resolution_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
+    project_resolution_decision = (
+        project_resolution_use_decision(
+            payload,
+            session_id,
+        )
+    )
+
+    if (
+        project_resolution_decision
+        is not None
+    ):
+        print(
+            json.dumps(
+                project_resolution_decision,
                 ensure_ascii=False,
             )
         )
