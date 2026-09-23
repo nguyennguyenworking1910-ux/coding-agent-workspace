@@ -35,10 +35,19 @@ from typing import Any, Iterator
 
 from filelock import FileLock, Timeout
 
+if __package__ in (None, ""):
+    from runtime_state import load_state as load_run_state
+else:
+    from .runtime_state import load_state as load_run_state
+
+
+STALE_OWNER_TIMEOUT_SECONDS = 3600
 CLAUDE_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = CLAUDE_DIR.parent
 
 DEFAULT_TEAM_STATE_DIR = CLAUDE_DIR / "runtime" / "team_state"
+
+GLOBAL_OWNER_LOCK_NAME = ".global-owner.lock"
 
 # Override for tests
 TEAM_STATE_DIR_ENV_VAR = "CLAUDE_TEAM_STATE_DIR"
@@ -68,6 +77,17 @@ class TeammateLifecycleStatus(str, Enum):
     FAILED = "FAILED"
 
 
+GLOBAL_OWNER_STATUSES = frozenset(
+    {
+        TeammateLifecycleStatus.CREATED.value,
+        TeammateLifecycleStatus.DISPATCHED.value,
+        TeammateLifecycleStatus.RUNNING.value,
+        TeammateLifecycleStatus.REPORT_RECEIVED.value,
+        TeammateLifecycleStatus.ACKNOWLEDGED.value,
+    }
+)
+
+
 class TeammateAllocationDecision(str, Enum):
     """Decision for allocating a teammate: create, reuse, busy, or denied."""
     CREATE = "CREATE"
@@ -92,6 +112,203 @@ def team_lock_path(session_id: Any) -> Path:
     """Path to the lock file for a team state document."""
     safe_id = _sanitize_session_id(session_id)
     return team_state_dir() / f"{safe_id}.json.lock"
+
+
+def global_owner_lock_path() -> Path:
+    """Global lock protecting canonical teammate ownership decisions."""
+    return (
+        team_state_dir()
+        / GLOBAL_OWNER_LOCK_NAME
+    )
+
+
+def _touch_transition(
+    record: dict[str, Any],
+) -> None:
+    record["last_transition_at"] = time.time()
+    
+
+def _record_is_expired(
+    record: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> bool:
+    """Return True only for a valid timestamp older than the lease."""
+
+    raw_timestamp = record.get(
+        "last_transition_at"
+    )
+
+    try:
+        timestamp = float(
+            raw_timestamp
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        # Missing/malformed timestamp fails closed.
+        return False
+
+    current_time = (
+        time.time()
+        if now is None
+        else now
+    )
+
+    age = (
+        current_time
+        - timestamp
+    )
+
+    if age < 0:
+        return False
+
+    return (
+        age
+        > STALE_OWNER_TIMEOUT_SECONDS
+    )
+
+
+def _other_session_owns_teammate(
+    session_id: Any,
+    teammate_name: str,
+) -> tuple[bool, str | None]:
+    """Return whether another session actively owns this canonical teammate.
+
+    Caller must hold the global ownership lock.
+
+    IDLE_REUSABLE and FAILED are intentionally not global ownership states.
+    """
+
+    name = str(
+        teammate_name or ""
+    ).strip()
+
+    if not name:
+        return False, None
+
+    directory = team_state_dir()
+
+    current_state_path = (
+        team_state_path(
+            session_id
+        )
+    )
+
+    try:
+        paths = list(
+            directory.glob("*.json")
+        )
+    except OSError:
+        # Fail closed at the caller if ownership cannot be inspected.
+        raise
+
+    for path in paths:
+        if path == current_state_path:
+            continue
+
+        try:
+            candidate = json.loads(
+                path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (
+            OSError,
+            json.JSONDecodeError,
+        ):
+            continue
+
+        if not isinstance(
+            candidate,
+            dict,
+        ):
+            continue
+
+        record = (
+            candidate.get(
+                "teammates",
+                {},
+            ).get(
+                name
+            )
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            continue
+
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != name
+        ):
+            continue
+
+        status = str(
+            record.get(
+                "status"
+            )
+            or ""
+        )
+
+        if (
+            status
+            not in GLOBAL_OWNER_STATUSES
+        ):
+            continue
+
+        owner_session_id = str(
+            candidate.get(
+                "session_id"
+            )
+            or ""
+        ).strip()
+
+        owner_run_id = str(
+            record.get(
+                "current_run_id"
+            )
+            or ""
+        ).strip()
+
+        owner_task_id = str(
+            record.get(
+                "current_task_id"
+            )
+            or ""
+        ).strip()
+
+        # A malformed active ownership record is still unsafe.
+        if not owner_session_id:
+            return True, None
+
+        if (
+            _record_is_expired(
+                record
+            )
+            and _reconcile_stale_owner(
+                owner_session_id,
+                name,
+                expected_run_id=owner_run_id,
+                expected_task_id=owner_task_id,
+            )
+        ):
+            # Ownership was safely converted to FAILED.
+            # Continue searching in case another legitimate
+            # owner exists.
+            continue
+
+        return (
+            True,
+            owner_session_id,
+        )
+
+    return False, None
 
 
 def _sanitize_session_id(session_id: Any) -> str:
@@ -197,10 +414,163 @@ def init_teammate_record(
         "last_completed_task_id": None,
         "report_source": None,
         "result_received": False,
+        "terminal_recovery_sent": False,
+        "last_transition_at": time.time(),
         "authorized_operations": [],
         "authorized_selected_agents": [],
     }
 
+
+def _reconcile_stale_owner(
+    owner_session_id: str,
+    teammate_name: str,
+    *,
+    expected_run_id: str,
+    expected_task_id: str,
+) -> bool:
+    """Fail an expired owner only when its exact run state is gone.
+
+    Caller must hold the global ownership lock.
+
+    Returns True only when the stale ownership was safely reconciled.
+    """
+
+    # -------------------------------------------------
+    # A matching run state means we do not currently
+    # have enough evidence that this owner is abandoned.
+    # Keep it BUSY even if the lifecycle transition is old.
+    # -------------------------------------------------
+
+    run_state = load_run_state(
+        owner_session_id
+    )
+
+    if run_state is not None:
+        current_run_id = str(
+            run_state.get(
+                "run_id"
+            )
+            or ""
+        ).strip()
+
+        # Malformed run state does not provide enough evidence
+        # for safe reclamation.
+        if not current_run_id:
+            return False
+
+        # Exact matching run remains authoritative/live.
+        if (
+            current_run_id
+            == expected_run_id
+        ):
+            return False
+
+        # A different current run does NOT validate the old
+        # teammate ownership. Continue with the stale-record
+        # checks below.
+
+    with locked_team_state(
+        owner_session_id
+    ) as state:
+        if state is None:
+            return False
+
+        record = (
+            state.get(
+                "teammates",
+                {},
+            ).get(
+                teammate_name
+            )
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            return False
+
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != teammate_name
+        ):
+            return False
+
+        status = str(
+            record.get(
+                "status"
+            )
+            or ""
+        )
+
+        if (
+            status
+            not in GLOBAL_OWNER_STATUSES
+        ):
+            return False
+
+        current_run_id = str(
+            record.get(
+                "current_run_id"
+            )
+            or ""
+        ).strip()
+
+        current_task_id = str(
+            record.get(
+                "current_task_id"
+            )
+            or ""
+        ).strip()
+
+        # Revalidate exact state after acquiring the
+        # per-session lock. Never reclaim a task that
+        # changed while we were inspecting it.
+        if (
+            current_run_id
+            != expected_run_id
+            or current_task_id
+            != expected_task_id
+        ):
+            return False
+
+        if not _record_is_expired(
+            record
+        ):
+            return False
+
+        record["status"] = (
+            TeammateLifecycleStatus.FAILED.value
+        )
+
+        record[
+            "failure_reason"
+        ] = "STALE_GLOBAL_OWNER"
+
+        record[
+            "current_run_id"
+        ] = None
+
+        record[
+            "current_task_id"
+        ] = None
+
+        record[
+            "authorized_operations"
+        ] = []
+
+        record[
+            "authorized_selected_agents"
+        ] = []
+
+        _touch_transition(
+            record
+        )
+
+        return True
+    
 
 @contextmanager
 def locked_team_state(
@@ -281,54 +651,340 @@ def allocate_teammate(
     session_id: Any,
     role: str,
     canonical_name: str,
-) -> tuple[TeammateAllocationDecision, str]:
+) -> tuple[
+    TeammateAllocationDecision,
+    str,
+]:
+    """Atomically allocate one canonical teammate.
+
+    Global ownership is checked before local session allocation so two
+    concurrent lead sessions cannot both own the same canonical teammate.
+
+    An expired owner may be reconciled by
+    `_other_session_owns_teammate()` before this allocation proceeds.
+
+    Returns:
+        (decision, teammate_name)
+
+    Decisions:
+        CREATE:
+            No teammate exists in this session and no other active session
+            owns the canonical teammate.
+
+        REUSE:
+            This session already has the canonical teammate in
+            IDLE_REUSABLE state.
+
+        BUSY:
+            Another session actively owns the canonical teammate, or this
+            session already has the teammate in a non-reusable state.
+
+        DENIED:
+            Ownership/state locking or inspection could not be completed
+            safely.
     """
-    Allocate a teammate for a role with explicit decision.
 
-    Returns (decision, teammate_name).
-    - CREATE: no teammate exists; ready to create one
-    - REUSE: canonical teammate exists and is idle; ready to reuse
-    - BUSY: canonical teammate exists but is currently active
-    - DENIED: lock timeout; unable to acquire team state; fail closed
+    session_text = str(
+        session_id or ""
+    ).strip()
 
-    The teammate_name is always returned for reference, even when BUSY or DENIED.
-    """
-    with locked_team_state(session_id) as state:
-        if state is None:
-            # Lock timeout, unable to acquire state
-            return TeammateAllocationDecision.DENIED, canonical_name
+    role_text = str(
+        role or ""
+    ).strip()
 
-        teammates = state.get("teammates", {})
-        existing = None
+    canonical_text = str(
+        canonical_name or ""
+    ).strip()
 
-        for name, record in teammates.items():
-            if record.get("role") == role:
-                existing = (name, record)
-                break
+    if not (
+        session_text
+        and role_text
+        and canonical_text
+    ):
+        return (
+            TeammateAllocationDecision.DENIED,
+            canonical_text,
+        )
 
-        if existing is None:
-            # No teammate for this role exists, create one
-            record = init_teammate_record(role, canonical_name)
-            teammates[canonical_name] = record
-            state["teammates"] = teammates
-            return TeammateAllocationDecision.CREATE, canonical_name
+    directory = team_state_dir()
 
-        name, record = existing
-        status = record.get("status", "")
+    try:
+        directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+    except OSError:
+        return (
+            TeammateAllocationDecision.DENIED,
+            canonical_text,
+        )
 
-        if status == TeammateLifecycleStatus.IDLE_REUSABLE.value:
-            # Teammate is idle/reusable, mark as reused
-            record["status"] = TeammateLifecycleStatus.DISPATCHED.value
-            record["current_run_id"] = None
-            record["current_task_id"] = None
-            record["result_received"] = False
-            record["report_source"] = None
-            record["authorized_operations"] = []
-            record["authorized_selected_agents"] = []
-            return TeammateAllocationDecision.REUSE, name
+    try:
+        global_lock = FileLock(
+            str(
+                global_owner_lock_path()
+            ),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
-        # Teammate exists but is busy or failed
-        return TeammateAllocationDecision.BUSY, name
+        with global_lock:
+            # --------------------------------------------------
+            # Global canonical ownership gate.
+            #
+            # `_other_session_owns_teammate()` may reconcile an
+            # expired owner when:
+            #
+            # - its lifecycle lease is expired; and
+            # - its run state no longer exists; and
+            # - its exact run/task binding is unchanged.
+            #
+            # If ownership remains valid or cannot be safely
+            # reclaimed, fail closed as BUSY.
+            # --------------------------------------------------
+
+            (
+                owned_elsewhere,
+                _owner_session_id,
+            ) = _other_session_owns_teammate(
+                session_text,
+                canonical_text,
+            )
+
+            if owned_elsewhere:
+                return (
+                    TeammateAllocationDecision.BUSY,
+                    canonical_text,
+                )
+
+            # --------------------------------------------------
+            # Global ownership is clear.
+            # Now inspect/update this session atomically.
+            # --------------------------------------------------
+
+            with locked_team_state(
+                session_text
+            ) as state:
+                if state is None:
+                    return (
+                        TeammateAllocationDecision.DENIED,
+                        canonical_text,
+                    )
+
+                teammates = state.get(
+                    "teammates"
+                )
+
+                if not isinstance(
+                    teammates,
+                    dict,
+                ):
+                    teammates = {}
+
+                    state[
+                        "teammates"
+                    ] = teammates
+
+                existing_name = None
+                existing_record = None
+
+                # --------------------------------------------------
+                # Role-level uniqueness inside one session.
+                # --------------------------------------------------
+
+                for (
+                    teammate_name,
+                    record,
+                ) in teammates.items():
+                    if not isinstance(
+                        record,
+                        dict,
+                    ):
+                        continue
+
+                    if (
+                        str(
+                            record.get(
+                                "role"
+                            )
+                            or ""
+                        ).strip()
+                        == role_text
+                    ):
+                        existing_name = str(
+                            teammate_name
+                        )
+
+                        existing_record = (
+                            record
+                        )
+
+                        break
+
+                # --------------------------------------------------
+                # No teammate for this role exists in the session.
+                #
+                # CREATE itself reserves global ownership because
+                # CREATED belongs to GLOBAL_OWNER_STATUSES.
+                # --------------------------------------------------
+
+                if (
+                    existing_record
+                    is None
+                ):
+                    record = (
+                        init_teammate_record(
+                            role_text,
+                            canonical_text,
+                        )
+                    )
+
+                    teammates[
+                        canonical_text
+                    ] = record
+
+                    state[
+                        "teammates"
+                    ] = teammates
+
+                    return (
+                        TeammateAllocationDecision.CREATE,
+                        canonical_text,
+                    )
+
+                # --------------------------------------------------
+                # Existing role must use its canonical name.
+                # Never silently substitute/suffix another teammate.
+                # --------------------------------------------------
+
+                if (
+                    existing_name
+                    != canonical_text
+                ):
+                    return (
+                        TeammateAllocationDecision.BUSY,
+                        existing_name
+                        or canonical_text,
+                    )
+
+                if (
+                    existing_record.get(
+                        "canonical_name"
+                    )
+                    != canonical_text
+                ):
+                    return (
+                        TeammateAllocationDecision.BUSY,
+                        canonical_text,
+                    )
+
+                status = str(
+                    existing_record.get(
+                        "status"
+                    )
+                    or ""
+                )
+
+                # --------------------------------------------------
+                # Existing completed teammate may be reserved for
+                # the next run.
+                #
+                # This is only the allocation phase. Exact run/task
+                # binding is completed later by
+                # `reserve_reusable_teammate()`.
+                # --------------------------------------------------
+
+                if (
+                    status
+                    == (
+                        TeammateLifecycleStatus
+                        .IDLE_REUSABLE
+                        .value
+                    )
+                ):
+                    existing_record[
+                        "status"
+                    ] = (
+                        TeammateLifecycleStatus
+                        .DISPATCHED
+                        .value
+                    )
+
+                    existing_record[
+                        "current_run_id"
+                    ] = None
+
+                    existing_record[
+                        "current_task_id"
+                    ] = None
+
+                    existing_record[
+                        "result_received"
+                    ] = False
+
+                    existing_record[
+                        "report_source"
+                    ] = None
+
+                    existing_record[
+                        "terminal_recovery_sent"
+                    ] = False
+
+                    existing_record[
+                        "authorized_operations"
+                    ] = []
+
+                    existing_record[
+                        "authorized_selected_agents"
+                    ] = []
+
+                    existing_record.pop(
+                        "failure_reason",
+                        None,
+                    )
+
+                    _touch_transition(
+                        existing_record
+                    )
+
+                    return (
+                        TeammateAllocationDecision.REUSE,
+                        canonical_text,
+                    )
+
+                # --------------------------------------------------
+                # Any other local lifecycle state is not reusable.
+                #
+                # Includes:
+                # CREATED
+                # DISPATCHED
+                # RUNNING
+                # REPORT_RECEIVED
+                # ACKNOWLEDGED
+                # FAILED
+                #
+                # FAILED deliberately does not automatically become
+                # reusable. Recovery requires a separate controlled
+                # lifecycle decision.
+                # --------------------------------------------------
+
+                return (
+                    TeammateAllocationDecision.BUSY,
+                    canonical_text,
+                )
+
+    except Timeout:
+        return (
+            TeammateAllocationDecision.DENIED,
+            canonical_text,
+        )
+
+    except OSError:
+        # Ownership/state inspection failure must never create
+        # another canonical teammate.
+        return (
+            TeammateAllocationDecision.DENIED,
+            canonical_text,
+        )
 
 
 def get_or_create_teammate(
@@ -361,34 +1017,99 @@ def mark_teammate_running(
     operations: list[str] | None = None,
     selected_agents: list[str] | None = None,
 ) -> bool:
-    """Mark a teammate as currently running a task. Returns success."""
+    """Mark a teammate as currently running a task.
+
+    This transition also refreshes the global-owner lease timestamp.
+    Returns True only when the exact canonical teammate record was updated.
+    """
+
     operations_snapshot = [
         str(operation)
-        for operation in (operations or [])
-    ]
-    selected_agents_snapshot = [
-        str(agent)
-        for agent in (selected_agents or [])
+        for operation in (
+            operations or []
+        )
     ]
 
-    with locked_team_state(session_id) as state:
+    selected_agents_snapshot = [
+        str(agent)
+        for agent in (
+            selected_agents or []
+        )
+    ]
+
+    with locked_team_state(
+        session_id
+    ) as state:
         if state is None:
             return False
 
-        teammates = state.get("teammates", {})
-        record = teammates.get(teammate_name)
+        teammates = state.get(
+            "teammates",
+            {},
+        )
 
-        if record is None:
+        record = teammates.get(
+            teammate_name
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
             return False
 
-        if record.get("canonical_name") != teammate_name:
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != teammate_name
+        ):
             return False
 
-        record["status"] = TeammateLifecycleStatus.RUNNING.value
-        record["current_run_id"] = run_id
-        record["current_task_id"] = task_id
-        record["authorized_operations"] = operations_snapshot
-        record["authorized_selected_agents"] = selected_agents_snapshot
+        record["status"] = (
+            TeammateLifecycleStatus.RUNNING.value
+        )
+
+        record[
+            "current_run_id"
+        ] = run_id
+
+        record[
+            "current_task_id"
+        ] = task_id
+
+        record[
+            "result_received"
+        ] = False
+
+        record[
+            "report_source"
+        ] = None
+
+        record[
+            "terminal_recovery_sent"
+        ] = False
+
+        record[
+            "authorized_operations"
+        ] = operations_snapshot
+
+        record[
+            "authorized_selected_agents"
+        ] = selected_agents_snapshot
+
+        record.pop(
+            "failure_reason",
+            None,
+        )
+
+        # Critical for Gate 12B.5:
+        # RUNNING is a real lifecycle transition and therefore
+        # must refresh the global-owner lease timestamp.
+        _touch_transition(
+            record
+        )
+
         return True
 
 
@@ -400,88 +1121,205 @@ def reserve_reusable_teammate(
     operations: list[str] | None = None,
     selected_agents: list[str] | None = None,
 ) -> tuple[bool, str]:
-    """Atomically reserve an existing idle teammate for a new run.
+    """Atomically reserve an existing idle teammate for a new run."""
 
-    Returns ``(reserved, prior_status)``. A reservation already owned by the
-    same run/task is idempotent. A teammate owned by another run fails closed.
-    """
     operations_snapshot = [
         str(operation)
-        for operation in (operations or [])
+        for operation in (
+            operations or []
+        )
     ]
+
     selected_agents_snapshot = [
         str(agent)
-        for agent in (selected_agents or [])
+        for agent in (
+            selected_agents or []
+        )
     ]
 
-    with locked_team_state(session_id) as state:
-        if state is None:
-            return False, TeammateAllocationDecision.DENIED.value
+    directory = team_state_dir()
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-        record = state.get("teammates", {}).get(teammate_name)
+    try:
+        global_lock = FileLock(
+            str(
+                global_owner_lock_path()
+            ),
+            timeout=LOCK_TIMEOUT_SECONDS,
+        )
 
-        if not isinstance(record, dict):
-            return False, "DOES_NOT_EXIST"
-
-        if record.get("canonical_name") != teammate_name:
-            return False, "NON_CANONICAL"
-
-        prior_status = str(record.get("status") or "UNKNOWN")
-        current_run_id = str(record.get("current_run_id") or "")
-        current_task_id = str(record.get("current_task_id") or "")
-
-        if (
-            prior_status
-            in (
-                TeammateLifecycleStatus.DISPATCHED.value,
-                TeammateLifecycleStatus.RUNNING.value,
+        with global_lock:
+            (
+                owned_elsewhere,
+                _owner_session_id,
+            ) = _other_session_owns_teammate(
+                session_id,
+                teammate_name,
             )
-            and current_run_id == run_id
-            and current_task_id == task_id
-        ):
-            existing_operations = [
-                str(operation)
-                for operation in (
-                    record.get("authorized_operations")
-                    or []
+
+            if owned_elsewhere:
+                return (
+                    False,
+                    TeammateAllocationDecision.BUSY.value,
                 )
-            ]
-            existing_selected_agents = [
-                str(agent)
-                for agent in (
-                    record.get("authorized_selected_agents")
-                    or []
+
+            with locked_team_state(
+                session_id
+            ) as state:
+                if state is None:
+                    return (
+                        False,
+                        TeammateAllocationDecision.DENIED.value,
+                    )
+
+                record = (
+                    state.get(
+                        "teammates",
+                        {},
+                    ).get(
+                        teammate_name
+                    )
                 )
-            ]
 
-            if (
-                existing_operations != operations_snapshot
-                or existing_selected_agents != selected_agents_snapshot
-            ):
-                return False, "AUTHORIZATION_MISMATCH"
+                if not isinstance(
+                    record,
+                    dict,
+                ):
+                    return (
+                        False,
+                        "DOES_NOT_EXIST",
+                    )
 
-            return True, prior_status
+                if (
+                    record.get(
+                        "canonical_name"
+                    )
+                    != teammate_name
+                ):
+                    return (
+                        False,
+                        "NON_CANONICAL",
+                    )
 
-        reusable_statuses = (
-            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+                prior_status = str(
+                    record.get(
+                        "status"
+                    )
+                    or "UNKNOWN"
+                )
+
+                current_run_id = str(
+                    record.get(
+                        "current_run_id"
+                    )
+                    or ""
+                )
+
+                current_task_id = str(
+                    record.get(
+                        "current_task_id"
+                    )
+                    or ""
+                )
+
+                if (
+                    prior_status
+                    in (
+                        TeammateLifecycleStatus.DISPATCHED.value,
+                        TeammateLifecycleStatus.RUNNING.value,
+                    )
+                    and current_run_id == run_id
+                    and current_task_id == task_id
+                ):
+                    existing_operations = [
+                        str(operation)
+                        for operation in (
+                            record.get(
+                                "authorized_operations"
+                            )
+                            or []
+                        )
+                    ]
+
+                    existing_selected_agents = [
+                        str(agent)
+                        for agent in (
+                            record.get(
+                                "authorized_selected_agents"
+                            )
+                            or []
+                        )
+                    ]
+
+                    if (
+                        existing_operations
+                        != operations_snapshot
+                        or existing_selected_agents
+                        != selected_agents_snapshot
+                    ):
+                        return (
+                            False,
+                            "AUTHORIZATION_MISMATCH",
+                        )
+
+                    return (
+                        True,
+                        prior_status,
+                    )
+
+                reusable_statuses = (
+                    TeammateLifecycleStatus.IDLE_REUSABLE.value,
+                )
+
+                unbound_dispatch = (
+                    prior_status
+                    == TeammateLifecycleStatus.DISPATCHED.value
+                    and not current_run_id
+                    and not current_task_id
+                )
+
+                if (
+                    prior_status
+                    not in reusable_statuses
+                    and not unbound_dispatch
+                ):
+                    return (
+                        False,
+                        prior_status,
+                    )
+
+                record["status"] = (TeammateLifecycleStatus.RUNNING.value                )
+                record["current_run_id"] = run_id
+                record["current_task_id"] = task_id
+                record["result_received"] = False
+                record["report_source"] = None
+                record["terminal_recovery_sent"] = False
+                record["authorized_operations"] = operations_snapshot
+                record["authorized_selected_agents"] = selected_agents_snapshot
+
+                _touch_transition(
+                    record
+                )
+
+                return (
+                    True,
+                    prior_status,
+                )
+
+    except Timeout:
+        return (
+            False,
+            TeammateAllocationDecision.DENIED.value,
         )
-        unbound_dispatch = (
-            prior_status == TeammateLifecycleStatus.DISPATCHED.value
-            and not current_run_id
-            and not current_task_id
+
+    except OSError:
+        return (
+            False,
+            TeammateAllocationDecision.DENIED.value,
         )
-
-        if prior_status not in reusable_statuses and not unbound_dispatch:
-            return False, prior_status
-
-        record["status"] = TeammateLifecycleStatus.RUNNING.value
-        record["current_run_id"] = run_id
-        record["current_task_id"] = task_id
-        record["result_received"] = False
-        record["report_source"] = None
-        record["authorized_operations"] = operations_snapshot
-        record["authorized_selected_agents"] = selected_agents_snapshot
-        return True, prior_status
 
 
 def mark_report_received(
@@ -572,6 +1410,11 @@ def release_reported_teammate_to_idle(
         record["current_run_id"] = None
         record["authorized_operations"] = []
         record["authorized_selected_agents"] = []
+
+        _touch_transition(
+            record
+        )
+        
         return True, prior_status
 
 
@@ -622,6 +1465,87 @@ def mark_teammate_idle_reusable(
         record["authorized_selected_agents"] = []
         return True
 
+def claim_terminal_recovery(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> tuple[bool, str]:
+    """Allow at most one recovery turn for an invalid terminal report.
+
+    This is distinct from result-delivery recovery:
+
+    - result-delivery recovery means no SendMessage was received;
+    - terminal recovery means SendMessage was received, but the
+      machine-readable terminal contract is invalid or incomplete.
+
+    The claim is bound to the exact canonical teammate, run, and task.
+    """
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = (
+            state.get("teammates", {})
+            .get(teammate_name)
+        )
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get("canonical_name")
+            != teammate_name
+        ):
+            return False, "NON_CANONICAL"
+
+        current_run_id = str(
+            record.get("current_run_id")
+            or ""
+        ).strip()
+
+        current_task_id = str(
+            record.get("current_task_id")
+            or ""
+        ).strip()
+
+        if (
+            current_run_id != str(run_id).strip()
+            or current_task_id != str(task_id).strip()
+        ):
+            return False, "BINDING_MISMATCH"
+
+        if (
+            record.get("result_received")
+            is not True
+            or record.get("report_source")
+            != "sendmessage"
+        ):
+            return False, "REPORT_NOT_RECEIVED"
+
+        status = str(
+            record.get("status")
+            or ""
+        )
+
+        if status not in (
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        ):
+            return False, status or "INVALID_STATUS"
+
+        if record.get(
+            "terminal_recovery_sent"
+        ):
+            return False, "ALREADY_SENT"
+
+        record[
+            "terminal_recovery_sent"
+        ] = True
+
+        return True, "RECOVERY_CLAIMED"
+    
 
 def mark_teammate_failed(
     session_id: Any,
@@ -704,11 +1628,7 @@ def find_unique_active_teammate_owner(
     except OSError:
         return None, None, "NOT_FOUND"
 
-    active_statuses = {
-        TeammateLifecycleStatus.RUNNING.value,
-        TeammateLifecycleStatus.REPORT_RECEIVED.value,
-        TeammateLifecycleStatus.ACKNOWLEDGED.value,
-    }
+    active_statuses = GLOBAL_OWNER_STATUSES
 
     for path in paths:
         try:
@@ -764,6 +1684,7 @@ def find_unique_active_teammate_owner(
 
     return None, None, "NOT_FOUND"
 
+
 def mark_bound_report_received(
     session_id: Any,
     teammate_name: str,
@@ -815,6 +1736,8 @@ def mark_bound_report_received(
         if current_task_id != str(task_id):
             return False
 
+        # Idempotent duplicate delivery:
+        # do not extend the lease again for the same already-recorded report.
         if record.get("result_received") is True:
             return (
                 record.get("report_source")
@@ -822,11 +1745,18 @@ def mark_bound_report_received(
             )
 
         record["result_received"] = True
+
         record["status"] = (
             TeammateLifecycleStatus
             .REPORT_RECEIVED
             .value
         )
+
         record["report_source"] = source
+
+        # REPORT_RECEIVED is a real lifecycle transition.
+        _touch_transition(
+            record
+        )
 
         return True

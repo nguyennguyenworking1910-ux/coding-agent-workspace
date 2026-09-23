@@ -7,6 +7,7 @@ import argparse
 import csv
 import sys
 import uuid
+import json
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -63,6 +64,12 @@ try:
         MerchantRepository,
         MerchantRepositoryError,
     )
+    from claude.agents.tools.merchant.completeness import (
+        StatefulCompletenessContext,
+        build_clarification_payload,
+        validate_stateful_write_completeness,
+        validate_write_completeness,
+    )
 except ModuleNotFoundError:
     CLAUDE_ROOT = Path(__file__).resolve().parents[3]
 
@@ -118,6 +125,12 @@ except ModuleNotFoundError:
         MerchantRepository,
         MerchantRepositoryError,
     )
+    from agents.tools.merchant.completeness import (  # type: ignore
+        StatefulCompletenessContext,
+        build_clarification_payload,
+        validate_stateful_write_completeness,
+        validate_write_completeness,
+    )
 
 
 CommandFactory = Callable[[str], MerchantReadCommands]
@@ -170,6 +183,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--status",
         type=_upper,
         choices=tuple(sorted(MERCHANT_ACCOUNT_STATUSES)),
+    )
+    merchant_resolve = merchant_actions.add_parser(
+        "resolve"
+    )
+    merchant_resolve.add_argument(
+        "--query",
+        required=True,
     )
     merchant_create = merchant_actions.add_parser("create")
     _add_write_mode(merchant_create)
@@ -471,6 +491,44 @@ def build_argument_parser() -> argparse.ArgumentParser:
     identifier_set.add_argument("--triggered-by")
     identifier_set.add_argument("--identifier-id")
 
+    completeness_parser = resources.add_parser(
+        "completeness"
+    )
+
+    completeness_actions = (
+        completeness_parser.add_subparsers(
+            dest="action",
+            required=True,
+        )
+    )
+
+    completeness_check = (
+        completeness_actions.add_parser(
+            "check"
+        )
+    )
+
+    completeness_check.add_argument(
+        "--command",
+        dest="write_command",
+        choices=tuple(
+            sorted(
+                WRITE_COMMANDS
+            )
+        ),
+        required=True,
+    )
+
+    completeness_check.add_argument(
+        "--payload-json",
+        type=_json_object,
+        required=True,
+    )
+
+    completeness_check.add_argument(
+        "--context-json",
+        type=_json_object,
+    )
     return parser
 
 
@@ -482,7 +540,11 @@ def dispatch_read_command(
 
     if command == "merchant list":
         return commands.merchant_list(status=args.status)
-
+    
+    if command == "merchant resolve":
+        return commands.merchant_resolve(
+            args.query
+        )
     if command == "project list":
         return commands.project_list(
             merchant_id=args.merchant_id,
@@ -562,6 +624,60 @@ def dispatch_write_command(
         )
 
     raise ValueError("Write mode must be PROPOSE or APPLY")
+
+
+def dispatch_completeness_command(
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    values = args.payload_json
+
+    if args.context_json is None:
+        result = (
+            validate_write_completeness(
+                args.write_command,
+                values,
+            )
+        )
+    else:
+        context = (
+            _completeness_context(
+                args.context_json
+            )
+        )
+
+        result = (
+            validate_stateful_write_completeness(
+                args.write_command,
+                values,
+                context,
+            )
+        )
+
+    clarification = (
+        build_clarification_payload(
+            result
+        )
+    )
+
+    return {
+        "success": True,
+        "mode": "COMPLETENESS",
+        "command": result.command,
+        "complete": result.complete,
+        "missing_fields": list(
+            result.missing_fields
+        ),
+        "missing_one_of": [
+            list(group)
+            for group
+            in result.missing_one_of
+        ],
+        "clarification": (
+            None
+            if clarification is None
+            else clarification.to_dict()
+        ),
+    }
 
 
 def build_write_payload(
@@ -750,6 +866,115 @@ def build_write_commands(database: str) -> MerchantWriteCommands:
     return build_repository_write_commands(database)
 
 
+def _json_object(
+    value: str,
+) -> dict[str, Any]:
+    try:
+        parsed = json.loads(
+            value
+        )
+    except json.JSONDecodeError as error:
+        raise argparse.ArgumentTypeError(
+            "value must be a JSON object"
+        ) from error
+
+    if not isinstance(
+        parsed,
+        dict,
+    ):
+        raise argparse.ArgumentTypeError(
+            "value must be a JSON object"
+        )
+
+    return parsed
+
+
+def _completeness_context(
+    value: dict[str, Any],
+) -> StatefulCompletenessContext:
+    allowed_fields = {
+        "current_record_exists",
+        "active_document_types",
+    }
+
+    unknown_fields = (
+        set(value)
+        - allowed_fields
+    )
+
+    if unknown_fields:
+        raise ValueError(
+            "Unsupported completeness context fields: "
+            + ", ".join(
+                sorted(
+                    unknown_fields
+                )
+            )
+        )
+
+    current_record_exists = (
+        value.get(
+            "current_record_exists"
+        )
+    )
+
+    if (
+        current_record_exists
+        is not None
+        and not isinstance(
+            current_record_exists,
+            bool,
+        )
+    ):
+        raise ValueError(
+            "current_record_exists must be "
+            "true, false, or null"
+        )
+
+    active_document_types = (
+        value.get(
+            "active_document_types",
+            [],
+        )
+    )
+
+    if not isinstance(
+        active_document_types,
+        list,
+    ):
+        raise ValueError(
+            "active_document_types must be an array"
+        )
+
+    normalized_types: list[str] = []
+
+    for item in active_document_types:
+        if (
+            not isinstance(
+                item,
+                str,
+            )
+            or not item.strip()
+        ):
+            raise ValueError(
+                "active_document_types entries "
+                "must be non-empty strings"
+            )
+
+        normalized_types.append(
+            item.strip().upper()
+        )
+
+    return StatefulCompletenessContext(
+        current_record_exists=(
+            current_record_exists
+        ),
+        active_document_types=tuple(
+            normalized_types
+        ),
+    )
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -765,10 +990,27 @@ def main(
     )
 
     try:
-        if command in READ_COMMANDS:
-            factory = command_factory or build_read_commands
-            commands = factory(database)
-            result = dispatch_read_command(args, commands)
+        if command == "completeness check":
+            result = (
+                dispatch_completeness_command(
+                    args
+                )
+            )
+
+        elif command in READ_COMMANDS:
+            factory = (
+                command_factory
+                or build_read_commands
+            )
+
+            commands = factory(
+                database
+            )
+
+            result = dispatch_read_command(
+                args,
+                commands,
+            )
         elif command in WRITE_COMMANDS:
             factory = (
                 write_command_factory

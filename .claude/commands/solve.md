@@ -203,6 +203,11 @@ For an existing reusable teammate, the direct semantic instruction is:
 > Send the new bounded assignment to the existing canonical teammate with
 > `SendMessage`. Do not invoke `Agent`, create another pane, or add a suffix.
 
+Whether the assignment goes to a newly created teammate or an existing
+`IDLE_REUSABLE` teammate, the same result-delivery contract applies. After
+successful completion, keep the existing teammate reusable, receiving its next task through `SendMessage`
+rather than creating a replacement teammate.
+
 The following are forbidden:
 
 - calling `Agent` without a teammate `name` or without Agent Team teammate mode;
@@ -274,6 +279,57 @@ addition to the envelope gate and normal dispatch contract:
 - The proposal hash binds a command, runtime target, and payload. It is not permission, a
   credential, or a substitute for confirmation.
 
+### Merchant dispatch command authority
+
+For `merchant_propose`, the team lead authorizes the Merchant operation but does not author
+Merchant CLI syntax.
+
+When dispatching `merchant-manager`:
+
+- preserve the user's semantic objective and raw request;
+- preserve `operation: merchant_propose`;
+- preserve `database_target: runtime`;
+- declare `authorized_mode: PROPOSE`;
+- do not invent, reconstruct, translate, normalize, or guess a concrete Merchant CLI command;
+- do not provide guessed CLI flags, aliases, positional arguments, resource names, or action names;
+- do not instruct the teammate to execute a write command before deterministic completeness;
+- do not treat a natural-language Merchant action as if its CLI spelling were authoritative;
+- do not convert a semantic action into a CLI command in the lead assignment.
+
+In particular, never synthesize assignment text such as:
+
+```text
+python .claude/agents/tools/merchant/agent_cli.py <guessed-write-command> --propose
+```
+
+The `merchant-manager` owns normalization against its registered Merchant write families and
+must run the deterministic completeness gate before any proposal or write-field clarification.
+
+A bounded Merchant proposal assignment must describe the action semantically, for example:
+
+```text
+Objective: Create a new document revision for merchant CGV.
+
+Raw request: "For merchant CGV, create a new document revision."
+Operation: merchant_propose
+Database target: runtime
+Authorized mode: PROPOSE
+
+Resolve the normalized Merchant write command using the registered Merchant contract.
+Resolve only authoritative state available through allowlisted Merchant reads.
+Run deterministic completeness before either asking for write-field clarification or
+executing --propose.
+
+Do not apply any Merchant mutation.
+Do not use database or credential overrides.
+```
+
+The lead must never override the Merchant CLI contract with assignment-generated command syntax.
+
+If the semantic action itself is unclear, preserve that ambiguity in the assignment. The
+`merchant-manager` then uses its existing `action_semantics` clarification path. The lead must
+not choose one write family merely to make the assignment executable.
+
 For a confirmed apply assignment, include exactly one block in this form, copying every value
 from the injected `merchant_confirmation` object without reconstructing or changing it:
 
@@ -341,51 +397,153 @@ the following result-delivery contract directly in the teammate assignment.
 Do not rely only on the static `.claude/agents/merchant-manager.md` definition,
 because an `IDLE_REUSABLE` teammate receives later work through `SendMessage`.
 
-For a successful Merchant proposal, the teammate's final `SendMessage` report
-must end with exactly:
+The assignment must state that `TEAM_RESULT_JSON` describes what actually happened,
+not what the teammate was authorized to attempt.
+
+Allowed outcomes are:
+
+- `PROPOSAL_READY`
+- `REQUIRES_CLARIFICATION`
+- `BLOCKED`
+- `FAILED`
+
+For `PROPOSAL_READY`, require:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "PROPOSAL_READY",
+  "operation": "merchant_propose",
+  "database_target": "runtime",
+  "proposal_emitted": true
+}
 
 MERCHANT_PROPOSAL_RESULT_JSON:
 <exact JSON object emitted by the Merchant CLI>
+```
 
 Requirements:
 
+- the exact Merchant CLI proposal must already have been emitted successfully;
 - copy the complete successful CLI JSON object exactly as emitted;
 - preserve the CLI-emitted `confirmation_token` exactly in this transient
   `SendMessage` report;
 - do not replace the token with `[REDACTED]`;
 - do not reconstruct, summarize, rename, omit, or invent JSON fields;
 - do not wrap the JSON object in a Markdown code fence;
-- prose may appear before the marker;
-- no prose or other content may appear after the JSON object;
-- emit the marker exactly once;
-- emit it only for a successful `PROPOSE` result;
-- never emit it for READ, failed proposal, or confirmed-apply output;
-- this contract applies identically to a newly created teammate and an
-  `IDLE_REUSABLE` teammate receiving its next task through `SendMessage`.
+- prose may appear before `MERCHANT_PROPOSAL_RESULT_JSON:`;
+- no prose or other content may appear after the exact proposal JSON object;
+- emit the proposal marker exactly once;
+- never emit it for READ, failed proposal, completeness clarification, or
+  confirmed-apply output.
 
-The machine-readable block is required for orchestration proposal-receipt
-validation. A prose summary alone does not satisfy a successful Merchant
-proposal delivery contract.
+For deterministic completeness clarification, require:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "REQUIRES_CLARIFICATION",
+  "operation": "merchant_propose",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "missing_fields": ["<exact CLI-emitted direct missing field>"],
+  "missing_one_of": [
+    ["<exact alternative field 1>", "<exact alternative field 2>"]
+  ],
+  "question": "<exact CLI-emitted clarification.question>"
+}
+```
+
+Rules:
+
+- preserve `missing_fields` exactly as emitted by the completeness CLI;
+- preserve `missing_one_of` exactly as emitted by the completeness CLI;
+- `missing_fields` may be empty when requirements are represented entirely by
+  `missing_one_of`;
+- `missing_one_of` may be empty when all requirements are direct fields;
+- at least one of the two collections must be non-empty;
+- preserve the CLI-emitted clarification question exactly;
+- do not rewrite, paraphrase, broaden, narrow, reorder, add, or remove requirements;
+- do not emit `MERCHANT_PROPOSAL_RESULT_JSON` for clarification.
+
+For a pre-command action-semantics clarification, require:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "REQUIRES_CLARIFICATION",
+  "operation": "merchant_propose",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "missing_fields": ["action_semantics"],
+  "missing_one_of": [],
+  "question": "<one minimal action-semantics clarification question>"
+}
+```
+
+This is the only `REQUIRES_CLARIFICATION` form that does not require a completeness receipt,
+because the normalized write command does not yet exist.
+
+For `BLOCKED`:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "BLOCKED",
+  "operation": "merchant_propose",
+  "database_target": "runtime",
+  "proposal_emitted": false
+}
+```
+
+For `FAILED`:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "FAILED",
+  "operation": "merchant_propose",
+  "database_target": "runtime",
+  "proposal_emitted": false
+}
+```
+
+Authorization to attempt `merchant_propose` never implies `PROPOSAL_READY`.
+The machine-readable result must reflect the actual task outcome.
+
+If any required field is missing, do not improvise it. Stop the
+Merchant dispatch and obtain the missing information through the deterministic Merchant completeness path.
 
 Every Merchant assignment must explicitly declare all of these fields in its prompt:
 
 - `database_target: runtime`;
 - `authorized_mode: READ`, `authorized_mode: PROPOSE`, or, only for an exact confirmed apply,
   `authorized_mode: CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY`;
-- the exact allowlisted Merchant operation and the identifiers or filters supplied by the
+- the semantic Merchant objective and the identifiers or filters actually supplied by the
   request;
+- for `PROPOSE`, that the teammate owns normalized command resolution and deterministic
+  completeness;
 - that database and credential arguments are forbidden;
 - that runtime `--apply` is outside Checkpoint 6 authority and remains blocked until the Gate 7.4
   trusted in-process handoff;
 - that `TaskUpdate` is a status signal only and final result delivery requires `SendMessage`.
 
-If any required field is missing or conflicts with the envelope, do not improvise it. Stop the
+For `PROPOSE`, do not require the lead assignment to contain an "exact allowlisted write command".
+The exact command is resolved by `merchant-manager` from the registered contract. Requiring the
+lead to author that syntax would violate the Merchant dispatch command-authority boundary above.
+
+If any required dispatch field conflicts with the envelope, do not improvise it. Stop the
 Merchant dispatch and report the incomplete assignment contract.
 
 For the Merchant report ledger, accept delivery only when `SendMessage` from the named
-`merchant-manager` teammate carries the operation, runtime target, authorized mode, redacted
-CLI JSON, exit outcome, confirmation state, failures, and unresolved work. `TaskUpdate`, pane
-text, and idle notifications do not establish Merchant result delivery.
+`merchant-manager` teammate carries the operation, runtime target, authorized mode, CLI-backed
+outcome, failures, and unresolved work. `TaskUpdate`, pane text, and idle notifications do not
+establish Merchant result delivery.
 
 ## 7. Limits are hard boundaries
 
@@ -425,8 +583,8 @@ Every teammate assignment must include:
 - task dependencies;
 - remaining relevant limits;
 - instruction to report failures accurately;
-- the mandatory result-delivery instruction below.
-- for Merchant `PROPOSE`, the complete machine-readable Merchant proposal assignment contract from section 6;
+- the mandatory result-delivery instruction below;
+- for Merchant `PROPOSE`, the complete machine-readable Merchant proposal assignment contract from section 6.
 
 Teammates load project context, including `CLAUDE.md`, but do not inherit the lead's conversation
 history. Put all necessary task-specific context in the assignment.
@@ -436,29 +594,42 @@ history. Put all necessary task-specific context in the assignment.
 Every teammate assignment must end with this semantic instruction:
 
 > When your task finishes, return a complete final answer.
-> 
+>
 > **Result delivery:** Send your complete report exactly once through
 > `SendMessage` to `team-lead`. This is the only machine-verifiable delivery
 > path and the only path that satisfies the result ledger.
-> 
+>
 > After `SendMessage` succeeds, your natural final answer must contain only
 > `RESULT_DELIVERED` (optionally followed by the task ID). Do not repeat the
 > full report in the final answer because the Agent Team UI displays it again.
-> 
+>
 > Before a timeout, mark your task completed with `TaskUpdate` if a task exists.
 > Ensure your complete report reaches the lead through `SendMessage` before
 > becoming idle.
-> 
-> Include in your result: all findings, changed files, verification or test results, failures, 
-> and unresolved work. Do not rely on pane text or status updates alone: the complete report 
+>
+> Include in your result: all findings, changed files, verification or test results, failures,
+> and unresolved work. Do not rely on pane text or status updates alone: the complete report
 > must be delivered through `SendMessage`.
-> 
+>
 > A task status update (`TaskUpdate`), pane output, final-answer notification,
 > or idle notification is not a ledger result. If delivery is missing, the
 > `TeammateIdle` hook keeps you active and asks you to send the existing report.
 
-Once `SendMessage` has been recorded, the lead must not request the report again.
-Do not resend or redo work after the lead acknowledges it.
+Once `SendMessage` has been recorded and validated as terminal for the task, the lead must not
+request the report again. Do not resend or redo work after terminal delivery has been accepted.
+
+The lead must not acknowledge the completed result back through `SendMessage`.
+
+For the Merchant report ledger, accept delivery only when `SendMessage` carries the complete Merchant result. `TaskUpdate`, pane
+text, and idle notifications do not establish Merchant result delivery.
+
+For `merchant_propose`, transport delivery and terminal-result validity are separate:
+
+- a `SendMessage` may be staged before terminal validation;
+- it must not be treated as accepted Merchant completion merely because transport succeeded;
+- deterministic completeness/proposal evidence is validated at lifecycle reconciliation;
+- a premature Merchant message must not cause the teammate's remaining tools to freeze;
+- only a valid terminal Merchant result may transition the lifecycle to reusable completion.
 
 ## 9. Coordinate safely and collect reports
 
@@ -484,12 +655,20 @@ hook-verifiable complete report and must not set `result_received`.
 Repeated `SendMessage` events for the same task are idempotent. Process the
 result once and keep one `sendmessage` delivery source in the ledger.
 
+For Merchant proposal work, "transport received" and "terminal result accepted" are not
+interchangeable. The exact Merchant terminal contract is validated against deterministic
+completeness/proposal evidence before reusable completion.
+
 **Recovery behavior:** If a teammate becomes idle before a complete
 `SendMessage` report is recorded, the `TeammateIdle` hook exits with code 2,
 keeps that same teammate active, and sends this bounded feedback to it:
 
 > Your result was not delivered to the lead. Send your complete existing report now through
 > `SendMessage` to `team-lead`; do not redo the task.
+
+If a Merchant terminal report was transported but is invalid or incomplete, use only the
+bounded terminal-result correction path. Do not redo the Merchant operation. The same teammate
+may correct its machine-readable result once when the lifecycle hook permits it.
 
 The ledger records that recovery was initiated. The lead must not issue a
 second manual request, create a replacement, repeat the work, or synthesize a
@@ -524,14 +703,20 @@ Do not hide unrelated pre-existing changes or attribute them to the current run 
 For a strictly `read_only` run, do not consume tool budget on Git inspection unless it is needed
 to support the requested analysis.
 
-After every required `SendMessage` report is collected, or a delivery failure is established:
+After every required `SendMessage` report is collected and terminally accepted, or a delivery
+failure is established:
 
-1. Request graceful shutdown of every teammate created by this run.
-2. Wait until no teammate remains active.
-3. Do not search for or require `TeamDelete` or a separately named cleanup action. Current
+1. `IDLE_REUSABLE` means the teammate pane must remain alive after successful completion and
+   remain available for reuse by a later controlled run.
+2. Do not request shutdown, call `TaskStop`, kill the teammate pane, or create a replacement
+   after the teammate has reached `IDLE_REUSABLE`.
+3. Wait until every successfully completed teammate has reached `IDLE_REUSABLE`, or an explicit
+   lifecycle failure has been established.
+4. Do not search for or require `TeamDelete` or a separately named cleanup action. Current
    Claude Code versions clean up the session-scoped team automatically when the session ends.
-4. Never edit team directories, mailbox files, pane state, or task state manually.
-5. If graceful shutdown fails, report it; never kill panes or the tmux/psmux session manually.
+5. Never edit team directories, mailbox files, pane state, or task state manually.
+
+Session-scoped teammate cleanup belongs to `SessionEnd`, not `/solve`.
 
 Nothing is committed or pushed unless the request explicitly asks for it and the envelope
 authorizes it. When files changed, remind the user to review the exact diff before deciding

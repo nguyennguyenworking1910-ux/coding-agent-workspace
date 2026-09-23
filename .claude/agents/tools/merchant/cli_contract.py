@@ -34,12 +34,14 @@ _RUNTIME_AUTHORIZATION_ISSUER_SEAL = object()
 
 READ_COMMANDS = frozenset(
     {
+        "completeness check",
         "merchant list",
         "project alerts",
         "project blockers",
         "project history",
         "project list",
         "project show",
+        "merchant resolve",
     }
 )
 

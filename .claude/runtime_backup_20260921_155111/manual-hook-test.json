@@ -1,0 +1,18 @@
+{
+  "request": "Gi?i th?ch c?u tr?c c?a intent_parser.py, kh?ng s?a file",
+  "task_class": "small_task",
+  "risk_level": "read_only",
+  "selected_agents": [
+    "reviewer"
+  ],
+  "limits": {
+    "max_members": 1,
+    "max_tool_rounds": 1,
+    "max_total_tool_calls": 6,
+    "max_run_budget_usd": 1.0
+  },
+  "confirmed": false,
+  "members_used": [],
+  "total_tool_calls": 0,
+  "agent_rounds": 0
+}

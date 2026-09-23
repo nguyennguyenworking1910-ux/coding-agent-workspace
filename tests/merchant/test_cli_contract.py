@@ -52,7 +52,9 @@ class ExampleRecord:
 
 def test_command_allowlists_are_complete_and_disjoint():
     assert READ_COMMANDS == {
+        "completeness check",
         "merchant list",
+        "merchant resolve",
         "project alerts",
         "project blockers",
         "project history",

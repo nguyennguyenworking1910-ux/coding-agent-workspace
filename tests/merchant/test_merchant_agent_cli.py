@@ -288,3 +288,50 @@ def test_adapter_has_no_runtime_authorization_parameter():
     signature = inspect.signature(invoke_agent_cli)
 
     assert "runtime_authorized" not in signature.parameters
+
+
+def test_agent_can_run_completeness_without_repository(
+    capsys,
+):
+    factory_called = False
+
+    def forbidden_factory(_database):
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError(
+            "completeness check must not initialize repository"
+        )
+
+    exit_code = invoke_agent_cli(
+        [
+            "completeness",
+            "check",
+            "--command",
+            "document revision-create",
+            "--payload-json",
+            "{}",
+        ],
+        command_factory=forbidden_factory,
+    )
+
+    assert exit_code == 0
+    assert factory_called is False
+
+    result = json.loads(
+        capsys.readouterr().out
+    )
+
+    assert result["mode"] == "COMPLETENESS"
+    assert result["complete"] is False
+
+    assert result["missing_fields"] == [
+        "project_id",
+        "document_type",
+        "content_hash",
+    ]
+
+    assert result[
+        "clarification"
+    ][
+        "outcome"
+    ] == "REQUIRES_CLARIFICATION"

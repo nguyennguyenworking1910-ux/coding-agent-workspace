@@ -1,0 +1,24 @@
+{
+  "session_id": "3547d3dc-be05-40fc-ae3f-ee54e280d9cd",
+  "mode": "LOCAL_AUTO",
+  "updated_at": "2026-09-18T05:07:27+00:00",
+  "receipt": {
+    "state": "AVAILABLE",
+    "captured_at": "2026-09-18T05:07:27+00:00",
+    "confirmation": {
+      "contract_version": 1,
+      "confirmation_version": 1,
+      "operation": "merchant_apply",
+      "command": "project create",
+      "database_target": "runtime",
+      "expected_version": null,
+      "payload_hash": "668c8aba62c4aa0c70b7498210666a2dee20cd75b4b0c60608fe28304b1b1fc9",
+      "proposal_hash": "35da9245f990b45e0d3812f76c3c84f513731644534ad653bc51d334a89e18e0",
+      "confirmation_hash": "45598e2662951d3c5af30eaf7169d8936bd2c393246ae5451a74f7859f15c255"
+    },
+    "entity_binding": {
+      "field": "project_id",
+      "sha256": "2613a73d58153ffb3d356f6cb7cd3650b82b7171f1b87742c18bfed1da2bba61"
+    }
+  }
+}

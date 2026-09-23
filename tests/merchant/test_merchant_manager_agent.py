@@ -182,3 +182,98 @@ def test_agent_keeps_rag_supplemental_and_untrusted():
     assert "agent -> rag tool -> RagClient -> RAG API" in content
     assert "untrusted reference data" in content
     assert "never authoritative for current Merchant" in content
+
+def test_agent_requires_deterministic_completeness_before_write():
+    content = _normalized_content()
+
+    assert (
+        "Deterministic write completeness gate"
+        in content
+    )
+
+    assert (
+        "agent_cli.py completeness check"
+        in content
+    )
+
+    assert (
+        "before any `--propose`"
+        in content
+    )
+
+    assert (
+        "before asking any write-related clarification"
+        in content
+    )
+
+    assert (
+        "Never invent, guess, default, or semantically reinterpret"
+        in content
+    )
+
+
+def test_agent_uses_cli_clarification_instead_of_inventing_one():
+    content = _normalized_content()
+
+    assert (
+        "use the CLI-emitted `clarification.question`"
+        in content
+    )
+
+    assert (
+        "do not independently decide which fields are missing"
+        in content
+    )
+
+    assert (
+        "preserve the CLI-emitted `missing_fields` and `missing_one_of`"
+        in content
+    )
+
+    assert (
+        "Do not independently compose a write clarification question"
+        in content
+    )
+
+
+def test_agent_completeness_is_not_write_authority():
+    content = _normalized_content()
+
+    assert (
+        "Passing completeness is not confirmation"
+        in content
+    )
+
+    assert (
+        "permission to run `--apply`"
+        in content
+    )
+
+
+def test_agent_does_not_invent_stateful_completeness_context():
+    content = _normalized_content()
+
+    assert (
+        "never fabricate context"
+        in content
+    )
+
+    assert (
+        "`current_record_exists`"
+        in content
+    )
+
+    assert (
+        "`active_document_types`"
+        in content
+    )
+
+    assert (
+        "fail closed rather than supplying invented completeness context"
+        in content
+    )
+
+def test_agent_documents_completeness_meta_command():
+    content = _content()
+
+    assert "`completeness check`" in content

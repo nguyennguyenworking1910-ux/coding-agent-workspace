@@ -13,6 +13,9 @@ from .checker import (
 from .cli_contract import (
     redact_payload,
 )
+from .entity_resolver import (
+    resolve_merchant_entity,
+)
 
 try:
     from claude.clients.merchant.read_repository import (
@@ -57,6 +60,44 @@ class MerchantReadCommands:
             status=status,
         )
         return _redacted_list(merchants)
+
+    def merchant_resolve(
+        self,
+        query: str,
+    ) -> dict[str, Any]:
+        """Resolve one Merchant reference from the authoritative catalog."""
+
+        merchants = self.repository.list_merchants()
+
+        catalog = [
+            {
+                "id": merchant.get(
+                    "id"
+                ),
+                "code": merchant.get(
+                    "code"
+                ),
+                "name": merchant.get(
+                    "name"
+                ),
+
+                # Runtime Merchant storage currently exposes
+                # no authoritative alias source.
+                "aliases": (),
+            }
+            for merchant in merchants
+        ]
+
+        resolution = resolve_merchant_entity(
+            query,
+            catalog,
+        )
+
+        return {
+            "success": True,
+            "mode": "RESOLUTION",
+            **resolution.to_dict(),
+        }
 
     def project_list(
         self,

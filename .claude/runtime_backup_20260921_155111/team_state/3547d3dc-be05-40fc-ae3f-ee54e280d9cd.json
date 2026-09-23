@@ -1,0 +1,21 @@
+{
+  "teammates": {
+    "merchant-manager": {
+      "role": "merchant-manager",
+      "canonical_name": "merchant-manager",
+      "status": "REPORT_RECEIVED",
+      "current_run_id": "21c10f63-6be1-4edb-8343-80957f281ffb",
+      "current_task_id": "21c10f63-6be1-4edb-8343-80957f281ffb:merchant-manager",
+      "last_completed_task_id": "769dd1d1-8707-4911-baad-1556cce915bf:merchant-manager",
+      "report_source": "sendmessage",
+      "result_received": true,
+      "authorized_operations": [
+        "merchant_propose"
+      ],
+      "authorized_selected_agents": [
+        "merchant-manager"
+      ]
+    }
+  },
+  "session_id": "3547d3dc-be05-40fc-ae3f-ee54e280d9cd"
+}

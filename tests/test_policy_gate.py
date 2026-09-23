@@ -14,16 +14,22 @@ HOOKS_DIR = CLAUDE_DIR / "hooks"
 
 sys.path.insert(0, str(HOOKS_DIR))
 
-import policy_gate
 import team_lifecycle
+import policy_gate
+import pytest
+from runtime_state import new_state
+
 from team_lifecycle import (
+    TEAM_STATE_DIR_ENV_VAR,
+    TeammateAllocationDecision,
+    TeammateLifecycleStatus,
     allocate_teammate,
+    load_team_state,
+    mark_bound_report_received,
     mark_teammate_idle_reusable,
     mark_teammate_running,
-    TeammateAllocationDecision,
-    TEAM_STATE_DIR_ENV_VAR,
+    release_reported_teammate_to_idle,
 )
-
 
 class PolicyGateAgentDispatchTests(unittest.TestCase):
     """Test policy_gate Agent dispatch with team lifecycle."""
@@ -207,6 +213,426 @@ class PolicyGateHookTests(unittest.TestCase):
             "tool_input": {"subagent_type": "reviewer", "name": "reviewer"},
         })
         self.assertIsNone(output)
+
+
+def test_delivered_teammate_cannot_use_more_tools(
+    monkeypatch,
+    tmp_path,
+):
+    lead_session = "lead-post-delivery-freeze"
+    teammate = "merchant-manager"
+    run_id = "run-post-delivery-freeze"
+    task_id = f"{run_id}:{teammate}"
+
+    # Isolate team lifecycle state for this test.
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(tmp_path / "team_state"),
+    )
+
+    decision, name = allocate_teammate(
+        lead_session,
+        teammate,
+        teammate,
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert mark_teammate_running(
+        lead_session,
+        name,
+        run_id,
+        task_id,
+        operations=[
+            "merchant_read",
+        ],
+        selected_agents=[
+            teammate,
+        ],
+    )
+
+    assert mark_bound_report_received(
+        lead_session,
+        teammate,
+        run_id,
+        task_id,
+        "sendmessage",
+    )
+
+    decision = (
+        policy_gate.completed_teammate_tool_decision(
+            teammate
+        )
+    )
+
+    assert decision is not None
+
+    assert (
+        decision[
+            "hookSpecificOutput"
+        ][
+            "permissionDecision"
+        ]
+        == "deny"
+    )
+
+    reason = (
+        decision[
+            "hookSpecificOutput"
+        ][
+            "permissionDecisionReason"
+        ]
+    )
+
+    assert "RESULT_DELIVERED" in reason
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        (
+            "Bash",
+            {
+                "command": "echo should-not-run",
+            },
+        ),
+        (
+            "Read",
+            {
+                "file_path": "README.md",
+            },
+        ),
+        (
+            "SendMessage",
+            {
+                "recipient": "team-lead",
+                "message": "duplicate result",
+            },
+        ),
+        (
+            "TaskUpdate",
+            {
+                "taskId": "task-1",
+                "status": "completed",
+            },
+        ),
+    ],
+)
+def test_policy_gate_main_freezes_teammate_after_delivery(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    tool_name,
+    tool_input,
+):
+    import json
+    from io import StringIO
+
+    lead_session = "lead-post-delivery-main"
+    pane_session = "pane-post-delivery-main"
+    teammate = "merchant-manager"
+    run_id = "run-post-delivery-main"
+    task_id = f"{run_id}:{teammate}"
+
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(tmp_path / "team_state"),
+    )
+
+    decision, name = allocate_teammate(
+        lead_session,
+        teammate,
+        teammate,
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert mark_teammate_running(
+        lead_session,
+        name,
+        run_id,
+        task_id,
+        operations=[
+            "merchant_read",
+        ],
+        selected_agents=[
+            teammate,
+        ],
+    )
+
+    assert mark_bound_report_received(
+        lead_session,
+        teammate,
+        run_id,
+        task_id,
+        "sendmessage",
+    )
+
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "session_id": pane_session,
+        "agent_type": teammate,
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+    }
+
+    monkeypatch.setattr(
+        policy_gate.sys,
+        "stdin",
+        StringIO(
+            json.dumps(payload)
+        ),
+    )
+
+    exit_code = policy_gate.main()
+
+    assert exit_code == 0
+
+    captured = capsys.readouterr()
+
+    assert captured.out.strip()
+
+    response = json.loads(
+        captured.out
+    )
+
+    specific = response[
+        "hookSpecificOutput"
+    ]
+
+    assert (
+        specific["permissionDecision"]
+        == "deny"
+    )
+
+    reason = specific[
+        "permissionDecisionReason"
+    ]
+
+    assert "RESULT_DELIVERED" in reason
+    assert "already been delivered" in reason
+
+
+def test_lead_cannot_wake_completed_teammate_again_in_same_run(
+    monkeypatch,
+    tmp_path,
+):
+    lead_session = "lead-same-run-freeze"
+    teammate = "merchant-manager"
+    run_id = "run-same-run-freeze"
+    task_id = f"{run_id}:{teammate}"
+
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(tmp_path / "team_state"),
+    )
+
+    state = new_state(
+        request="merchant read",
+        task_class="small_task",
+        risk_level="read_only",
+        selected_agents=[
+            teammate,
+        ],
+        operations=[
+            "merchant_read",
+        ],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 1,
+            "max_total_tool_calls": 10,
+            "max_run_budget_usd": 1.0,
+        },
+        confirmed=False,
+        run_id=run_id,
+    )
+
+    decision, name = allocate_teammate(
+        lead_session,
+        teammate,
+        teammate,
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert mark_teammate_running(
+        lead_session,
+        name,
+        run_id,
+        task_id,
+        operations=[
+            "merchant_read",
+        ],
+        selected_agents=[
+            teammate,
+        ],
+    )
+
+    assert mark_bound_report_received(
+        lead_session,
+        teammate,
+        run_id,
+        task_id,
+        "sendmessage",
+    )
+
+    released, _ = (
+        release_reported_teammate_to_idle(
+            lead_session,
+            teammate,
+        )
+    )
+
+    assert released is True
+
+    decision = policy_gate._check_teammate_message(
+        state,
+        {
+            "recipient": teammate,
+            "message": "acknowledged, please remain idle",
+        },
+        lead_session,
+        "",
+    )
+
+    assert decision is not None
+
+    specific = decision[
+        "hookSpecificOutput"
+    ]
+
+    assert (
+        specific["permissionDecision"]
+        == "deny"
+    )
+
+    assert (
+        "already completed"
+        in specific[
+            "permissionDecisionReason"
+        ]
+    )
+
+
+def test_new_run_can_reuse_previously_completed_teammate(
+    monkeypatch,
+    tmp_path,
+):
+    lead_session = "lead-new-run-reuse"
+    teammate = "merchant-manager"
+
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(tmp_path / "team_state"),
+    )
+
+    old_run = "run-old"
+    old_task = f"{old_run}:{teammate}"
+
+    decision, name = allocate_teammate(
+        lead_session,
+        teammate,
+        teammate,
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert mark_teammate_running(
+        lead_session,
+        name,
+        old_run,
+        old_task,
+        operations=[
+            "merchant_read",
+        ],
+        selected_agents=[
+            teammate,
+        ],
+    )
+
+    assert mark_bound_report_received(
+        lead_session,
+        teammate,
+        old_run,
+        old_task,
+        "sendmessage",
+    )
+
+    released, _ = (
+        release_reported_teammate_to_idle(
+            lead_session,
+            teammate,
+        )
+    )
+
+    assert released is True
+
+    new_run = "run-new"
+
+    new_state_value = new_state(
+        request="another merchant read",
+        task_class="small_task",
+        risk_level="read_only",
+        selected_agents=[
+            teammate,
+        ],
+        operations=[
+            "merchant_read",
+        ],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 1,
+            "max_total_tool_calls": 10,
+            "max_run_budget_usd": 1.0,
+        },
+        confirmed=False,
+        run_id=new_run,
+    )
+
+    decision = policy_gate._check_teammate_message(
+        new_state_value,
+        {
+            "recipient": teammate,
+            "message": "new bounded assignment",
+        },
+        lead_session,
+        "",
+    )
+
+    # None means policy allowed the message.
+    assert decision is None
+
+    team_state = load_team_state(
+        lead_session
+    )
+
+    record = team_state[
+        "teammates"
+    ][
+        teammate
+    ]
+
+    assert (
+        record["status"]
+        == TeammateLifecycleStatus.RUNNING.value
+    )
+
+    assert (
+        record["current_run_id"]
+        == new_run
+    )
 
 
 if __name__ == "__main__":

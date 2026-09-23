@@ -127,13 +127,63 @@ def invoke_agent_cli(
     )
 
 
+def _configure_utf8_stdio() -> None:
+    """Use UTF-8 for the direct operational CLI boundary.
+
+    Windows may expose stdout/stderr through a legacy code page such as
+    cp1252. Merchant JSON intentionally preserves Unicode, so configure the
+    real text streams before the underlying CLI writes its result.
+
+    In-memory/testing streams such as StringIO do not expose reconfigure();
+    leave those streams unchanged.
+    """
+
+    for stream in (
+        sys.stdout,
+        sys.stderr,
+    ):
+        reconfigure = getattr(
+            stream,
+            "reconfigure",
+            None,
+        )
+
+        if not callable(
+            reconfigure
+        ):
+            continue
+
+        try:
+            reconfigure(
+                encoding="utf-8",
+                errors="strict",
+            )
+        except (
+            AttributeError,
+            OSError,
+            ValueError,
+        ):
+            # Some redirected/captured streams cannot be reconfigured.
+            # Preserve their existing behavior rather than replacing or
+            # wrapping them and changing the programmatic CLI contract.
+            continue
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one credential-safe Merchant Manager CLI invocation."""
 
-    arguments = tuple(sys.argv[1:] if argv is None else argv)
+    _configure_utf8_stdio()
+
+    arguments = tuple(
+        sys.argv[1:]
+        if argv is None
+        else argv
+    )
 
     try:
-        return invoke_agent_cli(arguments)
+        return invoke_agent_cli(
+            arguments
+        )
     except MerchantAgentCliError as error:
         print(
             render_json(

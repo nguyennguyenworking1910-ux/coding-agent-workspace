@@ -1,0 +1,15 @@
+{
+  "teammates": {
+    "merchant-manager": {
+      "role": "merchant-manager",
+      "canonical_name": "merchant-manager",
+      "status": "IDLE_REUSABLE",
+      "current_run_id": null,
+      "current_task_id": null,
+      "last_completed_task_id": "e9bd7fae-9853-4af3-bc74-eb69e00ffb66:merchant-manager",
+      "report_source": "sendmessage",
+      "result_received": true
+    }
+  },
+  "session_id": "c686a9d7-d075-4080-a6cb-74157bf11adf"
+}

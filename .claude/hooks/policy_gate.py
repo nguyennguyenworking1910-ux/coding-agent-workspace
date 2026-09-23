@@ -21,28 +21,50 @@ import hmac
 import json
 import re
 import sys
+import shlex
+import uuid
 from pathlib import Path
 from typing import Any
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(
+        0,
+        str(
+            Path(__file__).resolve().parent
+        ),
+    )
+
     from runtime_state import (  # noqa: E402
         MERCHANT_CONFIRMATION_MODE_FIELD,
         MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
         MERCHANT_CONFIRMATION_MODE_MANUAL,
         locked_state,
     )
+
     from merchant_confirmation_preferences import (  # noqa: E402
         reserve_receipt,
     )
+
     from team_lifecycle import (  # noqa: E402
-        allocate_teammate,
-        check_role_in_selected_agents,
-        mark_teammate_running,
-        reserve_reusable_teammate,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
+        allocate_teammate,
+        check_role_in_selected_agents,
+        find_unique_active_teammate_owner,
+        mark_teammate_running,
+        reserve_reusable_teammate,
+        load_team_state,
     )
+
+    from tmux_merchant_resolution import (  # noqa: E402
+        load_pending_merchant_resolution,
+    )
+
+    from merchant_resolution_gate import (  # noqa: E402
+        BOUND,
+        bind_merchant_resolution_receipt,
+    )
+
 else:
     from .runtime_state import (
         MERCHANT_CONFIRMATION_MODE_FIELD,
@@ -50,14 +72,29 @@ else:
         MERCHANT_CONFIRMATION_MODE_MANUAL,
         locked_state,
     )
-    from .merchant_confirmation_preferences import reserve_receipt
+
+    from .merchant_confirmation_preferences import (
+        reserve_receipt,
+    )
+
     from .team_lifecycle import (
-        allocate_teammate,
-        check_role_in_selected_agents,
-        mark_teammate_running,
-        reserve_reusable_teammate,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
+        allocate_teammate,
+        check_role_in_selected_agents,
+        find_unique_active_teammate_owner,
+        mark_teammate_running,
+        reserve_reusable_teammate,
+        load_team_state,
+    )
+
+    from .tmux_merchant_resolution import (
+        load_pending_merchant_resolution,
+    )
+
+    from .merchant_resolution_gate import (
+        BOUND,
+        bind_merchant_resolution_receipt,
     )
 
 HOOK_EVENT_NAME = "PreToolUse"
@@ -348,6 +385,460 @@ def _coordination_reserve(state: dict[str, Any]) -> int:
     return min(max_total, 2 * max_members)
 
 
+def _direct_merchant_agent_cli_tokens(
+    command: Any,
+) -> tuple[str, ...] | None:
+    """Parse only one direct Merchant agent CLI invocation."""
+
+    if not isinstance(
+        command,
+        str,
+    ):
+        return None
+
+    text = command.strip()
+
+    if not text:
+        return None
+
+    try:
+        tokens = tuple(
+            shlex.split(
+                text,
+                posix=True,
+            )
+        )
+    except ValueError:
+        return None
+
+    if len(tokens) < 4:
+        return None
+
+    shell_operators = {
+        "|",
+        "||",
+        "&&",
+        ";",
+        ">",
+        ">>",
+        "<",
+        "2>",
+        "2>>",
+        "2>&1",
+    }
+
+    if any(
+        token in shell_operators
+        for token in tokens
+    ):
+        return None
+
+    executable = (
+        tokens[0]
+        .replace("\\", "/")
+        .lower()
+    )
+
+    if executable not in {
+        "python",
+        "python.exe",
+        "py",
+        "py.exe",
+        ".venv/scripts/python.exe",
+        "./.venv/scripts/python.exe",
+    }:
+        return None
+
+    script = (
+        tokens[1]
+        .replace("\\", "/")
+    )
+
+    if script.startswith("./"):
+        script = script[2:]
+
+    if script != (
+        ".claude/agents/tools/"
+        "merchant/agent_cli.py"
+    ):
+        return None
+
+    return tokens
+
+
+def _canonical_merchant_uuid(
+    value: Any,
+) -> str | None:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return None
+
+    try:
+        return str(
+            uuid.UUID(
+                value.strip()
+            )
+        )
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+def _merchant_id_from_cli_tokens(
+    tokens: tuple[str, ...],
+) -> tuple[str, str | None]:
+    """Return normalized command and consumed Merchant id.
+
+    Supported Merchant-id forms:
+
+    --merchant-id <uuid>
+    --merchant-id=<uuid>
+
+    plus the registered positional Merchant id for:
+
+    integration identifier-set <merchant_id>
+    """
+
+    if len(tokens) < 4:
+        return "", None
+
+    command = (
+        f"{tokens[2]} {tokens[3]}"
+        .strip()
+        .lower()
+    )
+
+    arguments = tokens[4:]
+
+    # ------------------------------------------------------------
+    # Flag form.
+    # ------------------------------------------------------------
+    for index, token in enumerate(
+        arguments
+    ):
+        if token == "--merchant-id":
+            if (
+                index + 1
+                >= len(arguments)
+            ):
+                return command, ""
+
+            return (
+                command,
+                arguments[
+                    index + 1
+                ],
+            )
+
+        if token.startswith(
+            "--merchant-id="
+        ):
+            return (
+                command,
+                token.split(
+                    "=",
+                    1,
+                )[1],
+            )
+
+    # ------------------------------------------------------------
+    # Registered positional form.
+    #
+    # CLI contract:
+    #
+    # integration identifier-set <merchant_id> [project_id] ...
+    # ------------------------------------------------------------
+    if (
+        command
+        == "integration identifier-set"
+    ):
+        if not arguments:
+            return command, ""
+
+        first_argument = (
+            arguments[0]
+        )
+
+        if first_argument.startswith(
+            "-"
+        ):
+            return command, ""
+
+        return (
+            command,
+            first_argument,
+        )
+
+    return command, None
+
+
+def merchant_resolution_use_decision(
+    payload: dict[str, Any],
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Require trusted resolver evidence before consuming merchant_id."""
+
+    sender_agent_type = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if (
+        sender_agent_type
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    tool_name = str(
+        payload.get(
+            "tool_name"
+        )
+        or ""
+    ).strip()
+
+    if tool_name not in {
+        "Bash",
+        "PowerShell",
+    }:
+        return None
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return None
+
+    command_text_value = (
+        tool_input.get(
+            "command"
+        )
+    )
+
+    tokens = (
+        _direct_merchant_agent_cli_tokens(
+            command_text_value
+        )
+    )
+
+    # ------------------------------------------------------------
+    # A Merchant CLI reference that is not one direct invocation is
+    # not allowed to bypass entity binding via wrappers/pipelines.
+    # ------------------------------------------------------------
+    if tokens is None:
+        raw_command = str(
+            command_text_value
+            or ""
+        )
+
+        normalized_raw = (
+            raw_command
+            .replace(
+                "\\",
+                "/",
+            )
+            .lower()
+        )
+
+        if (
+            "agents/tools/merchant/agent_cli.py"
+            in normalized_raw
+        ):
+            return deny(
+                "Blocked: Merchant CLI must be invoked directly. "
+                "Wrapper scripts, pipelines, redirects, shell chaining, "
+                "and reconstructed Merchant commands cannot consume "
+                "trusted entity bindings."
+            )
+
+        return None
+
+    (
+        merchant_command,
+        supplied_merchant_id,
+    ) = _merchant_id_from_cli_tokens(
+        tokens
+    )
+
+    # Resolver itself establishes evidence.
+    if (
+        merchant_command
+        == "merchant resolve"
+    ):
+        return None
+
+    # Creating a brand-new Merchant is the one existing-entity exception.
+    if (
+        merchant_command
+        == "merchant create"
+    ):
+        return None
+
+    # This command does not consume --merchant-id.
+    if supplied_merchant_id is None:
+        return None
+
+    canonical_supplied_id = (
+        _canonical_merchant_uuid(
+            supplied_merchant_id
+        )
+    )
+
+    if canonical_supplied_id is None:
+        return deny(
+            "Blocked: --merchant-id must be a canonical Merchant UUID."
+        )
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return deny(
+            "Blocked: Merchant entity binding has no unique active "
+            "Merchant task owner."
+        )
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return deny(
+            "Blocked: Merchant entity binding has no exact run/task identity."
+        )
+
+    pane_session_id = str(
+        session_id
+        or ""
+    ).strip()
+
+    if not pane_session_id:
+        return deny(
+            "Blocked: Merchant entity binding requires a session identity."
+        )
+
+    receipt = (
+        load_pending_merchant_resolution(
+            pane_session_id
+        )
+    )
+
+    if receipt is None:
+        return deny(
+            "Blocked: this Merchant command consumes --merchant-id "
+            "without an exact resolver receipt. Run "
+            "`merchant resolve --query <merchant-reference>` first."
+        )
+
+    resolution = receipt.get(
+        "resolution"
+    )
+
+    if not isinstance(
+        resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: Merchant resolver evidence is malformed."
+        )
+
+    expected_query = resolution.get(
+        "query"
+    )
+
+    binding = (
+        bind_merchant_resolution_receipt(
+            receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            expected_query=(
+                expected_query
+            ),
+        )
+    )
+
+    if (
+        not binding.accepted
+        or binding.outcome
+        != BOUND
+    ):
+        reason = (
+            binding.question
+            or (
+                "Merchant resolver evidence does not authorize "
+                "an exact entity binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    if (
+        binding.merchant_id
+        != canonical_supplied_id
+    ):
+        return deny(
+            "Blocked: --merchant-id does not match the exact Merchant "
+            "resolved for this run/task. Do not copy or substitute a UUID "
+            "from merchant list, prose, memory, or assignment text."
+        )
+
+    return None
+
+
 def apply_call(
     state: dict[str, Any],
     tool_name: str,
@@ -552,6 +1043,74 @@ def _check_teammate_message(
         return deny(
             "Blocked: teammate reuse requires the current run_id."
         )
+
+    # -------------------------------------------------
+    # Same-run completion circuit breaker.
+    #
+    # Once this exact run/task has already completed and
+    # the teammate returned to IDLE_REUSABLE, the lead
+    # must not wake it again inside the same run.
+    #
+    # A genuinely new /solve run has a different run_id,
+    # therefore a different task_id, and remains reusable.
+    # -------------------------------------------------
+
+    team_state = load_team_state(
+        session_id
+    )
+
+    if isinstance(
+        team_state,
+        dict,
+    ):
+        completed_record = (
+            team_state.get(
+                "teammates",
+                {},
+            ).get(
+                recipient
+            )
+        )
+
+        if isinstance(
+            completed_record,
+            dict,
+        ):
+            completed_status = str(
+                completed_record.get(
+                    "status"
+                )
+                or ""
+            )
+
+            last_completed_task_id = str(
+                completed_record.get(
+                    "last_completed_task_id"
+                )
+                or ""
+            ).strip()
+
+            if (
+                completed_status
+                == TeammateLifecycleStatus.IDLE_REUSABLE.value
+                and last_completed_task_id
+                == task_id
+                and completed_record.get(
+                    "result_received"
+                )
+                is True
+                and completed_record.get(
+                    "report_source"
+                )
+                == "sendmessage"
+            ):
+                return deny(
+                    f"Blocked: teammate '{recipient}' has already completed "
+                    "and delivered the result for this exact run/task. "
+                    "Do not acknowledge, redispatch, remind, shut down, or "
+                    "send follow-up work to the teammate in the same run. "
+                    "Synthesize the delivered result and end the run."
+                )
 
     members_used = [str(member) for member in state.get("members_used") or []]
 
@@ -1038,6 +1597,85 @@ def _merchant_dispatch_payload(
     return payload, None
 
 
+def completed_teammate_tool_decision(
+    sender_agent_type: str,
+) -> dict[str, Any] | None:
+    """Freeze a teammate after its result has been delivered.
+
+    Once the exact canonical teammate has a SendMessage-backed result,
+    no further tool calls are allowed for that completed task.
+
+    The teammate must finish its turn with plain final text only:
+    RESULT_DELIVERED
+    """
+
+    teammate_name = str(
+        sender_agent_type or ""
+    ).strip()
+
+    if not teammate_name:
+        # Main/team-lead call.
+        return None
+
+    (
+        _owner_session_id,
+        record,
+        resolution,
+    ) = find_unique_active_teammate_owner(
+        teammate_name
+    )
+
+    if resolution == "AMBIGUOUS":
+        return deny(
+            "Blocked: teammate ownership is ambiguous. "
+            "Do not perform additional work or send another result. "
+            "Finish with only: RESULT_DELIVERED."
+        )
+
+    if (
+        resolution != "FOUND"
+        or not isinstance(record, dict)
+    ):
+        return None
+
+    status = str(
+        record.get(
+            "status"
+        )
+        or ""
+    )
+
+    if status not in {
+        TeammateLifecycleStatus.REPORT_RECEIVED.value,
+        TeammateLifecycleStatus.ACKNOWLEDGED.value,
+    }:
+        return None
+
+    if (
+        record.get(
+            "result_received"
+        )
+        is not True
+    ):
+        return None
+
+    if (
+        record.get(
+            "report_source"
+        )
+        != "sendmessage"
+    ):
+        return None
+
+    return deny(
+        "Blocked: your result for this task has already been delivered "
+        "successfully through SendMessage. Do not call SendMessage, Bash, "
+        "Read, TaskUpdate, or any other tool again for this completed task. "
+        "Do not investigate further and do not repeat the work. "
+        "Finish the teammate turn now with only: RESULT_DELIVERED."
+    )
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -1047,27 +1685,96 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
-    tool_name = str(payload.get("tool_name") or "")
-    tool_input = payload.get("tool_input")
-    session_id = payload.get("session_id")
+    tool_name = str(
+        payload.get("tool_name")
+        or ""
+    )
 
-    if not isinstance(tool_input, dict):
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    session_id = payload.get(
+        "session_id"
+    )
+
+    # Identify whether this PreToolUse event comes from
+    # a teammate pane or from the team lead.
+    sender_agent_type = str(
+        payload.get("agent_type")
+        or ""
+    ).strip()
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
         tool_input = {}
+
+    # -------------------------------------------------
+    # Gate 12B.6.1:
+    # once a teammate has already delivered its result,
+    # block every further tool call from that teammate.
+    #
+    # This check happens BEFORE looking up run state
+    # because tmux teammate panes may carry their own
+    # pane session_id rather than the lead session_id.
+    # -------------------------------------------------
+
+    freeze_decision = (
+        completed_teammate_tool_decision(
+            sender_agent_type
+        )
+    )
+
+    if freeze_decision is not None:
+        print(
+            json.dumps(
+                freeze_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
 
     output: dict[str, Any] | None = None
 
-    with locked_state(session_id) as state:
+    resolution_decision = (
+        merchant_resolution_use_decision(
+            payload,
+            session_id,
+        )
+    )
+
+    if resolution_decision is not None:
+        print(
+            json.dumps(
+                resolution_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
+    with locked_state(
+        session_id
+    ) as state:
         if state is not None:
             output = apply_call(
                 state,
                 tool_name,
                 tool_input,
                 session_id,
-                str(payload.get("agent_type") or "").strip(),
+                sender_agent_type,
             )
 
     if output:
-        print(json.dumps(output, ensure_ascii=False))
+        print(
+            json.dumps(
+                output,
+                ensure_ascii=False,
+            )
+        )
 
     return 0
 

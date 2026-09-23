@@ -1,0 +1,24 @@
+{
+  "run_id": "0a5b2a85-e106-4535-8d91-1525acce4409",
+  "request": "review the orchestration system for correctness",
+  "task_class": "small_task",
+  "risk_level": "read_only",
+  "selected_agents": [
+    "reviewer"
+  ],
+  "operations": [
+    "review"
+  ],
+  "limits": {
+    "max_members": 1,
+    "max_tool_rounds": 1,
+    "max_total_tool_calls": 10,
+    "max_run_budget_usd": 1.0
+  },
+  "confirmed": false,
+  "members_used": [],
+  "total_tool_calls": 0,
+  "total_tool_calls_regular": 0,
+  "agent_rounds": 0,
+  "result_ledger": {}
+}
