@@ -837,23 +837,121 @@ class IntentParser:
     def _has_explicit_merchant_proposal_only(
         text: str,
     ) -> bool:
+        """Return True only for an affirmative proposal-only request.
+
+        Negative mutation constraints such as "do not apply" are safety
+        boundaries, not evidence that the user requested a proposal.
+        """
+
         patterns = (
             r"--propose\b",
             r"\bproposal only\b",
             r"\bpropose only\b",
-            r"\bdo not\s+(?:apply|execute|persist)\b",
-            r"\bdon'?t\s+(?:apply|execute|persist)\b",
-            r"\bwithout\s+(?:applying|executing|persisting)\b",
-            r"\bno\s+(?:apply|execution|persistence)\b",
 
             # Vietnamese after normalize_text().
             r"\bchi de xuat\b",
-            r"\bkhong\s+(?:ap dung|thuc thi|ghi|luu)\b",
         )
 
         return any(
-            re.search(pattern, text)
+            re.search(
+                pattern,
+                text,
+            )
             for pattern in patterns
+        )
+
+    @staticmethod
+    def _without_negated_merchant_actions(
+        text: str,
+    ) -> str:
+        """Remove explicitly negated Merchant mutation verbs before classification.
+
+        Example:
+
+            check whether project X exists.
+            do not create, update, propose, or apply anything.
+
+        becomes semantically equivalent to:
+
+            check whether project X exists.
+
+        This prevents forbidden actions from being interpreted as requested
+        operations while preserving positive write verbs elsewhere in the request.
+        """
+
+        english_action = (
+            r"(?:"
+            r"create|"
+            r"add|"
+            r"import|"
+            r"update|"
+            r"set|"
+            r"approve|"
+            r"change|"
+            r"propose|"
+            r"apply|"
+            r"execute|"
+            r"persist"
+            r")"
+        )
+
+        vietnamese_action = (
+            r"(?:"
+            r"tao|"
+            r"them|"
+            r"nhap|"
+            r"cap nhat|"
+            r"gan|"
+            r"duyet|"
+            r"thay doi|"
+            r"de xuat|"
+            r"ap dung|"
+            r"thuc thi|"
+            r"ghi|"
+            r"luu"
+            r")"
+        )
+
+        patterns = (
+            (
+                rf"\b(?:do\s+not|don'?t)\s+"
+                rf"{english_action}"
+                rf"(?:"
+                rf"\s*,?\s*(?:and|or)?\s*"
+                rf"{english_action}"
+                rf")*"
+                rf"(?:\s+anything)?\b"
+            ),
+            (
+                r"\bwithout\s+"
+                r"(?:applying|executing|persisting)"
+                r"(?:\s+(?:anything|changes?))?\b"
+            ),
+            (
+                r"\bno\s+"
+                r"(?:apply|execution|persistence)\b"
+            ),
+            (
+                rf"\bkhong\s+"
+                rf"{vietnamese_action}"
+                rf"(?:"
+                rf"\s*,?\s*(?:va|hoac)?\s*"
+                rf"{vietnamese_action}"
+                rf")*"
+            ),
+        )
+
+        sanitized = text
+
+        for pattern in patterns:
+            sanitized = re.sub(
+                pattern,
+                " ",
+                sanitized,
+            )
+
+        return " ".join(
+            sanitized.split()
         )
 
     @classmethod
@@ -1001,8 +1099,15 @@ class IntentParser:
         ):
             return None
 
+        operation_text = (
+            IntentParser
+            ._without_negated_merchant_actions(
+                text
+            )
+        )
+
         if IntentParser._has_explicit_merchant_proposal_only(
-            text
+            operation_text
         ):
             return Operation.MERCHANT_PROPOSE.value
 
@@ -1015,7 +1120,10 @@ class IntentParser:
         )
 
         if any(
-            re.search(pattern, text)
+            re.search(
+                pattern,
+                operation_text,
+            )
             for pattern in apply_patterns
         ):
             return Operation.MERCHANT_APPLY.value
@@ -1030,7 +1138,10 @@ class IntentParser:
         )
 
         if any(
-            re.search(pattern, text)
+            re.search(
+                pattern,
+                operation_text,
+            )
             for pattern in propose_patterns
         ):
             return Operation.MERCHANT_PROPOSE.value
@@ -1043,7 +1154,10 @@ class IntentParser:
         )
 
         if any(
-            re.search(pattern, text)
+            re.search(
+                pattern,
+                operation_text,
+            )
             for pattern in read_patterns
         ):
             return Operation.MERCHANT_READ.value

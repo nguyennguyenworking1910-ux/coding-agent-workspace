@@ -17,6 +17,9 @@ from .entity_resolver import (
     resolve_merchant_entity,
 )
 from .project_entity_resolver import resolve_project_entity
+from .step_entity_resolver import (
+    resolve_step_entity,
+)
 
 try:
     from claude.clients.merchant.read_repository import (
@@ -120,6 +123,40 @@ class MerchantReadCommands:
         return {
             "success": True,
             "mode": "PROJECT_RESOLUTION",
+            **resolution.to_dict(),
+        }
+
+    def step_resolve(
+        self,
+        *,
+        project_id: str,
+        query: str,
+    ) -> dict[str, Any]:
+        """Resolve one Step inside one authoritative Project."""
+
+        detail = (
+            self.repository
+            .get_project_detail(
+                project_id
+            )
+        )
+
+        steps = detail.get(
+            "steps",
+            []
+        )
+
+        resolution = (
+            resolve_step_entity(
+                query,
+                project_id,
+                steps,
+            )
+        )
+
+        return {
+            "success": True,
+            "mode": "STEP_RESOLUTION",
             **resolution.to_dict(),
         }
 

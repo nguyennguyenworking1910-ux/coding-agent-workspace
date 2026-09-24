@@ -1151,3 +1151,108 @@ def test_identifier_set_project_scope_without_project_receipt_is_blocked(
     assert_denied(
         decision
     )
+
+
+def test_step_resolve_without_project_receipt_is_blocked(
+    monkeypatch,
+):
+    install_owner(
+        monkeypatch
+    )
+
+    monkeypatch.setattr(
+        policy_gate,
+        "load_pending_merchant_resolution",
+        lambda session_id: (
+            merchant_receipt()
+        ),
+    )
+
+    monkeypatch.setattr(
+        policy_gate,
+        "load_pending_project_resolution",
+        lambda session_id: None,
+    )
+
+    decision = (
+        policy_gate
+        .project_resolution_use_decision(
+            payload(
+                "python "
+                ".claude/agents/tools/merchant/agent_cli.py "
+                "step resolve "
+                f"--project-id {PROJECT_ID} "
+                '--query "Run UAT test"'
+            ),
+            "pane-1",
+        )
+    )
+
+    assert_denied(
+        decision
+    )
+
+
+def test_step_resolve_with_exact_project_binding_is_allowed(
+    monkeypatch,
+):
+    install_owner(
+        monkeypatch
+    )
+
+    install_bindings(
+        monkeypatch
+    )
+
+    decision = (
+        policy_gate
+        .project_resolution_use_decision(
+            payload(
+                "python "
+                ".claude/agents/tools/merchant/agent_cli.py "
+                "step resolve "
+                f"--project-id {PROJECT_ID} "
+                '--query "Run UAT test"'
+            ),
+            "pane-1",
+        )
+    )
+
+    assert decision is None
+
+
+def test_step_resolve_wrong_project_id_is_blocked(
+    monkeypatch,
+):
+    install_owner(
+        monkeypatch
+    )
+
+    install_bindings(
+        monkeypatch
+    )
+
+    decision = (
+        policy_gate
+        .project_resolution_use_decision(
+            payload(
+                "python "
+                ".claude/agents/tools/merchant/agent_cli.py "
+                "step resolve "
+                f"--project-id {OTHER_PROJECT_ID} "
+                '--query "Run UAT test"'
+            ),
+            "pane-1",
+        )
+    )
+
+    assert_denied(
+        decision
+    )
+
+    assert (
+        "does not match"
+        in deny_reason(
+            decision
+        )
+    )

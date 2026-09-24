@@ -77,12 +77,16 @@ def test_agent_uses_only_the_registered_runtime_cli_boundary():
 def test_agent_carries_the_complete_read_allowlist():
     content = _content()
     read_commands = {
+        "completeness check",
         "merchant list",
+        "merchant resolve",
         "project list",
+        "project resolve",
         "project show",
         "project history",
         "project blockers",
         "project alerts",
+        "step resolve",
     }
 
     for command in read_commands:

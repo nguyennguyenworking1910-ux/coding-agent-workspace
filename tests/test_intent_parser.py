@@ -16,6 +16,7 @@ from intent_parser import (
     IntentParser,
     OpenAIIntentDecision,
     Operation,
+    normalize_text,
 )
 from schemas import RiskLevel, TaskClass
 
@@ -623,6 +624,115 @@ class IntentParserTest(unittest.TestCase):
 
         self.assertTrue(
             result.requires_confirmation
+        )
+
+    def test_negated_write_words_do_not_upgrade_merchant_read_to_propose(
+        self,
+    ):
+        """Forbidden write verbs must not become positive write intent."""
+
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[
+                Operation.MERCHANT_PROPOSE,
+            ],
+            domains=[
+                Domain.MERCHANT,
+            ],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "Read-only Merchant task. "
+            "For merchant CGV, check whether the project named "
+            "__GATE_12F_9_REUSE_A__ exists in the runtime Merchant system. "
+            "Do not create, update, propose, or apply anything."
+        )
+
+        self.assertEqual(
+            result.operations,
+            [
+                "merchant_read",
+            ],
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.READ_ONLY,
+        )
+
+        self.assertEqual(
+            result.selected_agents,
+            [
+                "merchant-manager",
+            ],
+        )
+
+        self.assertFalse(
+            result.requires_confirmation
+        )
+
+    def test_positive_update_with_negated_apply_remains_merchant_propose(
+        self,
+    ):
+        """A real write request remains a proposal when apply is forbidden."""
+
+        decision = make_decision(
+            task_class=TaskClass.SMALL,
+            risk_level=RiskLevel.READ_ONLY,
+            operations=[
+                Operation.MERCHANT_READ,
+            ],
+            domains=[
+                Domain.MERCHANT,
+            ],
+        )
+
+        result = self.create_parser(
+            decision
+        ).parse(
+            "For Merchant CGV, update the project status "
+            "but do not apply or persist the change."
+        )
+
+        self.assertEqual(
+            result.operations,
+            [
+                "merchant_propose",
+            ],
+        )
+
+        self.assertEqual(
+            result.risk_level,
+            RiskLevel.READ_ONLY,
+        )
+
+        self.assertEqual(
+            result.selected_agents,
+            [
+                "merchant-manager",
+            ],
+        )
+
+        self.assertFalse(
+            result.requires_confirmation
+        )
+
+    def test_negated_merchant_mutations_are_removed_before_operation_detection(
+        self,
+    ):
+        text = normalize_text(
+            "For merchant CGV, check whether project X exists. "
+            "Do not create, update, propose, or apply anything."
+        )
+
+        self.assertEqual(
+            IntentParser._detect_local_merchant_operation(
+                text
+            ),
+            Operation.MERCHANT_READ.value,
         )
 
 

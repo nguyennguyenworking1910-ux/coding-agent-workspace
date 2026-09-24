@@ -98,9 +98,20 @@ if __package__ in (None, ""):
         load_pending_merchant_resolution,
         pending_merchant_resolution_matches,
     )
-
     from tmux_project_resolution import (
+        clear_pending_project_resolution,
+        load_pending_project_resolution,
+        pending_project_resolution_matches,
         stage_pending_project_resolution,
+    )
+    from tmux_step_resolution import (
+        stage_pending_step_resolution,
+        clear_pending_step_resolution,
+        load_pending_step_resolution,
+    )
+    from step_resolution_gate import (
+        BOUND as STEP_BOUND,
+        bind_step_resolution_receipt,
     )
 
 else:
@@ -153,9 +164,20 @@ else:
         load_pending_merchant_resolution,
         pending_merchant_resolution_matches,
     )
-
     from .tmux_project_resolution import (
+        clear_pending_project_resolution,
+        load_pending_project_resolution,
+        pending_project_resolution_matches,
         stage_pending_project_resolution,
+    )
+    from .tmux_step_resolution import (
+        clear_pending_step_resolution,
+        clear_pending_step_resolution,
+        stage_pending_step_resolution,
+    )
+    from .step_resolution_gate import (
+        BOUND as STEP_BOUND,
+        bind_step_resolution_receipt,
     )
 
 
@@ -1159,6 +1181,165 @@ def _stage_exact_tmux_merchant_resolution(
     )
 
 
+def _trusted_tmux_merchant_stage_context(
+    *,
+    payload: dict[str, Any],
+    session_id: Any,
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    list[str],
+] | None:
+    """Return trusted tmux Merchant task context for entity staging."""
+
+    pane_session_id = str(
+        session_id
+        or ""
+    ).strip()
+
+    if not pane_session_id:
+        return None
+
+    role_hint = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if (
+        role_hint
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    authenticated_sender = (
+        trusted_post_tool_sender(
+            payload
+        )
+    )
+
+    if (
+        authenticated_sender
+        and authenticated_sender
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return None
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return None
+
+    authorized_operations = [
+        str(
+            operation
+        ).strip()
+        for operation
+        in (
+            owner_record.get(
+                "authorized_operations"
+            )
+            or []
+        )
+        if str(
+            operation
+        ).strip()
+    ]
+
+    authorized_selected_agents = [
+        str(
+            agent
+        ).strip()
+        for agent
+        in (
+            owner_record.get(
+                "authorized_selected_agents"
+            )
+            or []
+        )
+        if str(
+            agent
+        ).strip()
+    ]
+
+    if (
+        len(
+            authorized_operations
+        )
+        != 1
+    ):
+        return None
+
+    if (
+        authorized_operations[0]
+        not in {
+            "merchant_read",
+            "merchant_propose",
+            "merchant_apply",
+        }
+    ):
+        return None
+
+    if (
+        authorized_selected_agents
+        != [
+            MERCHANT_MANAGER_AGENT
+        ]
+    ):
+        return None
+
+    return (
+        pane_session_id,
+        str(
+            owner_session_id
+        ).strip(),
+        MERCHANT_MANAGER_AGENT,
+        owner_run_id,
+        owner_task_id,
+        authorized_operations,
+    )
+
+
 def _stage_exact_tmux_project_resolution(
     *,
     payload: dict[str, Any],
@@ -1553,12 +1734,598 @@ def _stage_exact_tmux_project_resolution(
         tool_use_id=tool_use_id,
     )
 
+def _stage_exact_tmux_step_resolution(
+    *,
+    payload: dict[str, Any],
+    pane_session_id: Any,
+    owner_session_id: Any,
+    teammate_name: Any,
+    run_id: Any,
+    task_id: Any,
+    authorized_operations: Any,
+) -> bool:
+    """Stage one exact Step resolution under trusted Merchant + Project bindings."""
+
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        return False
+
+    pane_id = str(
+        pane_session_id
+        or ""
+    ).strip()
+
+    owner_id = str(
+        owner_session_id
+        or ""
+    ).strip()
+
+    teammate = str(
+        teammate_name
+        or ""
+    ).strip()
+
+    owner_run_id = str(
+        run_id
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        task_id
+        or ""
+    ).strip()
+
+    if (
+        not pane_id
+        or not owner_id
+        or not teammate
+        or not owner_run_id
+        or not owner_task_id
+    ):
+        return False
+
+    if (
+        teammate
+        != "merchant-manager"
+    ):
+        return False
+
+    operations = [
+        str(
+            operation
+        ).strip()
+        for operation
+        in (
+            authorized_operations
+            or []
+        )
+        if str(
+            operation
+        ).strip()
+    ]
+
+    if len(
+        operations
+    ) != 1:
+        return False
+
+    if (
+        operations[0]
+        not in {
+            "merchant_read",
+            "merchant_propose",
+            "merchant_apply",
+        }
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Accept direct Bash invocation only.
+    # -------------------------------------------------
+
+    if (
+        str(
+            payload.get(
+                "tool_name"
+            )
+            or ""
+        ).strip()
+        != "Bash"
+    ):
+        return False
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return False
+
+    command = tool_input.get(
+        "command"
+    )
+
+    if not isinstance(
+        command,
+        str,
+    ):
+        return False
+
+    command = command.strip()
+
+    if not command:
+        return False
+
+    forbidden_shell_tokens = (
+        "&&",
+        "||",
+        "|",
+        ";",
+        ">>",
+        ">",
+        "<",
+        "2>&1",
+        "2>>",
+        "2>",
+    )
+
+    if any(
+        token in command
+        for token
+        in forbidden_shell_tokens
+    ):
+        return False
+
+    try:
+        tokens = shlex.split(
+            command,
+            posix=True,
+        )
+    except ValueError:
+        return False
+
+    if len(
+        tokens
+    ) < 4:
+        return False
+
+    executable = (
+        tokens[0]
+        .replace(
+            "\\",
+            "/",
+        )
+        .lower()
+    )
+
+    if (
+        executable
+        not in {
+            "python",
+            "python.exe",
+        }
+    ):
+        return False
+
+    script = (
+        tokens[1]
+        .replace(
+            "\\",
+            "/",
+        )
+    )
+
+    if not script.endswith(
+        ".claude/agents/tools/"
+        "merchant/agent_cli.py"
+    ):
+        return False
+
+    cli_tokens = tokens[2:]
+
+    if (
+        len(
+            cli_tokens
+        ) < 2
+        or cli_tokens[0]
+        != "step"
+        or cli_tokens[1]
+        != "resolve"
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Parse exactly:
+    #
+    # step resolve
+    #     --project-id <UUID>
+    #     --query <reference>
+    #
+    # No extra flags.
+    # -------------------------------------------------
+
+    project_id: str | None = None
+    query: str | None = None
+
+    seen_project_id = False
+    seen_query = False
+
+    index = 2
+
+    while index < len(
+        cli_tokens
+    ):
+        token = cli_tokens[
+            index
+        ]
+
+        if (
+            token
+            == "--project-id"
+        ):
+            if (
+                seen_project_id
+                or index + 1
+                >= len(
+                    cli_tokens
+                )
+            ):
+                return False
+
+            project_id = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not project_id:
+                return False
+
+            seen_project_id = True
+            index += 2
+            continue
+
+        if token.startswith(
+            "--project-id="
+        ):
+            if seen_project_id:
+                return False
+
+            project_id = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not project_id:
+                return False
+
+            seen_project_id = True
+            index += 1
+            continue
+
+        if token == "--query":
+            if (
+                seen_query
+                or index + 1
+                >= len(
+                    cli_tokens
+                )
+            ):
+                return False
+
+            query = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 2
+            continue
+
+        if token.startswith(
+            "--query="
+        ):
+            if seen_query:
+                return False
+
+            query = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 1
+            continue
+
+        return False
+
+    if (
+        project_id is None
+        or query is None
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Parent 1: exact current-task Merchant receipt.
+    # -------------------------------------------------
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return False
+
+    if not (
+        pending_merchant_resolution_matches(
+            merchant_receipt,
+            owner_session_id=(
+                owner_id
+            ),
+            teammate_name=(
+                teammate
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+        )
+    ):
+        return False
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return False
+
+    if (
+        merchant_resolution.get(
+            "status"
+        )
+        != "RESOLVED"
+        or merchant_resolution.get(
+            "resolved"
+        )
+        is not True
+    ):
+        return False
+
+    trusted_merchant_id = str(
+        merchant_resolution.get(
+            "merchant_id"
+        )
+        or ""
+    ).strip()
+
+    if not trusted_merchant_id:
+        return False
+
+    # -------------------------------------------------
+    # Parent 2: exact current-task Project receipt.
+    #
+    # Step receipt MUST NOT establish Project authority.
+    # -------------------------------------------------
+
+    project_receipt = (
+        load_pending_project_resolution(
+            pane_id
+        )
+    )
+
+    if project_receipt is None:
+        return False
+
+    if not (
+        pending_project_resolution_matches(
+            project_receipt,
+            pane_session_id=(
+                pane_id
+            ),
+            owner_session_id=(
+                owner_id
+            ),
+            teammate_name=(
+                teammate
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            merchant_id=(
+                trusted_merchant_id
+            ),
+        )
+    ):
+        return False
+
+    project_resolution = (
+        project_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        project_resolution,
+        dict,
+    ):
+        return False
+
+    if (
+        project_resolution.get(
+            "status"
+        )
+        != "RESOLVED"
+        or project_resolution.get(
+            "resolved"
+        )
+        is not True
+    ):
+        return False
+
+    trusted_project_id = str(
+        project_resolution.get(
+            "project_id"
+        )
+        or ""
+    ).strip()
+
+    if not trusted_project_id:
+        return False
+
+    if (
+        project_id
+        != trusted_project_id
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Exact JSON stdout only.
+    # -------------------------------------------------
+
+    tool_response = payload.get(
+        "tool_response"
+    )
+
+    if not isinstance(
+        tool_response,
+        dict,
+    ):
+        return False
+
+    stdout = tool_response.get(
+        "stdout"
+    )
+
+    if not isinstance(
+        stdout,
+        str,
+    ):
+        return False
+
+    stdout = stdout.strip()
+
+    if not stdout:
+        return False
+
+    try:
+        step_resolution = (
+            json.loads(
+                stdout
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
+
+    if not isinstance(
+        step_resolution,
+        dict,
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Exact command ↔ result binding.
+    # -------------------------------------------------
+
+    if (
+        step_resolution.get(
+            "project_id"
+        )
+        != trusted_project_id
+    ):
+        return False
+
+    if (
+        step_resolution.get(
+            "query"
+        )
+        != query
+    ):
+        return False
+
+    tool_use_id = str(
+        payload.get(
+            "tool_use_id"
+        )
+        or ""
+    ).strip()
+
+    if not tool_use_id:
+        return False
+
+    # tmux_step_resolution performs complete
+    # RESOLVED / AMBIGUOUS / NOT_FOUND schema validation.
+    return (
+        stage_pending_step_resolution(
+            pane_session_id=(
+                pane_id
+            ),
+            owner_session_id=(
+                owner_id
+            ),
+            teammate_name=(
+                teammate
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            merchant_id=(
+                trusted_merchant_id
+            ),
+            project_id=(
+                trusted_project_id
+            ),
+            resolution=(
+                step_resolution
+            ),
+            tool_use_id=(
+                tool_use_id
+            ),
+        )
+    )
 
 def _clear_merchant_resolution_after_release(
     session_id: Any,
     teammate_name: str,
 ) -> None:
-    """Clear task-scoped Merchant entity evidence after successful release."""
+    """Clear the task-scoped entity-resolution chain after release."""
 
     if (
         teammate_name
@@ -1573,6 +2340,18 @@ def _clear_merchant_resolution_after_release(
 
     if not pane_session_id:
         return
+
+    # Clear child evidence before parent evidence.
+    #
+    # No Step receipt may survive without its Project parent,
+    # and no Project receipt may survive without its Merchant parent.
+    clear_pending_step_resolution(
+        pane_session_id
+    )
+
+    clear_pending_project_resolution(
+        pane_session_id
+    )
 
     clear_pending_merchant_resolution(
         pane_session_id
@@ -2387,6 +3166,78 @@ def handle_post_tool_use(
             session_id,
             resolution,
         )
+
+    # ------------------------------------------------------------
+    # Exact hierarchical entity-resolution staging.
+    #
+    # These helpers inspect the exact Bash command themselves and
+    # fail closed when the command family does not match.
+    #
+    # merchant resolve
+    #     -> Merchant receipt
+    #
+    # project resolve
+    #     -> requires current-task Merchant receipt
+    #     -> Project receipt
+    #
+    # step resolve
+    #     -> requires current-task Merchant + Project receipts
+    #     -> Step receipt
+    # ------------------------------------------------------------
+
+    if tool_name == "Bash":
+        tmux_context = (
+            _trusted_tmux_merchant_stage_context(
+                payload=payload,
+                session_id=session_id,
+            )
+        )
+
+        if tmux_context is not None:
+            (
+                pane_session_id,
+                owner_session_id,
+                teammate_name,
+                run_id,
+                task_id,
+                authorized_operations,
+            ) = tmux_context
+
+            _stage_exact_tmux_project_resolution(
+                payload=payload,
+                pane_session_id=(
+                    pane_session_id
+                ),
+                owner_session_id=(
+                    owner_session_id
+                ),
+                teammate_name=(
+                    teammate_name
+                ),
+                run_id=run_id,
+                task_id=task_id,
+                authorized_operations=(
+                    authorized_operations
+                ),
+            )
+
+            _stage_exact_tmux_step_resolution(
+                payload=payload,
+                pane_session_id=(
+                    pane_session_id
+                ),
+                owner_session_id=(
+                    owner_session_id
+                ),
+                teammate_name=(
+                    teammate_name
+                ),
+                run_id=run_id,
+                task_id=task_id,
+                authorized_operations=(
+                    authorized_operations
+                ),
+            )
 
     # ------------------------------------------------------------
     # Gate 11I exact CLI path.

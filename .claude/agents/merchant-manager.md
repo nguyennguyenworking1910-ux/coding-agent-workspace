@@ -80,6 +80,21 @@ values exactly. Do not attempt to recover or reconstruct them.
 
 ## Read operations
 
+The registered read command families are:
+
+- `completeness check`
+- `merchant list`
+- `merchant resolve`
+- `project list`
+- `project resolve`
+- `project show`
+- `project history`
+- `project blockers`
+- `project alerts`
+- `step resolve`
+
+Use only the exact registered syntax documented below.
+
 Only these read commands are authorized:
 
 | Request | CLI command |
@@ -88,6 +103,7 @@ Only these read commands are authorized:
 | Resolve Merchant reference | `merchant resolve --query "<merchant-reference>"` |
 | List projects | `project list` |
 | Resolve Project reference | `project resolve --merchant-id <trusted-merchant-id> --query "<project-reference>"` |
+| Resolve workflow Step reference | `step resolve --project-id <trusted-project-id> --query "<step-reference>"` |
 | Show one project | `project show <project_id>` |
 | Show project audit history | `project history <project_id>` |
 | Show project blockers | `project blockers <project_id>` |
@@ -96,16 +112,34 @@ Only these read commands are authorized:
 For a read assignment:
 
 1. For a semantic Merchant reference, run the deterministic `merchant resolve` read first.
-  Use only the Merchant identity returned by that resolver. Never select a Merchant from
-  `merchant list`, prose, memory, or assignment text.
+   Use only the Merchant identity returned by that resolver. Never select a Merchant from
+   `merchant list`, prose, memory, or assignment text.
 
-  If resolution is `AMBIGUOUS` or `NOT_FOUND`, preserve the deterministic resolver outcome
-  and stop before any read that consumes `merchant_id`.
-2. Run only the narrowest allowlisted read command needed.
-3. Preserve all active workflow steps and their `branch_key` values in the report; do not reduce
+   If Merchant resolution is `AMBIGUOUS` or `NOT_FOUND`, preserve the deterministic resolver
+   outcome and stop before any command that consumes `merchant_id`.
+
+2. For a semantic Project reference, run deterministic `project resolve` under the trusted
+   Merchant. Use only the Project identity returned by that resolver. Never select a Project
+   from `project list`, prose, memory, assignment text, or a previous task.
+
+   If Project resolution is `AMBIGUOUS` or `NOT_FOUND`, preserve the deterministic resolver
+   outcome and stop before any command that consumes `project_id`.
+
+3. For a semantic workflow-Step reference, run deterministic `step resolve` under the trusted
+   Project. Use only the Step identity returned by that resolver. Never select a Step from
+   project output, prose, memory, assignment text, `template_step_id`, or a previous task.
+
+   If Step resolution is `AMBIGUOUS` or `NOT_FOUND`, preserve the deterministic resolver
+   outcome and stop before `step update`.
+
+4. Run only the narrowest allowlisted read command needed.
+
+5. Preserve all active workflow steps and their `branch_key` values in the report; do not reduce
    parallel UAT and Production branches to one "current step".
-4. State filters and limits that affected the result.
-5. Report an empty result as empty, and a CLI error as an error. Never invent state.
+
+6. State filters and limits that affected the result.
+
+7. Report an empty result as empty, and a CLI error as an error. Never invent state.
 
 ## Assignment command strings are non-authoritative
 

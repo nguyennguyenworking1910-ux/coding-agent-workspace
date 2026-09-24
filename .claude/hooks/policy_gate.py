@@ -72,6 +72,13 @@ if __package__ in (None, ""):
         BOUND,
         bind_project_resolution_receipt,
     )
+    from tmux_step_resolution import (
+        load_pending_step_resolution,
+    )
+    from step_resolution_gate import (
+        BOUND as STEP_BOUND,
+        bind_step_resolution_receipt,
+    )
 
 else:
     from .runtime_state import (
@@ -111,6 +118,13 @@ else:
     from .project_resolution_gate import (
         BOUND,
         bind_project_resolution_receipt,
+    )
+    from .tmux_step_resolution import (
+        load_pending_step_resolution,
+    )
+    from .step_resolution_gate import (
+        BOUND as STEP_BOUND,
+        bind_step_resolution_receipt,
     )
 
 HOOK_EVENT_NAME = "PreToolUse"
@@ -527,6 +541,28 @@ def _canonical_project_uuid(
     ):
         return None
 
+def _canonical_step_uuid(
+    value: Any,
+) -> str | None:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return None
+
+    try:
+        return str(
+            uuid.UUID(
+                value.strip()
+            )
+        )
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
 
 def _merchant_id_from_cli_tokens(
     tokens: tuple[str, ...],
@@ -696,6 +732,97 @@ def _project_id_from_cli_tokens(
         )
 
     # ------------------------------------------------------------
+    # step resolve
+    #
+    # CLI contract:
+    #
+    # step resolve
+    #     --project-id <trusted-project-id>
+    #     --query <step-reference>
+    #
+    # Project binding must already exist before Step resolution.
+    # ------------------------------------------------------------
+
+    if command == "step resolve":
+        supplied_project_id: str | None = None
+
+        index = 0
+
+        while index < len(
+            arguments
+        ):
+            token = arguments[index]
+
+            if token == "--project-id":
+                if (
+                    supplied_project_id
+                    is not None
+                ):
+                    return command, ""
+
+                if (
+                    index + 1
+                    >= len(arguments)
+                ):
+                    return command, ""
+
+                value = str(
+                    arguments[
+                        index + 1
+                    ]
+                ).strip()
+
+                if (
+                    not value
+                    or value.startswith("-")
+                ):
+                    return command, ""
+
+                supplied_project_id = (
+                    value
+                )
+
+                index += 2
+                continue
+
+            if token.startswith(
+                "--project-id="
+            ):
+                if (
+                    supplied_project_id
+                    is not None
+                ):
+                    return command, ""
+
+                value = (
+                    token.split(
+                        "=",
+                        1,
+                    )[1]
+                    .strip()
+                )
+
+                if not value:
+                    return command, ""
+
+                supplied_project_id = (
+                    value
+                )
+
+                index += 1
+                continue
+
+            index += 1
+
+        if supplied_project_id is None:
+            return command, ""
+
+        return (
+            command,
+            supplied_project_id,
+        )
+
+    # ------------------------------------------------------------
     # project alerts
     #
     # CLI contract:
@@ -858,6 +985,57 @@ def _project_id_from_cli_tokens(
 
     return command, None
 
+
+def _step_id_from_cli_tokens(
+    tokens: tuple[str, ...],
+) -> tuple[str, str | None]:
+    """Return normalized command and consumed Step id.
+
+    Current Step-id consumer:
+
+        step update <step_id>
+
+    Return semantics:
+
+    None
+        command does not consume a Step id.
+
+    ""
+        command attempted to consume a Step id but invocation
+        is malformed. Caller must fail closed.
+
+    UUID/text
+        supplied Step id to canonicalize and bind.
+    """
+
+    if len(tokens) < 4:
+        return "", None
+
+    command = (
+        f"{tokens[2]} {tokens[3]}"
+        .strip()
+        .lower()
+    )
+
+    arguments = tokens[4:]
+
+    if command == "step update":
+        if not arguments:
+            return command, ""
+
+        step_id = arguments[0]
+
+        if step_id.startswith(
+            "-"
+        ):
+            return command, ""
+
+        return (
+            command,
+            step_id,
+        )
+
+    return command, None
 
 def merchant_resolution_use_decision(
     payload: dict[str, Any],
@@ -1503,6 +1681,465 @@ def project_resolution_use_decision(
             "resolved for this run/task and Merchant. Do not copy or "
             "substitute a Project UUID from project list, prose, memory, "
             "assignment text, or another Merchant."
+        )
+
+    return None
+
+def step_resolution_use_decision(
+    payload: dict[str, Any],
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Require trusted Step resolver evidence before consuming step_id."""
+
+    sender_agent_type = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if (
+        sender_agent_type
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    tool_name = str(
+        payload.get(
+            "tool_name"
+        )
+        or ""
+    ).strip()
+
+    if tool_name not in {
+        "Bash",
+        "PowerShell",
+    }:
+        return None
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return None
+
+    command_text_value = (
+        tool_input.get(
+            "command"
+        )
+    )
+
+    tokens = (
+        _direct_merchant_agent_cli_tokens(
+            command_text_value
+        )
+    )
+
+    # ------------------------------------------------------------
+    # No wrapped Merchant CLI may consume trusted Step bindings.
+    # ------------------------------------------------------------
+
+    if tokens is None:
+        raw_command = str(
+            command_text_value
+            or ""
+        )
+
+        normalized_raw = (
+            raw_command
+            .replace(
+                "\\",
+                "/",
+            )
+            .lower()
+        )
+
+        if (
+            "agents/tools/merchant/agent_cli.py"
+            in normalized_raw
+        ):
+            return deny(
+                "Blocked: Merchant CLI must be invoked directly. "
+                "Wrapper scripts, pipelines, redirects, shell chaining, "
+                "and reconstructed Merchant commands cannot consume "
+                "trusted Step entity bindings."
+            )
+
+        return None
+
+    (
+        merchant_command,
+        supplied_step_id,
+    ) = _step_id_from_cli_tokens(
+        tokens
+    )
+
+    # ------------------------------------------------------------
+    # Resolver establishes Step evidence.
+    #
+    # Its --project-id is independently protected by Project gate.
+    # ------------------------------------------------------------
+
+    if (
+        merchant_command
+        == "step resolve"
+    ):
+        return None
+
+    if supplied_step_id is None:
+        return None
+
+    canonical_supplied_step_id = (
+        _canonical_step_uuid(
+            supplied_step_id
+        )
+    )
+
+    if (
+        canonical_supplied_step_id
+        is None
+    ):
+        return deny(
+            "Blocked: step_id must be a canonical Step UUID."
+        )
+
+    # ------------------------------------------------------------
+    # Exact active Merchant task owner.
+    # ------------------------------------------------------------
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return deny(
+            "Blocked: Step entity binding has no unique active "
+            "Merchant task owner."
+        )
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return deny(
+            "Blocked: Step entity binding has no exact run/task identity."
+        )
+
+    pane_session_id = str(
+        session_id
+        or ""
+    ).strip()
+
+    if not pane_session_id:
+        return deny(
+            "Blocked: Step entity binding requires a session identity."
+        )
+
+    # ============================================================
+    # PARENT 1 — MERCHANT
+    #
+    # Step receipt never establishes Merchant authority.
+    # ============================================================
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_session_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return deny(
+            "Blocked: Step binding requires an exact parent "
+            "Merchant resolver receipt. Run "
+            "`merchant resolve --query <merchant-reference>` first."
+        )
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: parent Merchant resolver evidence is malformed."
+        )
+
+    merchant_expected_query = (
+        merchant_resolution.get(
+            "query"
+        )
+    )
+
+    merchant_binding = (
+        bind_merchant_resolution_receipt(
+            merchant_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            expected_query=(
+                merchant_expected_query
+            ),
+        )
+    )
+
+    if (
+        not merchant_binding.accepted
+        or not merchant_binding.merchant_id
+    ):
+        reason = (
+            merchant_binding.question
+            or (
+                "parent Merchant resolver evidence does not establish "
+                "an exact trusted Merchant binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    trusted_merchant_id = (
+        merchant_binding.merchant_id
+    )
+
+    # ============================================================
+    # PARENT 2 — PROJECT
+    #
+    # Step receipt never establishes Project authority.
+    # ============================================================
+
+    project_receipt = (
+        load_pending_project_resolution(
+            pane_session_id
+        )
+    )
+
+    if project_receipt is None:
+        return deny(
+            "Blocked: Step binding requires an exact parent "
+            "Project resolver receipt. Run "
+            "`project resolve --merchant-id <trusted-merchant-id> "
+            "--query <project-reference>` first."
+        )
+
+    project_resolution = (
+        project_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        project_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: parent Project resolver evidence is malformed."
+        )
+
+    project_expected_query = (
+        project_resolution.get(
+            "query"
+        )
+    )
+
+    project_binding = (
+        bind_project_resolution_receipt(
+            project_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            trusted_merchant_id=(
+                trusted_merchant_id
+            ),
+            expected_query=(
+                project_expected_query
+            ),
+        )
+    )
+
+    if (
+        not project_binding.accepted
+        or not project_binding.project_id
+    ):
+        reason = (
+            project_binding.question
+            or (
+                "parent Project resolver evidence does not establish "
+                "an exact trusted Project binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    trusted_project_id = (
+        project_binding.project_id
+    )
+
+    # ============================================================
+    # STEP
+    # ============================================================
+
+    step_receipt = (
+        load_pending_step_resolution(
+            pane_session_id
+        )
+    )
+
+    if step_receipt is None:
+        return deny(
+            "Blocked: this Merchant command consumes step_id "
+            "without an exact Step resolver receipt. Run "
+            "`step resolve --project-id <trusted-project-id> "
+            "--query <step-reference>` first."
+        )
+
+    step_resolution = (
+        step_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        step_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: Step resolver evidence is malformed."
+        )
+
+    step_expected_query = (
+        step_resolution.get(
+            "query"
+        )
+    )
+
+    step_binding = (
+        bind_step_resolution_receipt(
+            step_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            trusted_merchant_id=(
+                trusted_merchant_id
+            ),
+            trusted_project_id=(
+                trusted_project_id
+            ),
+            expected_query=(
+                step_expected_query
+            ),
+        )
+    )
+
+    if (
+        not step_binding.accepted
+        or step_binding.outcome
+        != STEP_BOUND
+        or not step_binding.step_id
+    ):
+        reason = (
+            step_binding.question
+            or (
+                "Step resolver evidence does not authorize "
+                "an exact Step entity binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    # ============================================================
+    # Exact CLI Step UUID equality.
+    # ============================================================
+
+    if (
+        step_binding.step_id
+        != canonical_supplied_step_id
+    ):
+        return deny(
+            "Blocked: step_id does not match the exact Step "
+            "resolved for this run/task, Merchant, and Project. "
+            "Do not copy or substitute a Step UUID from project "
+            "output, alerts, prose, memory, assignment text, "
+            "template_step_id, or another Project."
         )
 
     return None
@@ -2439,6 +3076,26 @@ def main() -> int:
         print(
             json.dumps(
                 project_resolution_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
+    step_resolution_decision = (
+        step_resolution_use_decision(
+            payload,
+            session_id,
+        )
+    )
+
+    if (
+        step_resolution_decision
+        is not None
+    ):
+        print(
+            json.dumps(
+                step_resolution_decision,
                 ensure_ascii=False,
             )
         )
