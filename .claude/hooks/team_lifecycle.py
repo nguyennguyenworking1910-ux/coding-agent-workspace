@@ -418,6 +418,7 @@ def init_teammate_record(
         "last_transition_at": time.time(),
         "authorized_operations": [],
         "authorized_selected_agents": [],
+        "trusted_pane_session_id": None,
     }
 
 
@@ -1572,6 +1573,113 @@ def mark_teammate_failed(
         record["authorized_selected_agents"] = []
         return True
 
+def recover_failed_teammate_to_idle(
+    session_id: Any,
+    teammate_name: str,
+) -> tuple[bool, str]:
+    """Recover one terminal FAILED teammate for a fresh future run.
+
+    This does not revive, retry, or restore authority from the failed run.
+    It only makes the canonical teammate identity reusable after the failed
+    run has been fully detached from lifecycle authority.
+    """
+
+    with locked_team_state(
+        session_id
+    ) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = (
+            state.get(
+                "teammates",
+                {},
+            )
+            .get(
+                teammate_name
+            )
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != teammate_name
+        ):
+            return False, "NON_CANONICAL"
+
+        if (
+            record.get(
+                "status"
+            )
+            != TeammateLifecycleStatus.FAILED.value
+        ):
+            return False, "NOT_FAILED"
+
+        # FAILED may be reused only after all authority from the
+        # previous run has already been detached.
+        if (
+            record.get(
+                "current_run_id"
+            )
+            is not None
+            or record.get(
+                "current_task_id"
+            )
+            is not None
+        ):
+            return False, "RUN_STILL_BOUND"
+
+        if (
+            record.get(
+                "authorized_operations"
+            )
+            or record.get(
+                "authorized_selected_agents"
+            )
+        ):
+            return False, "AUTHORITY_STILL_BOUND"
+
+        # We only recover a teammate that actually delivered a terminal
+        # SendMessage. A crash/no-report FAILED record stays failed.
+        if (
+            record.get(
+                "result_received"
+            )
+            is not True
+            or record.get(
+                "report_source"
+            )
+            != "sendmessage"
+        ):
+            return False, "TERMINAL_REPORT_NOT_RECEIVED"
+
+        record[
+            "status"
+        ] = (
+            TeammateLifecycleStatus.IDLE_REUSABLE.value
+        )
+
+        record[
+            "terminal_recovery_sent"
+        ] = False
+
+        record.pop(
+            "failure_reason",
+            None,
+        )
+
+        _touch_transition(
+            record
+        )
+
+        return True, "RECOVERED"
 
 def get_teammate_status(
     session_id: Any,
@@ -1760,3 +1868,331 @@ def mark_bound_report_received(
         )
 
         return True
+
+
+def bind_reported_teammate_pane_session(
+    session_id: Any,
+    teammate_name: str,
+    pane_session_id: Any,
+    run_id: str,
+    task_id: str,
+    *,
+    required_operation: str,
+) -> tuple[bool, str]:
+    """Bind one pane identity only after a trusted SendMessage report.
+
+    This is identity evidence only. It does not grant write authority.
+
+    The first successful binding is sticky for the lifetime of the
+    canonical teammate/session. A different pane may never silently
+    replace it.
+    """
+
+    pane_id = str(
+        pane_session_id
+        or ""
+    ).strip()
+
+    owner_run_id = str(
+        run_id
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        task_id
+        or ""
+    ).strip()
+
+    operation = str(
+        required_operation
+        or ""
+    ).strip()
+
+    if not all(
+        (
+            pane_id,
+            teammate_name,
+            owner_run_id,
+            owner_task_id,
+            operation,
+        )
+    ):
+        return False, "INVALID_BINDING"
+
+    with locked_team_state(
+        session_id
+    ) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = (
+            state.get(
+                "teammates",
+                {},
+            )
+            .get(
+                teammate_name
+            )
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != teammate_name
+        ):
+            return False, "NON_CANONICAL"
+
+        status = str(
+            record.get(
+                "status"
+            )
+            or ""
+        )
+
+        if status not in {
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        }:
+            return False, "REPORT_NOT_TRUSTED"
+
+        if (
+            record.get(
+                "result_received"
+            )
+            is not True
+            or record.get(
+                "report_source"
+            )
+            != "sendmessage"
+        ):
+            return False, "REPORT_NOT_TRUSTED"
+
+        current_run_id = str(
+            record.get(
+                "current_run_id"
+            )
+            or ""
+        ).strip()
+
+        current_task_id = str(
+            record.get(
+                "current_task_id"
+            )
+            or ""
+        ).strip()
+
+        if (
+            current_run_id
+            != owner_run_id
+            or current_task_id
+            != owner_task_id
+        ):
+            return False, "BINDING_MISMATCH"
+
+        operations = [
+            str(
+                item
+            ).strip()
+            for item in (
+                record.get(
+                    "authorized_operations"
+                )
+                or []
+            )
+        ]
+
+        selected_agents = [
+            str(
+                item
+            ).strip()
+            for item in (
+                record.get(
+                    "authorized_selected_agents"
+                )
+                or []
+            )
+        ]
+
+        if operations != [
+            operation
+        ]:
+            return False, "AUTHORIZATION_MISMATCH"
+
+        if selected_agents != [
+            teammate_name
+        ]:
+            return False, "AUTHORIZATION_MISMATCH"
+
+        existing = str(
+            record.get(
+                "trusted_pane_session_id"
+            )
+            or ""
+        ).strip()
+
+        if existing:
+            if existing != pane_id:
+                return False, "PANE_BINDING_MISMATCH"
+
+            return True, "ALREADY_BOUND"
+
+        record[
+            "trusted_pane_session_id"
+        ] = pane_id
+
+        return True, "BOUND"
+
+
+def trusted_teammate_pane_session_matches(
+    session_id: Any,
+    teammate_name: str,
+    pane_session_id: Any,
+    run_id: str,
+    task_id: str,
+    *,
+    required_operation: str,
+) -> tuple[bool, str]:
+    """Validate a reused pane against exact active lifecycle authority."""
+
+    pane_id = str(
+        pane_session_id
+        or ""
+    ).strip()
+
+    owner_run_id = str(
+        run_id
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        task_id
+        or ""
+    ).strip()
+
+    operation = str(
+        required_operation
+        or ""
+    ).strip()
+
+    if not all(
+        (
+            pane_id,
+            teammate_name,
+            owner_run_id,
+            owner_task_id,
+            operation,
+        )
+    ):
+        return False, "INVALID_BINDING"
+
+    with locked_team_state(
+        session_id
+    ) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = (
+            state.get(
+                "teammates",
+                {},
+            )
+            .get(
+                teammate_name
+            )
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get(
+                "canonical_name"
+            )
+            != teammate_name
+        ):
+            return False, "NON_CANONICAL"
+
+        if (
+            record.get(
+                "status"
+            )
+            != TeammateLifecycleStatus.RUNNING.value
+        ):
+            return False, "NOT_RUNNING"
+
+        if (
+            str(
+                record.get(
+                    "current_run_id"
+                )
+                or ""
+            ).strip()
+            != owner_run_id
+            or str(
+                record.get(
+                    "current_task_id"
+                )
+                or ""
+            ).strip()
+            != owner_task_id
+        ):
+            return False, "BINDING_MISMATCH"
+
+        operations = [
+            str(
+                item
+            ).strip()
+            for item in (
+                record.get(
+                    "authorized_operations"
+                )
+                or []
+            )
+        ]
+
+        selected_agents = [
+            str(
+                item
+            ).strip()
+            for item in (
+                record.get(
+                    "authorized_selected_agents"
+                )
+                or []
+            )
+        ]
+
+        if operations != [
+            operation
+        ]:
+            return False, "AUTHORIZATION_MISMATCH"
+
+        if selected_agents != [
+            teammate_name
+        ]:
+            return False, "AUTHORIZATION_MISMATCH"
+
+        trusted_pane = str(
+            record.get(
+                "trusted_pane_session_id"
+            )
+            or ""
+        ).strip()
+
+        if not trusted_pane:
+            return False, "NO_TRUSTED_PANE"
+
+        if trusted_pane != pane_id:
+            return False, "PANE_BINDING_MISMATCH"
+
+        return True, "MATCHED"

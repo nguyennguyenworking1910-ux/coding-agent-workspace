@@ -31,6 +31,9 @@ from team_lifecycle import (
     mark_teammate_idle_reusable,
     mark_teammate_running,
     new_team_state,
+    recover_failed_teammate_to_idle,
+    load_team_state,
+    locked_team_state,
     LOCK_TIMEOUT_SECONDS,
     TEAM_STATE_DIR_ENV_VAR,
 )
@@ -147,6 +150,7 @@ class TeammateReuseTests(unittest.TestCase):
         self.assertTrue(is_new2)
         self.assertEqual(name1, "reviewer")
         self.assertEqual(name2, "coder")
+
 
 
 class TeammateLifecycleStatusTests(unittest.TestCase):
@@ -856,6 +860,492 @@ class RepeatedTeamStateWriteTests(unittest.TestCase):
         state = team_lifecycle.load_team_state(self.session_id)
         self.assertIsNotNone(state)
         self.assertIn("reviewer", state["teammates"])
+
+def _setup_terminal_failed_teammate(
+    monkeypatch,
+    tmp_path,
+    *,
+    session_id="failed-recovery-session",
+    teammate_name="merchant-manager",
+    run_id="failed-recovery-run",
+    task_id="failed-recovery-run:merchant-manager",
+    report_received=True,
+):
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(
+            tmp_path
+            / "team_state"
+        ),
+    )
+
+    decision, name = (
+        allocate_teammate(
+            session_id,
+            teammate_name,
+            teammate_name,
+        )
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert (
+        name
+        == teammate_name
+    )
+
+    assert (
+        mark_teammate_running(
+            session_id,
+            teammate_name,
+            run_id,
+            task_id,
+            operations=[
+                "merchant_apply",
+            ],
+            selected_agents=[
+                teammate_name,
+            ],
+        )
+        is True
+    )
+
+    if report_received:
+        assert (
+            mark_report_received(
+                session_id,
+                teammate_name,
+                task_id,
+                "sendmessage",
+            )
+            is True
+        )
+
+    assert (
+        mark_teammate_failed(
+            session_id,
+            teammate_name,
+            reason=(
+                "trusted terminal apply failure"
+            ),
+        )
+        is True
+    )
+
+    return (
+        session_id,
+        teammate_name,
+        run_id,
+        task_id,
+    )
+
+
+def test_terminal_failed_teammate_can_be_recovered_for_fresh_run(
+    monkeypatch,
+    tmp_path,
+):
+    (
+        session_id,
+        teammate_name,
+        _run_id,
+        _task_id,
+    ) = (
+        _setup_terminal_failed_teammate(
+            monkeypatch,
+            tmp_path,
+        )
+    )
+
+    before = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    assert (
+        before
+        is not None
+    )
+
+    before_record = (
+        before[
+            "teammates"
+        ][
+            teammate_name
+        ]
+    )
+
+    assert (
+        before_record[
+            "status"
+        ]
+        == TeammateLifecycleStatus.FAILED.value
+    )
+
+    assert (
+        before_record[
+            "current_run_id"
+        ]
+        is None
+    )
+
+    assert (
+        before_record[
+            "current_task_id"
+        ]
+        is None
+    )
+
+    assert (
+        before_record[
+            "authorized_operations"
+        ]
+        == []
+    )
+
+    assert (
+        before_record[
+            "authorized_selected_agents"
+        ]
+        == []
+    )
+
+    assert (
+        before_record[
+            "result_received"
+        ]
+        is True
+    )
+
+    assert (
+        before_record[
+            "report_source"
+        ]
+        == "sendmessage"
+    )
+
+    recovered, reason = (
+        recover_failed_teammate_to_idle(
+            session_id,
+            teammate_name,
+        )
+    )
+
+    assert (
+        recovered
+        is True
+    )
+
+    assert (
+        reason
+        == "RECOVERED"
+    )
+
+    after = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    assert (
+        after
+        is not None
+    )
+
+    record = (
+        after[
+            "teammates"
+        ][
+            teammate_name
+        ]
+    )
+
+    assert (
+        record[
+            "status"
+        ]
+        == TeammateLifecycleStatus.IDLE_REUSABLE.value
+    )
+
+    assert (
+        record[
+            "current_run_id"
+        ]
+        is None
+    )
+
+    assert (
+        record[
+            "current_task_id"
+        ]
+        is None
+    )
+
+    assert (
+        record[
+            "authorized_operations"
+        ]
+        == []
+    )
+
+    assert (
+        record[
+            "authorized_selected_agents"
+        ]
+        == []
+    )
+
+    assert (
+        record[
+            "terminal_recovery_sent"
+        ]
+        is False
+    )
+
+    assert (
+        "failure_reason"
+        not in record
+    )
+
+
+def test_failed_recovery_rejects_when_run_is_still_bound(
+    monkeypatch,
+    tmp_path,
+):
+    (
+        session_id,
+        teammate_name,
+        run_id,
+        task_id,
+    ) = (
+        _setup_terminal_failed_teammate(
+            monkeypatch,
+            tmp_path,
+        )
+    )
+
+    # Simulate corrupted / unsafe FAILED state:
+    # prior run is still bound.
+    with locked_team_state(
+        session_id
+    ) as state:
+        assert (
+            state
+            is not None
+        )
+
+        record = (
+            state[
+                "teammates"
+            ][
+                teammate_name
+            ]
+        )
+
+        record[
+            "current_run_id"
+        ] = run_id
+
+        record[
+            "current_task_id"
+        ] = task_id
+
+    recovered, reason = (
+        recover_failed_teammate_to_idle(
+            session_id,
+            teammate_name,
+        )
+    )
+
+    assert (
+        recovered
+        is False
+    )
+
+    assert (
+        reason
+        == "RUN_STILL_BOUND"
+    )
+
+    state = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    assert (
+        state[
+            "teammates"
+        ][
+            teammate_name
+        ][
+            "status"
+        ]
+        == TeammateLifecycleStatus.FAILED.value
+    )
+
+
+def test_failed_recovery_rejects_when_authority_is_still_bound(
+    monkeypatch,
+    tmp_path,
+):
+    (
+        session_id,
+        teammate_name,
+        _run_id,
+        _task_id,
+    ) = (
+        _setup_terminal_failed_teammate(
+            monkeypatch,
+            tmp_path,
+        )
+    )
+
+    # Simulate unsafe leftover authorization from failed run.
+    with locked_team_state(
+        session_id
+    ) as state:
+        assert (
+            state
+            is not None
+        )
+
+        record = (
+            state[
+                "teammates"
+            ][
+                teammate_name
+            ]
+        )
+
+        record[
+            "authorized_operations"
+        ] = [
+            "merchant_apply",
+        ]
+
+        record[
+            "authorized_selected_agents"
+        ] = [
+            "merchant-manager",
+        ]
+
+    recovered, reason = (
+        recover_failed_teammate_to_idle(
+            session_id,
+            teammate_name,
+        )
+    )
+
+    assert (
+        recovered
+        is False
+    )
+
+    assert (
+        reason
+        == "AUTHORITY_STILL_BOUND"
+    )
+
+    state = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    assert (
+        state[
+            "teammates"
+        ][
+            teammate_name
+        ][
+            "status"
+        ]
+        == TeammateLifecycleStatus.FAILED.value
+    )
+
+
+def test_failed_recovery_rejects_without_sendmessage_terminal_report(
+    monkeypatch,
+    tmp_path,
+):
+    (
+        session_id,
+        teammate_name,
+        _run_id,
+        _task_id,
+    ) = (
+        _setup_terminal_failed_teammate(
+            monkeypatch,
+            tmp_path,
+            report_received=False,
+        )
+    )
+
+    state = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    record = (
+        state[
+            "teammates"
+        ][
+            teammate_name
+        ]
+    )
+
+    assert (
+        record[
+            "status"
+        ]
+        == TeammateLifecycleStatus.FAILED.value
+    )
+
+    assert (
+        record[
+            "result_received"
+        ]
+        is False
+    )
+
+    recovered, reason = (
+        recover_failed_teammate_to_idle(
+            session_id,
+            teammate_name,
+        )
+    )
+
+    assert (
+        recovered
+        is False
+    )
+
+    assert (
+        reason
+        == "TERMINAL_REPORT_NOT_RECEIVED"
+    )
+
+    state = (
+        load_team_state(
+            session_id
+        )
+    )
+
+    assert (
+        state[
+            "teammates"
+        ][
+            teammate_name
+        ][
+            "status"
+        ]
+        == TeammateLifecycleStatus.FAILED.value
+    )
 
 
 if __name__ == "__main__":

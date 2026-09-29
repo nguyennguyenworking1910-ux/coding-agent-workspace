@@ -474,6 +474,109 @@ class MerchantReadRepository:
             cursor.execute(query, (project_id, limit))
             return _records(cursor.fetchall())
 
+    def list_document_revisions(
+        self,
+        *,
+        merchant_id: str,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        merchant_uuid = _uuid(
+            merchant_id,
+            "merchant_id",
+        )
+
+        project_uuid = (
+            _uuid(
+                project_id,
+                "project_id",
+            )
+            if project_id is not None
+            else None
+        )
+
+        with self.repository.connection(
+            read_only=True
+        ) as connection:
+            with connection.transaction():
+                if project_uuid is None:
+                    query = """
+                        SELECT
+                            revision.id,
+                            revision.project_id,
+                            source_project.merchant_id,
+                            revision.document_type,
+                            revision.revision_number,
+                            revision.content_hash,
+                            revision.signed,
+                            revision.signed_at,
+                            revision.effective_date,
+                            revision.expiry_date,
+                            revision.superseded_by,
+                            revision.created_at
+                        FROM merchant_ops.document_revisions
+                            AS revision
+                        JOIN merchant_ops.projects
+                            AS source_project
+                        ON source_project.id =
+                            revision.project_id
+                        WHERE source_project.merchant_id = %s
+                        ORDER BY
+                            revision.document_type,
+                            revision.revision_number,
+                            revision.project_id,
+                            revision.id
+                    """
+
+                    parameters = (
+                        merchant_uuid,
+                    )
+
+                else:
+                    query = """
+                        SELECT
+                            revision.id,
+                            revision.project_id,
+                            source_project.merchant_id,
+                            revision.document_type,
+                            revision.revision_number,
+                            revision.content_hash,
+                            revision.signed,
+                            revision.signed_at,
+                            revision.effective_date,
+                            revision.expiry_date,
+                            revision.superseded_by,
+                            revision.created_at
+                        FROM merchant_ops.document_revisions
+                            AS revision
+                        JOIN merchant_ops.projects
+                            AS source_project
+                        ON source_project.id =
+                            revision.project_id
+                        WHERE source_project.merchant_id = %s
+                        AND revision.project_id = %s
+                        ORDER BY
+                            revision.document_type,
+                            revision.revision_number,
+                            revision.project_id,
+                            revision.id
+                    """
+
+                    parameters = (
+                        merchant_uuid,
+                        project_uuid,
+                    )
+
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        query,
+                        parameters,
+                    )
+
+                    return [
+                        dict(row)
+                        for row in cursor.fetchall()
+                    ]
+
 
 def _records(rows: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]

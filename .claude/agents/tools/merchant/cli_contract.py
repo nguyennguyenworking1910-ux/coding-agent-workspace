@@ -44,6 +44,7 @@ READ_COMMANDS = frozenset(
         "project resolve",
         "project show",
         "step resolve",
+        "document resolve",
     }
 )
 

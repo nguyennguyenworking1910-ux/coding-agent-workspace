@@ -41,6 +41,9 @@ if __package__ in (None, ""):
         authorize_local_auto_apply,
         handle_toggle_command,
     )
+    from intent_envelope_bridge import (
+        save_intent_envelope,
+    )
 else:
     from .runtime_state import (
         CLAUDE_DIR,
@@ -57,8 +60,18 @@ else:
         authorize_local_auto_apply,
         handle_toggle_command,
     )
+    from .intent_envelope_bridge import (
+        save_intent_envelope,
+    )
 
 HOOK_EVENT_NAME = "UserPromptSubmit"
+
+HOOK_EVENT_NAMES = frozenset(
+    {
+        "UserPromptSubmit",
+        "UserPromptExpansion",
+    }
+)
 
 CONTROLLED_COMMANDS = ("solve", "schedule-agent")
 
@@ -327,6 +340,20 @@ def run(
     An empty dict means "say nothing" — the prompt is not ours.
     """
     environment = os.environ if env is None else env
+    hook_event_name = str(
+        payload.get(
+            "hook_event_name"
+        )
+        or HOOK_EVENT_NAME
+    ).strip()
+
+    if (
+        hook_event_name
+        not in HOOK_EVENT_NAMES
+    ):
+        hook_event_name = (
+            HOOK_EVENT_NAME
+        )
 
     prompt = payload.get("prompt")
 
@@ -544,6 +571,13 @@ def run(
         ),
     )
 
+    save_intent_envelope(
+        payload.get(
+            "session_id"
+        ),
+        envelope_payload,
+    )
+
     envelope_json = json.dumps(envelope_payload, ensure_ascii=False, indent=2)
 
     additional_context = (
@@ -572,13 +606,28 @@ def run(
             "Use this to determine whether to create or reuse teammates."
         )
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": HOOK_EVENT_NAME,
-            "additionalContext": additional_context,
-        }
+    hook_specific_output = {
+        "hookEventName": (
+            hook_event_name
+        ),
     }
 
+    # Older/direct UserPromptSubmit runtimes can still
+    # use additionalContext. UserPromptExpansion uses
+    # the deterministic /solve dynamic-context bridge.
+    if (
+        hook_event_name
+        != "UserPromptExpansion"
+    ):
+        hook_specific_output[
+            "additionalContext"
+        ] = additional_context
+
+    return {
+        "hookSpecificOutput": (
+            hook_specific_output
+        )
+    }
 
 def main() -> int:
     configure_utf8_output()

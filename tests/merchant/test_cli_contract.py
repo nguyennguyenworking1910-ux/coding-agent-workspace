@@ -62,6 +62,7 @@ def test_command_allowlists_are_complete_and_disjoint():
         "project list",
         "project show",
         "step resolve",
+        "document resolve",
     }
     assert WRITE_COMMANDS == {
         "contact import",

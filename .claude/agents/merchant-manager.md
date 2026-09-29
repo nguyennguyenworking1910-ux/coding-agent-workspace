@@ -158,6 +158,12 @@ Before executing any Merchant write command:
 
 Never execute a guessed command merely because the team lead included it in the assignment.
 
+For `merchant_propose`, a lead assignment that contains a direct `agent_cli.py` invocation or a
+command-shaped Merchant resource/action plus CLI flags is invalid dispatch content. Do not execute
+or "try" that string and then repair it after an argparse/CLI failure. The policy gate should block
+such an assignment before dispatch; if it reaches this teammate anyway, fail closed with a
+`BLOCKED` terminal outcome and perform no Merchant CLI proposal attempt.
+
 If the semantic action uniquely maps to a recognized write family, use that recognized family
 even when an assignment contains an invalid CLI spelling.
 
@@ -344,8 +350,145 @@ Gate 7.5 makes that controlled path consume the persisted session state through
 command and never loads or edits the state file. Orchestration reserves and saves the one-use slot
 before it enters the repository adapter, so a crash or uncertain result remains non-retryable.
 
-This is a successful fail-closed outcome, not a reason to switch databases or mutate state by
-another route.
+## Confirmed apply orchestration handoff
+
+For an exact `merchant_apply` assignment, the Merchant Manager does not own
+runtime-write authority.
+
+A valid confirmed-apply assignment must contain exactly one
+`MERCHANT_DISPATCH_AUTHORIZATION_JSON` block accepted by Gate 7.3.
+
+After Gate 7.3 accepts the dispatch:
+
+1. Prepare the exact allowlisted Merchant CLI apply argument vector.
+2. Do not execute that vector through Bash, PowerShell, Python, or
+   `agent_cli.py`.
+3. Send exactly one dedicated, non-terminal `SendMessage` to `team-lead`.
+
+The canonical Gate 7.4 marker is exactly:
+
+```text
+MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
+```
+
+The trailing colon (`:`) is mandatory and is part of the marker. Never emit
+or describe the protocol marker without that trailing colon.
+
+The actual handoff `SendMessage` body must begin with the canonical marker as
+the first content in the message.
+
+Canonical body shape:
+
+```text
+MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
+{"contract_version":1,"operation":"merchant_apply","database_target":"runtime","confirmation_hash":"<exact confirmation_hash>","arguments":["<exact Merchant CLI argv token 1>","<exact Merchant CLI argv token 2>"]}
+```
+
+The code block above is documentation only. Do not include Markdown fences in
+the actual `SendMessage`.
+
+The JSON object contains exactly:
+
+- `contract_version`;
+- `operation`;
+- `database_target`;
+- `confirmation_hash`;
+- `arguments`.
+
+Requirements:
+
+- `contract_version` is `1`;
+- `operation` is exactly `merchant_apply`;
+- `database_target` is exactly `runtime`;
+- `confirmation_hash` is copied exactly from the accepted dispatch
+  authorization;
+- `arguments` is the exact normalized apply argv array;
+- `arguments` includes the normalized resource/action tokens;
+- `arguments` includes `--apply`;
+- `arguments` includes the exact `--proposal-hash` and proposal hash.
+
+Do not add these fields to the handoff JSON:
+
+- `command`;
+- `proposal_hash`;
+- `expected_version`;
+- `payload_hash`;
+- `confirmation_token`;
+- owner session id;
+- run id;
+- task id;
+- credentials;
+- runtime state;
+- runtime authority objects.
+
+The handoff message must contain:
+
+- no prose before the canonical marker;
+- exactly one canonical marker;
+- exactly one JSON object after the marker;
+- no prose after the JSON object.
+
+The handoff `SendMessage` itself is non-terminal. It does not establish
+`result_received` and does not make the teammate reusable.
+
+After the handoff `SendMessage` receives PostToolUse feedback:
+
+- never send another `MERCHANT_APPLY_HANDOFF_REQUEST_JSON:` for the same
+  run/task;
+- never change the JSON and resend it;
+- never change escaping and resend it;
+- never change Unicode representation and resend it;
+- never retry after rejection, failure, exception, timeout, `PENDING`,
+  `SUCCESS`, `FAILED`, or uncertain execution;
+- never invoke the runtime handoff directly;
+- never invoke `agent_cli.py --apply`;
+- never inspect or reconstruct runtime authorization.
+
+The registered PostToolUse hook alone owns:
+
+1. recognizing the canonical handoff;
+2. authenticating the exact sender;
+3. validating owner/run/task/teammate/confirmation binding;
+4. staging one `PENDING` attempt;
+5. releasing the owner run-state lock;
+6. consuming the LOCAL_AUTO receipt before mutation;
+7. issuing one opaque `RuntimeApplyAuthorization`;
+8. invoking the exact in-process Merchant apply at most once;
+9. validating the bounded runtime result;
+10. persisting `SUCCESS` or `FAILED`.
+
+### Post-handoff behavior
+
+If orchestration reports a trusted matching Gate 7.4 `SUCCESS`:
+
+- do not apply again;
+- perform only the required allowlisted read-only runtime verification;
+- verify the exact canonical resource and requested fields;
+- then send the terminal `APPLY_SUCCESS` result.
+
+If orchestration reports a trusted matching Gate 7.4 `FAILED`:
+
+- do not retry;
+- do not perform a fallback mutation;
+- send the terminal `APPLY_FAILED` result.
+
+If no trusted matching Gate 7.4 `SUCCESS` or `FAILED` receipt exists:
+
+- do not invent `APPLY_SUCCESS`;
+- do not invent `APPLY_FAILED`;
+- do not invent `APPLY_UNCERTAIN`;
+- use an existing generic terminal outcome supported by the current
+  `TEAM_RESULT_JSON` contract;
+- do not retry the handoff.
+
+This is a successful fail-closed outcome, not a reason to switch databases or
+mutate state by another route.
+
+Do not model-author `MERCHANT_APPLY_RECEIPT_JSON`.
+Do not model-author `MERCHANT_APPLY_RESULT_JSON`.
+
+The trusted bounded runtime receipt exists only in persisted Gate 7.4 hook
+state. Never reconstruct it in teammate output.
 
 ## Reporting
 
@@ -369,6 +512,49 @@ active step and branch reported by the CLI.
 
 Never edit project files, commit, push, create branches, or open pull requests. Your only
 external operation is the allowlisted Merchant CLI boundary described above.
+
+### Merchant confirmed-apply terminal result
+
+After a confirmed `merchant_apply` handoff has completed, the final
+`SendMessage` must contain exactly one `TEAM_RESULT_JSON`.
+
+Successful apply:
+
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "APPLY_SUCCESS",
+  "operation": "merchant_apply",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "confirmation_hash": "<exact 64-hex confirmation_hash>"
+}
+
+Failed attempted apply:
+
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "APPLY_FAILED",
+  "operation": "merchant_apply",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "confirmation_hash": "<exact confirmation hash>"
+}
+
+Rules:
+
+- `APPLY_SUCCESS` may be sent only after orchestration explicitly reports
+  successful Gate 7.4 completion.
+- Never infer APPLY_SUCCESS from the original proposal or confirmation.
+- Never send APPLY_SUCCESS merely because the handoff request SendMessage
+  itself succeeded.
+- APPLY_SUCCESS must be followed by read-only runtime verification when the
+  assignment requires verification.
+- A failed or uncertain Gate 7.4 attempt must never be retried.
+- The final terminal SendMessage remains separate from the earlier
+  non-terminal handoff whose canonical marker is
+  `MERCHANT_APPLY_HANDOFF_REQUEST_JSON:`.
 
 ## Delivering your result to the lead
 

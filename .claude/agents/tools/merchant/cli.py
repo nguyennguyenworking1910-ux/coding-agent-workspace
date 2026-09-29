@@ -406,6 +406,27 @@ def build_argument_parser() -> argparse.ArgumentParser:
         dest="action",
         required=True,
     )
+    document_resolve = (
+        document_actions.add_parser(
+            "resolve"
+        )
+    )
+    document_scope = (
+        document_resolve
+        .add_mutually_exclusive_group(
+            required=True
+        )
+    )
+    document_scope.add_argument(
+        "--merchant-id"
+    )
+    document_scope.add_argument(
+        "--project-id"
+    )
+    document_resolve.add_argument(
+        "--query",
+        required=True,
+    )
     revision_create = document_actions.add_parser(
         "revision-create"
     )
@@ -574,6 +595,12 @@ def dispatch_read_command(
         )
     if command == "step resolve":
         return commands.step_resolve(
+            project_id=args.project_id,
+            query=args.query,
+        )
+    if command == "document resolve":
+        return commands.document_resolve(
+            merchant_id=args.merchant_id,
             project_id=args.project_id,
             query=args.query,
         )

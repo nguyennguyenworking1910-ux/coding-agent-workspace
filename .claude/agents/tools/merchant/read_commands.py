@@ -20,6 +20,9 @@ from .project_entity_resolver import resolve_project_entity
 from .step_entity_resolver import (
     resolve_step_entity,
 )
+from .document_revision_entity_resolver import (
+    resolve_document_revision_entity,
+)
 
 try:
     from claude.clients.merchant.read_repository import (
@@ -157,6 +160,96 @@ class MerchantReadCommands:
         return {
             "success": True,
             "mode": "STEP_RESOLUTION",
+            **resolution.to_dict(),
+        }
+
+    def document_resolve(
+        self,
+        *,
+        query: str,
+        merchant_id: str | None = None,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        if (
+            merchant_id is None
+            and project_id is None
+        ):
+            raise ValueError(
+                "document resolve requires exactly one of "
+                "merchant_id or project_id"
+            )
+
+        if (
+            merchant_id is not None
+            and project_id is not None
+        ):
+            raise ValueError(
+                "document resolve requires exactly one of "
+                "merchant_id or project_id"
+            )
+
+        if project_id is not None:
+            detail = self.repository.get_project_detail(
+                project_id
+            )
+
+            project = detail.get(
+                "project"
+            )
+
+            if not isinstance(
+                project,
+                dict,
+            ):
+                raise ValueError(
+                    "Project detail is missing project metadata"
+                )
+
+            trusted_merchant_id = str(
+                project.get(
+                    "merchant_id"
+                )
+                or ""
+            ).strip()
+
+            revisions = (
+                self.repository.list_document_revisions(
+                    merchant_id=trusted_merchant_id,
+                    project_id=project_id,
+                )
+            )
+
+            resolution = (
+                resolve_document_revision_entity(
+                    query,
+                    trusted_merchant_id,
+                    revisions,
+                    project_id=project_id,
+                )
+            )
+
+        else:
+            trusted_merchant_id = str(
+                merchant_id
+            )
+
+            revisions = (
+                self.repository.list_document_revisions(
+                    merchant_id=trusted_merchant_id,
+                )
+            )
+
+            resolution = (
+                resolve_document_revision_entity(
+                    query,
+                    trusted_merchant_id,
+                    revisions,
+                )
+            )
+
+        return {
+            "success": True,
+            "mode": "DOCUMENT_REVISION_RESOLUTION",
             **resolution.to_dict(),
         }
 

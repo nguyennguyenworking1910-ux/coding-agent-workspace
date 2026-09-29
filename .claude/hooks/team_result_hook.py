@@ -33,13 +33,21 @@ SessionEnd hook clears run state and session team state.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import shlex
 import unicodedata
+
+from contextlib import (
+    redirect_stderr,
+    redirect_stdout,
+)
 from pathlib import Path
 from typing import Any
-
+from claude.system.merchant_runtime_handoff import (
+    invoke_confirmed_merchant_session_apply,
+)
 
 if __package__ in (None, ""):
     sys.path.insert(
@@ -61,6 +69,8 @@ if __package__ in (None, ""):
         mark_report_received,
         mark_teammate_failed,
         release_reported_teammate_to_idle,
+        bind_reported_teammate_pane_session,
+        trusted_teammate_pane_session_matches,
     )
     from merchant_confirmation_preferences import (
         MERCHANT_MANAGER_AGENT,
@@ -102,6 +112,7 @@ if __package__ in (None, ""):
         clear_pending_project_resolution,
         load_pending_project_resolution,
         pending_project_resolution_matches,
+        project_resolution_receipt_matches,
         stage_pending_project_resolution,
     )
     from tmux_step_resolution import (
@@ -112,6 +123,21 @@ if __package__ in (None, ""):
     from step_resolution_gate import (
         BOUND as STEP_BOUND,
         bind_step_resolution_receipt,
+    )
+    from tmux_document_revision_resolution import (
+        stage_pending_document_revision_resolution,
+        clear_pending_document_revision_resolution,
+    )
+    from merchant_runtime_handoff_gate import (
+        MERCHANT_APPLY_HANDOFF_MARKER,
+        PreparedRuntimeHandoff,
+        contains_handoff_marker,
+        handoff_candidate_from_message,
+        record_runtime_handoff_result,
+        stage_runtime_handoff_attempt,
+        bounded_runtime_apply_result,
+        failed_runtime_handoff_matches,
+        successful_runtime_handoff_matches,
     )
 
 else:
@@ -127,6 +153,8 @@ else:
         mark_report_received,
         mark_teammate_failed,
         release_reported_teammate_to_idle,
+        bind_reported_teammate_pane_session,
+        trusted_teammate_pane_session_matches,
     )
     from .merchant_confirmation_preferences import (
         MERCHANT_MANAGER_AGENT,
@@ -168,6 +196,7 @@ else:
         clear_pending_project_resolution,
         load_pending_project_resolution,
         pending_project_resolution_matches,
+        project_resolution_receipt_matches,
         stage_pending_project_resolution,
     )
     from .tmux_step_resolution import (
@@ -179,7 +208,21 @@ else:
         BOUND as STEP_BOUND,
         bind_step_resolution_receipt,
     )
-
+    from .tmux_document_revision_resolution import (
+        stage_pending_document_revision_resolution,
+        clear_pending_document_revision_resolution,
+    )
+    from .merchant_runtime_handoff_gate import (
+        MERCHANT_APPLY_HANDOFF_MARKER,
+        PreparedRuntimeHandoff,
+        contains_handoff_marker,
+        handoff_candidate_from_message,
+        record_runtime_handoff_result,
+        stage_runtime_handoff_attempt,
+        bounded_runtime_apply_result,
+        failed_runtime_handoff_matches,
+        successful_runtime_handoff_matches,
+    )
 
 HOOK_EVENT_NAMES = (
     "PostToolUse",
@@ -217,6 +260,14 @@ TEAM_RESULT_CONTRACT_VERSION = 1
 
 MERCHANT_PROPOSAL_READY_OUTCOME = (
     "PROPOSAL_READY"
+)
+
+MERCHANT_APPLY_SUCCESS_OUTCOME = (
+    "APPLY_SUCCESS"
+)
+
+MERCHANT_APPLY_FAILED_OUTCOME = (
+    "APPLY_FAILED"
 )
 
 MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES = {
@@ -588,6 +639,8 @@ def task_result_candidate_from_message(
 
     allowed_outcomes = {
         MERCHANT_PROPOSAL_READY_OUTCOME,
+        MERCHANT_APPLY_SUCCESS_OUTCOME,
+        MERCHANT_APPLY_FAILED_OUTCOME,
         *MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
     }
 
@@ -623,6 +676,45 @@ def task_result_candidate_from_message(
         # A result claiming that no proposal was emitted
         # must not carry a Merchant proposal delivery block.
         if has_proposal_delivery_block:
+            return None
+
+    if outcome in {
+        MERCHANT_APPLY_SUCCESS_OUTCOME,
+        MERCHANT_APPLY_FAILED_OUTCOME,
+    }:
+        if (
+            operation
+            != "merchant_apply"
+            or database_target
+            != "runtime"
+            or proposal_emitted
+            is not False
+            or has_proposal_delivery_block
+        ):
+            return None
+
+        confirmation_hash = (
+            candidate.get(
+                "confirmation_hash"
+            )
+        )
+
+        if (
+            not isinstance(
+                confirmation_hash,
+                str,
+            )
+            or len(
+                confirmation_hash
+            )
+            != 64
+            or any(
+                character
+                not in "0123456789abcdef"
+                for character
+                in confirmation_hash
+            )
+        ):
             return None
 
     if (
@@ -1734,6 +1826,586 @@ def _stage_exact_tmux_project_resolution(
         tool_use_id=tool_use_id,
     )
 
+
+def _stage_exact_tmux_document_revision_resolution(
+    *,
+    payload: dict[str, Any],
+    pane_session_id: Any,
+    owner_session_id: Any,
+    teammate_name: Any,
+    run_id: Any,
+    task_id: Any,
+    authorized_operations: Any,
+) -> bool:
+    """Stage one exact Document Revision resolution under trusted parents."""
+
+    if not isinstance(payload, dict):
+        return False
+
+    pane_id = str(
+        pane_session_id or ""
+    ).strip()
+
+    owner_id = str(
+        owner_session_id or ""
+    ).strip()
+
+    teammate = str(
+        teammate_name or ""
+    ).strip()
+
+    owner_run_id = str(
+        run_id or ""
+    ).strip()
+
+    owner_task_id = str(
+        task_id or ""
+    ).strip()
+
+    if not all(
+        (
+            pane_id,
+            owner_id,
+            teammate,
+            owner_run_id,
+            owner_task_id,
+        )
+    ):
+        return False
+
+    if teammate != "merchant-manager":
+        return False
+
+    operations = [
+        str(operation).strip()
+        for operation in (
+            authorized_operations or []
+        )
+        if str(operation).strip()
+    ]
+
+    if (
+        len(operations) != 1
+        or operations[0]
+        not in {
+            "merchant_read",
+            "merchant_propose",
+            "merchant_apply",
+        }
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Direct Bash only.
+    # -------------------------------------------------
+
+    if (
+        str(
+            payload.get(
+                "tool_name"
+            )
+            or ""
+        ).strip()
+        != "Bash"
+    ):
+        return False
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return False
+
+    command = tool_input.get(
+        "command"
+    )
+
+    if not isinstance(
+        command,
+        str,
+    ):
+        return False
+
+    command = command.strip()
+
+    if not command:
+        return False
+
+    # No wrappers, pipes, chaining, redirects.
+    forbidden_shell_tokens = (
+        "&&",
+        "||",
+        "|",
+        ";",
+        ">>",
+        ">",
+        "<",
+        "2>&1",
+        "2>>",
+        "2>",
+    )
+
+    if any(
+        token in command
+        for token in forbidden_shell_tokens
+    ):
+        return False
+
+    try:
+        tokens = shlex.split(
+            command,
+            posix=True,
+        )
+    except ValueError:
+        return False
+
+    if len(tokens) < 4:
+        return False
+
+    executable = (
+        tokens[0]
+        .replace("\\", "/")
+        .lower()
+    )
+
+    if executable not in {
+        "python",
+        "python.exe",
+    }:
+        return False
+
+    script = (
+        tokens[1]
+        .replace("\\", "/")
+    )
+
+    if not script.endswith(
+        ".claude/agents/tools/"
+        "merchant/agent_cli.py"
+    ):
+        return False
+
+    cli_tokens = tokens[2:]
+
+    if (
+        len(cli_tokens) < 2
+        or cli_tokens[0] != "document"
+        or cli_tokens[1] != "resolve"
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Parse exactly one scope plus one query.
+    # -------------------------------------------------
+
+    merchant_id = None
+    project_id = None
+    query = None
+
+    seen_merchant = False
+    seen_project = False
+    seen_query = False
+
+    index = 2
+
+    while index < len(
+        cli_tokens
+    ):
+        token = cli_tokens[index]
+
+        if token == "--merchant-id":
+            if (
+                seen_merchant
+                or index + 1
+                >= len(cli_tokens)
+            ):
+                return False
+
+            merchant_id = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not merchant_id:
+                return False
+
+            seen_merchant = True
+            index += 2
+            continue
+
+        if token.startswith(
+            "--merchant-id="
+        ):
+            if seen_merchant:
+                return False
+
+            merchant_id = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not merchant_id:
+                return False
+
+            seen_merchant = True
+            index += 1
+            continue
+
+        if token == "--project-id":
+            if (
+                seen_project
+                or index + 1
+                >= len(cli_tokens)
+            ):
+                return False
+
+            project_id = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not project_id:
+                return False
+
+            seen_project = True
+            index += 2
+            continue
+
+        if token.startswith(
+            "--project-id="
+        ):
+            if seen_project:
+                return False
+
+            project_id = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not project_id:
+                return False
+
+            seen_project = True
+            index += 1
+            continue
+
+        if token == "--query":
+            if (
+                seen_query
+                or index + 1
+                >= len(cli_tokens)
+            ):
+                return False
+
+            query = str(
+                cli_tokens[
+                    index + 1
+                ]
+            ).strip()
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 2
+            continue
+
+        if token.startswith(
+            "--query="
+        ):
+            if seen_query:
+                return False
+
+            query = (
+                token.split(
+                    "=",
+                    1,
+                )[1]
+                .strip()
+            )
+
+            if not query:
+                return False
+
+            seen_query = True
+            index += 1
+            continue
+
+        # No additional arguments.
+        return False
+
+    if query is None:
+        return False
+
+    # Exactly one scope.
+    if (
+        merchant_id is None
+    ) == (
+        project_id is None
+    ):
+        return False
+
+    # -------------------------------------------------
+    # Merchant parent is ALWAYS required.
+    # -------------------------------------------------
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return False
+
+    if not pending_merchant_resolution_matches(
+        merchant_receipt,
+        owner_session_id=owner_id,
+        teammate_name=teammate,
+        run_id=owner_run_id,
+        task_id=owner_task_id,
+    ):
+        return False
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return False
+
+    if (
+        merchant_resolution.get(
+            "status"
+        )
+        != "RESOLVED"
+        or merchant_resolution.get(
+            "resolved"
+        )
+        is not True
+    ):
+        return False
+
+    trusted_merchant_id = str(
+        merchant_resolution.get(
+            "merchant_id"
+        )
+        or ""
+    ).strip()
+
+    if not trusted_merchant_id:
+        return False
+
+    # -------------------------------------------------
+    # Resolve parent scope.
+    # -------------------------------------------------
+
+    if merchant_id is not None:
+        scope = "MERCHANT"
+        trusted_project_id = None
+
+        if (
+            merchant_id
+            != trusted_merchant_id
+        ):
+            return False
+
+    else:
+        scope = "PROJECT"
+
+        project_receipt = (
+            load_pending_project_resolution(
+                pane_id
+            )
+        )
+
+        if project_receipt is None:
+            return False
+
+        if not project_resolution_receipt_matches(
+            project_receipt,
+            pane_session_id=pane_id,
+            owner_session_id=owner_id,
+            teammate_name=teammate,
+            run_id=owner_run_id,
+            task_id=owner_task_id,
+            merchant_id=trusted_merchant_id,
+        ):
+            return False
+
+        project_resolution = (
+            project_receipt.get(
+                "resolution"
+            )
+        )
+
+        if not isinstance(
+            project_resolution,
+            dict,
+        ):
+            return False
+
+        if (
+            project_resolution.get(
+                "status"
+            )
+            != "RESOLVED"
+            or project_resolution.get(
+                "resolved"
+            )
+            is not True
+        ):
+            return False
+
+        trusted_project_id = str(
+            project_resolution.get(
+                "project_id"
+            )
+            or ""
+        ).strip()
+
+        if not trusted_project_id:
+            return False
+
+        if (
+            project_id
+            != trusted_project_id
+        ):
+            return False
+
+    # -------------------------------------------------
+    # Exact JSON stdout.
+    # -------------------------------------------------
+
+    tool_response = payload.get(
+        "tool_response"
+    )
+
+    if not isinstance(
+        tool_response,
+        dict,
+    ):
+        return False
+
+    stdout = tool_response.get(
+        "stdout"
+    )
+
+    if not isinstance(
+        stdout,
+        str,
+    ):
+        return False
+
+    stdout = stdout.strip()
+
+    if not stdout:
+        return False
+
+    try:
+        resolution = json.loads(
+            stdout
+        )
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return False
+
+    if not isinstance(
+        resolution,
+        dict,
+    ):
+        return False
+
+    # -------------------------------------------------
+    # CLI invocation ↔ exact output binding.
+    # -------------------------------------------------
+
+    if (
+        resolution.get(
+            "mode"
+        )
+        != "DOCUMENT_REVISION_RESOLUTION"
+    ):
+        return False
+
+    if (
+        resolution.get(
+            "query"
+        )
+        != query
+    ):
+        return False
+
+    if (
+        resolution.get(
+            "scope"
+        )
+        != scope
+    ):
+        return False
+
+    if (
+        resolution.get(
+            "merchant_id"
+        )
+        != trusted_merchant_id
+    ):
+        return False
+
+    if (
+        resolution.get(
+            "project_id"
+        )
+        != trusted_project_id
+    ):
+        return False
+
+    tool_use_id = str(
+        payload.get(
+            "tool_use_id"
+        )
+        or ""
+    ).strip()
+
+    if not tool_use_id:
+        return False
+
+    return (
+        stage_pending_document_revision_resolution(
+            pane_session_id=pane_id,
+            owner_session_id=owner_id,
+            teammate_name=teammate,
+            run_id=owner_run_id,
+            task_id=owner_task_id,
+            merchant_id=trusted_merchant_id,
+            project_id=trusted_project_id,
+            scope=scope,
+            resolution=resolution,
+            tool_use_id=tool_use_id,
+        )
+    )
+
+
 def _stage_exact_tmux_step_resolution(
     *,
     payload: dict[str, Any],
@@ -2345,6 +3017,10 @@ def _clear_merchant_resolution_after_release(
     #
     # No Step receipt may survive without its Project parent,
     # and no Project receipt may survive without its Merchant parent.
+    clear_pending_document_revision_resolution(
+        pane_session_id
+    )
+
     clear_pending_step_resolution(
         pane_session_id
     )
@@ -3127,6 +3803,358 @@ def _project_resolve_invocation(
     )
 
 
+def prepare_merchant_runtime_handoff(
+    payload: dict[str, Any],
+) -> tuple[
+    bool,
+    PreparedRuntimeHandoff | None,
+    str,
+]:
+    """Recognize, bind, and stage one non-terminal Gate 12H request.
+
+    Returns:
+        recognized:
+            True when the message contains the handoff marker. This prevents
+            the same SendMessage from falling through into terminal-result
+            delivery.
+
+        attempt:
+            Prepared exact handoff when validation succeeds.
+
+        reason:
+            Bounded failure reason when the request is recognized but cannot
+            be staged.
+    """
+
+    tool_name = str(
+        payload.get(
+            "tool_name"
+        )
+        or ""
+    ).strip()
+
+    if tool_name != "SendMessage":
+        return (
+            False,
+            None,
+            "",
+        )
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return (
+            False,
+            None,
+            "",
+        )
+
+    recipient = _coalesced_text(
+        tool_input,
+        "recipient",
+        "to",
+    )
+
+    if recipient != "team-lead":
+        return (
+            False,
+            None,
+            "",
+        )
+
+    message = send_message_body(
+        tool_input
+    )
+
+    if not contains_handoff_marker(
+        message
+    ):
+        return (
+            False,
+            None,
+            "",
+        )
+
+    # From this point onward the message is definitively a handoff attempt.
+    # Never let malformed attempts fall through into terminal result delivery.
+    candidate = (
+        handoff_candidate_from_message(
+            message
+        )
+    )
+
+    if candidate is None:
+        return (
+            True,
+            None,
+            "MERCHANT_APPLY_HANDOFF_REQUEST_JSON is malformed",
+        )
+
+    authenticated_sender = (
+        trusted_post_tool_sender(
+            payload
+        )
+    )
+
+    role_hint = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if authenticated_sender:
+        if (
+            authenticated_sender
+            != MERCHANT_MANAGER_AGENT
+        ):
+            return (
+                True,
+                None,
+                "handoff authenticated sender is not merchant-manager",
+            )
+
+        teammate_name = (
+            authenticated_sender
+        )
+
+    else:
+        # agent_type alone is NOT authority.
+        #
+        # It is used only to locate the exact canonical owner.
+        # Runtime authority is established later by a previously
+        # trusted pane binding + exact active run/task authorization.
+        if (
+            role_hint
+            != MERCHANT_MANAGER_AGENT
+        ):
+            return (
+                True,
+                None,
+                "handoff requires merchant-manager sender identity",
+            )
+
+        teammate_name = (
+            MERCHANT_MANAGER_AGENT
+        )
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            teammate_name
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return (
+            True,
+            None,
+            "no unique active lead session owns merchant-manager",
+        )
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    owner_operations = [
+        str(
+            operation
+        )
+        for operation in (
+            owner_record.get(
+                "authorized_operations"
+            )
+            or []
+        )
+    ]
+
+    owner_selected_agents = [
+        str(
+            agent
+        )
+        for agent in (
+            owner_record.get(
+                "authorized_selected_agents"
+            )
+            or []
+        )
+    ]
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return (
+            True,
+            None,
+            "merchant-manager has no active run/task binding",
+        )
+
+    if (
+        owner_operations
+        != [
+            "merchant_apply"
+        ]
+        or owner_selected_agents
+        != [
+            MERCHANT_MANAGER_AGENT
+        ]
+    ):
+        return (
+            True,
+            None,
+            "merchant-manager lifecycle authority is not exact merchant_apply",
+        )
+
+    if not authenticated_sender:
+        pane_session_id = str(
+            payload.get(
+                "session_id"
+            )
+            or ""
+        ).strip()
+
+        (
+            trusted_pane,
+            pane_reason,
+        ) = (
+            trusted_teammate_pane_session_matches(
+                owner_session_id,
+                teammate_name,
+                pane_session_id,
+                owner_run_id,
+                owner_task_id,
+                required_operation=(
+                    "merchant_apply"
+                ),
+            )
+        )
+
+        if not trusted_pane:
+            return (
+                True,
+                None,
+                (
+                    "handoff sender pane is not trusted for "
+                    f"this merchant_apply task: {pane_reason}"
+                ),
+            )
+
+    supplied_task_id = str(
+        tool_input.get(
+            "task_id"
+        )
+        or payload.get(
+            "task_id"
+        )
+        or ""
+    ).strip()
+
+    if (
+        supplied_task_id
+        and supplied_task_id
+        != owner_task_id
+    ):
+        return (
+            True,
+            None,
+            "handoff task_id does not match the active teammate task",
+        )
+
+    attempt = None
+    reason = ""
+
+    with locked_state(
+        owner_session_id
+    ) as owner_state:
+        if owner_state is None:
+            return (
+                True,
+                None,
+                "trusted owner run state is unavailable",
+            )
+
+        (
+            attempt,
+            reason,
+        ) = (
+            stage_runtime_handoff_attempt(
+                owner_state,
+                owner_session_id=(
+                    owner_session_id
+                ),
+                teammate_name=(
+                    teammate_name
+                ),
+                run_id=(
+                    owner_run_id
+                ),
+                task_id=(
+                    owner_task_id
+                ),
+                candidate=(
+                    candidate
+                ),
+            )
+        )
+
+    return (
+        True,
+        attempt,
+        reason,
+    )
+
+
+def emit_post_tool_context(
+    feedback: str,
+) -> None:
+    """Return bounded PostToolUse feedback without polluting tool stdout."""
+
+    document = {
+        "hookSpecificOutput": {
+            "hookEventName": (
+                "PostToolUse"
+            ),
+            "additionalContext": (
+                feedback
+            ),
+        }
+    }
+
+    print(
+        json.dumps(
+            document,
+            ensure_ascii=False,
+        )
+    )
+
+
 def handle_post_tool_use(
     state: dict[str, Any] | None,
     payload: dict[str, Any],
@@ -3237,6 +4265,16 @@ def handle_post_tool_use(
                 authorized_operations=(
                     authorized_operations
                 ),
+            )
+
+            _stage_exact_tmux_document_revision_resolution(
+                payload=payload,
+                pane_session_id=pane_session_id,
+                owner_session_id=owner_session_id,
+                teammate_name=teammate_name,
+                run_id=run_id,
+                task_id=task_id,
+                authorized_operations=authorized_operations,
             )
 
     # ------------------------------------------------------------
@@ -3499,14 +4537,19 @@ def handle_post_tool_use(
             requires_deferred_merchant_result = (
                 owner_run_id
                 and owner_task_id
-                and owner_operations
-                == [
-                    MERCHANT_PROPOSE_OPERATION
-                ]
                 and owner_selected_agents
                 == [
                     MERCHANT_MANAGER_AGENT
                 ]
+                and owner_operations
+                in (
+                    [
+                        MERCHANT_PROPOSE_OPERATION
+                    ],
+                    [
+                        "merchant_apply"
+                    ],
+                )
             )
 
             if requires_deferred_merchant_result:
@@ -3907,6 +4950,226 @@ def handle_teammate_idle(
                 )
             ]
 
+            requires_exact_merchant_apply = (
+                teammate_name
+                == MERCHANT_MANAGER_AGENT
+                and owner_authorized_operations
+                == [
+                    "merchant_apply"
+                ]
+                and owner_authorized_agents
+                == [
+                    MERCHANT_MANAGER_AGENT
+                ]
+            )
+
+            if requires_exact_merchant_apply:
+                apply_task_result = (
+                    task_result_candidate_from_message(
+                        str(
+                            pending_result.get(
+                                "message"
+                            )
+                            or ""
+                        )
+                    )
+                )
+
+                if (
+                    apply_task_result
+                    is None
+                    or str(
+                        apply_task_result.get(
+                            "operation"
+                        )
+                        or ""
+                    ).strip()
+                    != "merchant_apply"
+                    or str(
+                        apply_task_result.get(
+                            "database_target"
+                        )
+                        or ""
+                    ).strip()
+                    != "runtime"
+                ):
+                    return (
+                        bounded_terminal_result_failure(
+                            owner_session_id=(
+                                owner_session_id
+                            ),
+                            pane_session_id=(
+                                session_id
+                            ),
+                            teammate_name=(
+                                teammate_name
+                            ),
+                            run_id=(
+                                owner_run_id
+                            ),
+                            task_id=(
+                                owner_task_id
+                            ),
+                            reason=(
+                                "Merchant apply terminal result is "
+                                "missing or malformed"
+                            ),
+                        )
+                    )
+
+                apply_outcome = str(
+                    apply_task_result.get(
+                        "outcome"
+                    )
+                    or ""
+                ).strip()
+
+                apply_confirmation_hash = str(
+                    apply_task_result.get(
+                        "confirmation_hash"
+                    )
+                    or ""
+                ).strip()
+
+                with locked_state(
+                    owner_session_id
+                ) as owner_state:
+                    if owner_state is None:
+                        return (
+                            PENDING_RESULT_FEEDBACK
+                        )
+
+                    if (
+                        apply_outcome
+                        == MERCHANT_APPLY_SUCCESS_OUTCOME
+                    ):
+                        trusted_apply_result = (
+                            successful_runtime_handoff_matches(
+                                owner_state,
+                                owner_session_id=(
+                                    owner_session_id
+                                ),
+                                teammate_name=(
+                                    teammate_name
+                                ),
+                                run_id=(
+                                    owner_run_id
+                                ),
+                                task_id=(
+                                    owner_task_id
+                                ),
+                                confirmation_hash=(
+                                    apply_confirmation_hash
+                                ),
+                            )
+                        )
+
+                        if not trusted_apply_result:
+                            return (
+                                bounded_terminal_result_failure(
+                                    owner_session_id=(
+                                        owner_session_id
+                                    ),
+                                    pane_session_id=(
+                                        session_id
+                                    ),
+                                    teammate_name=(
+                                        teammate_name
+                                    ),
+                                    run_id=(
+                                        owner_run_id
+                                    ),
+                                    task_id=(
+                                        owner_task_id
+                                    ),
+                                    reason=(
+                                        "APPLY_SUCCESS has no matching "
+                                        "trusted Gate 7.4 SUCCESS receipt"
+                                    ),
+                                )
+                            )
+
+                    elif (
+                        apply_outcome
+                        == MERCHANT_APPLY_FAILED_OUTCOME
+                    ):
+                        trusted_failure = (
+                            failed_runtime_handoff_matches(
+                                owner_state,
+                                owner_session_id=(
+                                    owner_session_id
+                                ),
+                                teammate_name=(
+                                    teammate_name
+                                ),
+                                run_id=(
+                                    owner_run_id
+                                ),
+                                task_id=(
+                                    owner_task_id
+                                ),
+                                confirmation_hash=(
+                                    apply_confirmation_hash
+                                ),
+                            )
+                        )
+
+                        if not trusted_failure:
+                            return (
+                                bounded_terminal_result_failure(
+                                    owner_session_id=(
+                                        owner_session_id
+                                    ),
+                                    pane_session_id=(
+                                        session_id
+                                    ),
+                                    teammate_name=(
+                                        teammate_name
+                                    ),
+                                    run_id=(
+                                        owner_run_id
+                                    ),
+                                    task_id=(
+                                        owner_task_id
+                                    ),
+                                    reason=(
+                                        "APPLY_FAILED has no matching "
+                                        "trusted Gate 7.4 FAILED receipt"
+                                    ),
+                                )
+                            )
+
+                    elif (
+                        apply_outcome
+                        not in {
+                            "BLOCKED",
+                            "FAILED",
+                        }
+                    ):
+                        return (
+                            bounded_terminal_result_failure(
+                                owner_session_id=(
+                                    owner_session_id
+                                ),
+                                pane_session_id=(
+                                    session_id
+                                ),
+                                teammate_name=(
+                                    teammate_name
+                                ),
+                                run_id=(
+                                    owner_run_id
+                                ),
+                                task_id=(
+                                    owner_task_id
+                                ),
+                                reason=(
+                                    "Merchant apply terminal outcome is "
+                                    "not allowed"
+                                ),
+                            )
+                        )
+
             requires_exact_merchant_proposal = (
                 teammate_name
                 == MERCHANT_MANAGER_AGENT
@@ -4136,6 +5399,24 @@ def handle_teammate_idle(
                                 "the exact completeness command"
                             ),
                         )
+
+                pane_bound, _ = (
+                    bind_reported_teammate_pane_session(
+                        owner_session_id,
+                        teammate_name,
+                        session_id,
+                        owner_run_id,
+                        owner_task_id,
+                        required_operation=(
+                            MERCHANT_PROPOSE_OPERATION
+                        ),
+                    )
+                )
+
+                if not pane_bound:
+                    return (
+                        PENDING_RESULT_FEEDBACK
+                    )
 
                 capture_outcome = (
                     capture_proposal_receipt(
@@ -4674,6 +5955,166 @@ def main() -> int:
     ):
         return 0
 
+    # ============================================================
+    # Gate 12H.1–12H.4
+    #
+    # Runtime handoff is deliberately handled BEFORE the ordinary
+    # PostToolUse run-state lock.
+    #
+    # prepare_merchant_runtime_handoff() briefly acquires the OWNER
+    # session lock only to validate and persist PENDING, then releases it.
+    #
+    # invoke_confirmed_merchant_session_apply() acquires the same owner
+    # lock internally. Calling it from inside the outer locked_state()
+    # block below would therefore risk self-deadlock / lock timeout.
+    # ============================================================
+
+    if (
+        hook_event
+        == "PostToolUse"
+    ):
+        (
+            handoff_recognized,
+            handoff_attempt,
+            handoff_reason,
+        ) = (
+            prepare_merchant_runtime_handoff(
+                payload
+            )
+        )
+
+        if handoff_recognized:
+            if handoff_attempt is None:
+                emit_post_tool_context(
+                    "Gate 12H runtime handoff was rejected before execution. "
+                    f"Reason: {handoff_reason}. "
+                    "No Merchant runtime apply was executed. Do not retry this "
+                    "message by changing its authority fields."
+                )
+
+                return 0
+
+            runtime_stdout = (
+                io.StringIO()
+            )
+
+            runtime_stderr = (
+                io.StringIO()
+            )
+
+            exit_code: int | None = None
+            succeeded = False
+            bounded_runtime_result = None
+
+            try:
+                # merchant_cli_main writes JSON to stdout/stderr.
+                #
+                # A hook itself must reserve stdout for its hook protocol,
+                # therefore runtime CLI output is captured in memory here.
+                # Gate 12H.6 will later define the bounded persisted runtime
+                # result receipt; 12H.1–12H.4 do not persist raw CLI output.
+                with (
+                    redirect_stdout(
+                        runtime_stdout
+                    ),
+                    redirect_stderr(
+                        runtime_stderr
+                    ),
+                ):
+                    exit_code = (
+                        invoke_confirmed_merchant_session_apply(
+                            handoff_attempt.owner_session_id,
+                            handoff_attempt.arguments,
+                        )
+                    )
+
+                if exit_code == 0:
+                    bounded_runtime_result = (
+                        bounded_runtime_apply_result(
+                            runtime_stdout.getvalue(),
+                            handoff_attempt,
+                        )
+                    )
+
+                    succeeded = (
+                        bounded_runtime_result
+                        is not None
+                    )
+                else:
+                    succeeded = False
+
+            except Exception:
+                # The attempt was already staged PENDING before execution.
+                # Any exception is therefore an uncertain/failed one-use
+                # attempt and must never become replayable.
+                succeeded = False
+                exit_code = None
+
+            result_recorded = False
+
+            # The runtime invocation above has completed and released its
+            # own run-state lock. Reacquire the owner state only now.
+            with locked_state(
+                handoff_attempt.owner_session_id
+            ) as owner_state:
+                if owner_state is not None:
+                    result_recorded = (
+                        record_runtime_handoff_result(
+                            owner_state,
+                            handoff_attempt,
+                            succeeded=(
+                                succeeded
+                            ),
+                            exit_code=(
+                                exit_code
+                            ),
+                            runtime_result=(
+                                bounded_runtime_result
+                            ),
+                        )
+                    )
+
+            if (
+                succeeded
+                and result_recorded
+            ):
+                emit_post_tool_context(
+                    "Gate 7.4 trusted runtime handoff succeeded for the exact "
+                    "confirmed Merchant apply. The apply attempt is spent and "
+                    "must not be executed again. Continue only with allowlisted "
+                    "read-only runtime verification. Do not send another "
+                    "MERCHANT_APPLY_HANDOFF_REQUEST_JSON for this run/task."
+                )
+
+                return 0
+
+            if result_recorded:
+                emit_post_tool_context(
+                    "Gate 7.4 trusted runtime handoff was attempted but did "
+                    "not complete successfully. The attempt is spent and is "
+                    "not retryable. Do not execute Merchant apply through "
+                    "Bash, Python, agent_cli --apply, or another handoff "
+                    "request."
+                )
+
+                return 0
+
+            # PENDING was persisted before invocation. Failure to persist the
+            # final result is an uncertain outcome, therefore fail closed and
+            # never retry.
+            emit_post_tool_context(
+                "Gate 7.4 runtime handoff reached an uncertain terminal state: "
+                "the attempt had already been reserved, but the bounded result "
+                "could not be persisted. Treat the attempt as spent. Do not "
+                "retry or use another runtime mutation path."
+            )
+
+            return 0
+
+    # ============================================================
+    # Existing result / proposal / entity-receipt lifecycle.
+    # ============================================================
+
     idle_feedback = ""
 
     with locked_state(
@@ -4719,10 +6160,10 @@ def main() -> int:
             idle_feedback,
             file=sys.stderr,
         )
+
         return 2
 
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(

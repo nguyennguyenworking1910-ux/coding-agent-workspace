@@ -635,5 +635,148 @@ def test_new_run_can_reuse_previously_completed_teammate(
     )
 
 
+def test_merchant_propose_agent_assignment_rejects_concrete_cli():
+    state = {
+        "operations": ["merchant_propose"],
+        "selected_agents": ["merchant-manager"],
+        "merchant_confirmation": None,
+    }
+
+    decision = policy_gate._check_merchant_dispatch(
+        state,
+        "merchant-manager",
+        "merchant-manager",
+        {
+            "prompt": (
+                "Objective: create the requested cinema project.\n"
+                "project create --project-type OPENING_NEW_CINEMA "
+                "--workflow-variant OPENING_NEW_CINEMA_STANDARD "
+                "--propose"
+            )
+        },
+    )
+
+    assert decision is not None
+
+    output = decision["hookSpecificOutput"]
+
+    assert output["permissionDecision"] == "deny"
+    assert "semantic-only" in output[
+        "permissionDecisionReason"
+    ]
+
+
+def test_merchant_propose_reuse_assignment_rejects_concrete_cli():
+    state = {
+        "operations": ["merchant_propose"],
+        "selected_agents": ["merchant-manager"],
+        "merchant_confirmation": None,
+    }
+
+    decision = policy_gate._check_merchant_dispatch(
+        state,
+        "merchant-manager",
+        "merchant-manager",
+        {
+            "message": (
+                "Resolve AEON Beta first.\n"
+                "project resolve --merchant-id <id> "
+                '--query "Mở rạp mới AEON Beta Hải Dương"'
+            )
+        },
+    )
+
+    assert decision is not None
+
+    output = decision["hookSpecificOutput"]
+
+    assert output["permissionDecision"] == "deny"
+    assert "semantic-only" in output[
+        "permissionDecisionReason"
+    ]
+
+
+def test_merchant_propose_semantic_assignment_is_allowed():
+    state = {
+        "operations": ["merchant_propose"],
+        "selected_agents": ["merchant-manager"],
+        "merchant_confirmation": None,
+    }
+
+    decision = policy_gate._check_merchant_dispatch(
+        state,
+        "merchant-manager",
+        "merchant-manager",
+        {
+            "prompt": (
+                "Objective: prepare a proposal to create a new "
+                "cinema-opening project for AEON Beta.\n"
+                "Operation: merchant_propose\n"
+                "Database target: runtime\n"
+                "Authorized mode: PROPOSE\n"
+                "Resolve authoritative Merchant and Project state "
+                "through registered reads.\n"
+                "Resolve the normalized write command from the "
+                "registered Merchant contract.\n"
+                "Run deterministic completeness before proposing.\n"
+                "Do not apply any mutation."
+            )
+        },
+    )
+
+    assert decision is None
+
+
+def test_reuse_path_validates_before_lifecycle_reservation(
+    monkeypatch,
+):
+    state = {
+        "run_id": "run-command-authority",
+        "operations": ["merchant_propose"],
+        "selected_agents": ["merchant-manager"],
+        "merchant_confirmation": None,
+        "members_used": [],
+        "limits": {
+            "max_members": 1,
+        },
+    }
+
+    reservation_called = False
+
+    def fake_reserve(*args, **kwargs):
+        nonlocal reservation_called
+        reservation_called = True
+        return True, "IDLE_REUSABLE"
+
+    monkeypatch.setattr(
+        policy_gate,
+        "reserve_reusable_teammate",
+        fake_reserve,
+    )
+
+    decision = policy_gate._check_teammate_message(
+        state,
+        {
+            "recipient": "merchant-manager",
+            "message": (
+                "Objective: create project.\n"
+                "project create --type OPENING_NEW_CINEMA "
+                "--propose"
+            ),
+        },
+        "lead-session",
+        "",
+    )
+
+    assert decision is not None
+    assert reservation_called is False
+
+    output = decision["hookSpecificOutput"]
+
+    assert output["permissionDecision"] == "deny"
+    assert "semantic-only" in output[
+        "permissionDecisionReason"
+    ]
+
 if __name__ == "__main__":
     unittest.main()

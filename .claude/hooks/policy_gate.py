@@ -79,6 +79,14 @@ if __package__ in (None, ""):
         BOUND as STEP_BOUND,
         bind_step_resolution_receipt,
     )
+    from tmux_document_revision_resolution import (
+        load_pending_document_revision_resolution,
+    )
+
+    from document_revision_resolution_gate import (
+        BOUND as DOCUMENT_REVISION_BOUND,
+        bind_document_revision_resolution_receipt,
+    )
 
 else:
     from .runtime_state import (
@@ -126,6 +134,14 @@ else:
         BOUND as STEP_BOUND,
         bind_step_resolution_receipt,
     )
+    from .tmux_document_revision_resolution import (
+        load_pending_document_revision_resolution,
+    )
+
+    from .document_revision_resolution_gate import (
+        BOUND as DOCUMENT_REVISION_BOUND,
+        bind_document_revision_resolution_receipt,
+    )
 
 HOOK_EVENT_NAME = "PreToolUse"
 
@@ -164,6 +180,7 @@ MERCHANT_WRITE_COMMANDS = frozenset(
     }
 )
 MERCHANT_APPLY_OPERATION = "merchant_apply"
+MERCHANT_PROPOSE_OPERATION = "merchant_propose"
 MERCHANT_DISPATCH_MARKER = (
     "MERCHANT_DISPATCH_AUTHORIZATION_JSON"
 )
@@ -198,6 +215,32 @@ _MERCHANT_DISPATCH_BLOCK_PATTERN = re.compile(
     r"```json[ \t]*\r?\n"
     r"(?P<payload>\{.*?\})\r?\n"
     r"```[ \t]*$"
+)
+
+
+# A merchant_propose assignment carries semantic intent only. Concrete CLI
+# spelling belongs to merchant-manager's registered contract, not to the lead
+# prompt. This catches command-shaped text without blocking ordinary prose
+# such as "run completeness before --propose".
+_MERCHANT_PROPOSE_ASSIGNMENT_CLI_PATTERN = re.compile(
+    r"""(?ix)
+    \b(
+        merchant\s+(?:list|resolve|activate(?:-all)?|create)
+      | project\s+(?:list|resolve|show|history|blockers|alerts|create|update)
+      | step\s+(?:resolve|update)
+      | document\s+(?:resolve|revision-create|approve)
+      | procurement\s+update
+      | integration\s+identifier-set
+      | contact\s+import
+      | completeness\s+check
+    )\b
+    [^\r\n]{0,400}
+    --[a-z0-9][a-z0-9-]*
+    """
+)
+
+_MERCHANT_AGENT_CLI_REFERENCE_PATTERN = re.compile(
+    r"(?i)(?:^|[/\\])agent_cli\.py\b"
 )
 
 # Verbs that mark a tool as mutating something outside this machine.
@@ -563,6 +606,27 @@ def _canonical_step_uuid(
     ):
         return None
 
+def _canonical_document_revision_uuid(
+    value: Any,
+) -> str | None:
+    if not isinstance(
+        value,
+        str,
+    ):
+        return None
+
+    try:
+        return str(
+            uuid.UUID(
+                value.strip()
+            )
+        )
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+    ):
+        return None
 
 def _merchant_id_from_cli_tokens(
     tokens: tuple[str, ...],
@@ -985,6 +1049,201 @@ def _project_id_from_cli_tokens(
 
     return command, None
 
+def _document_revision_id_from_cli_tokens(
+    tokens: tuple[str, ...],
+) -> tuple[
+    str,
+    str | None,
+    str | None,
+]:
+    """Return command, consumed revision id, and required resolver scope.
+
+    Protected consumers:
+
+    document approve <revision_id>
+        -> PROJECT scope
+
+    project create --reused-document-revision-id <revision_id>
+        -> MERCHANT scope
+
+    Return semantics for revision id:
+
+    None
+        command does not consume an existing Document Revision.
+
+    ""
+        command attempts to consume a revision but the invocation is
+        malformed or conflicting.
+
+    value
+        supplied revision id to canonicalize and bind.
+    """
+
+    if len(tokens) < 4:
+        return "", None, None
+
+    command = (
+        f"{tokens[2]} {tokens[3]}"
+        .strip()
+        .lower()
+    )
+
+    arguments = tokens[4:]
+
+    # Resolver establishes evidence; it does not consume it.
+    if command == "document resolve":
+        return (
+            command,
+            None,
+            None,
+        )
+
+    # ------------------------------------------------------------
+    # document approve <revision_id>
+    # ------------------------------------------------------------
+
+    if command == "document approve":
+        if not arguments:
+            return (
+                command,
+                "",
+                "PROJECT",
+            )
+
+        revision_id = (
+            arguments[0]
+        )
+
+        if (
+            not revision_id
+            or revision_id.startswith(
+                "-"
+            )
+        ):
+            return (
+                command,
+                "",
+                "PROJECT",
+            )
+
+        return (
+            command,
+            revision_id,
+            "PROJECT",
+        )
+
+    # ------------------------------------------------------------
+    # project create
+    #
+    # --reused-document-revision-id UUID
+    # --reused-document-revision-id=UUID
+    # ------------------------------------------------------------
+
+    if command == "project create":
+        revision_id: str | None = None
+        seen = False
+
+        index = 0
+
+        while index < len(
+            arguments
+        ):
+            token = arguments[
+                index
+            ]
+
+            if (
+                token
+                == "--reused-document-revision-id"
+            ):
+                if seen:
+                    return (
+                        command,
+                        "",
+                        "MERCHANT",
+                    )
+
+                if (
+                    index + 1
+                    >= len(arguments)
+                ):
+                    return (
+                        command,
+                        "",
+                        "MERCHANT",
+                    )
+
+                value = str(
+                    arguments[
+                        index + 1
+                    ]
+                ).strip()
+
+                if (
+                    not value
+                    or value.startswith(
+                        "-"
+                    )
+                ):
+                    return (
+                        command,
+                        "",
+                        "MERCHANT",
+                    )
+
+                revision_id = value
+                seen = True
+                index += 2
+                continue
+
+            if token.startswith(
+                "--reused-document-revision-id="
+            ):
+                if seen:
+                    return (
+                        command,
+                        "",
+                        "MERCHANT",
+                    )
+
+                value = (
+                    token.split(
+                        "=",
+                        1,
+                    )[1]
+                    .strip()
+                )
+
+                if not value:
+                    return (
+                        command,
+                        "",
+                        "MERCHANT",
+                    )
+
+                revision_id = value
+                seen = True
+
+            index += 1
+
+        if not seen:
+            return (
+                command,
+                None,
+                None,
+            )
+
+        return (
+            command,
+            revision_id,
+            "MERCHANT",
+        )
+
+    return (
+        command,
+        None,
+        None,
+    )
 
 def _step_id_from_cli_tokens(
     tokens: tuple[str, ...],
@@ -2144,6 +2403,510 @@ def step_resolution_use_decision(
 
     return None
 
+def document_revision_resolution_use_decision(
+    payload: dict[str, Any],
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Require trusted revision evidence before consuming revision_id."""
+
+    sender_agent_type = str(
+        payload.get(
+            "agent_type"
+        )
+        or ""
+    ).strip()
+
+    if (
+        sender_agent_type
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return None
+
+    tool_name = str(
+        payload.get(
+            "tool_name"
+        )
+        or ""
+    ).strip()
+
+    if tool_name not in {
+        "Bash",
+        "PowerShell",
+    }:
+        return None
+
+    tool_input = payload.get(
+        "tool_input"
+    )
+
+    if not isinstance(
+        tool_input,
+        dict,
+    ):
+        return None
+
+    command_text_value = (
+        tool_input.get(
+            "command"
+        )
+    )
+
+    tokens = (
+        _direct_merchant_agent_cli_tokens(
+            command_text_value
+        )
+    )
+
+    # ------------------------------------------------------------
+    # Fail closed on wrappers / chaining / pipes / redirects for
+    # commands that consume revision identity.
+    # ------------------------------------------------------------
+
+    if tokens is None:
+        raw_command = str(
+            command_text_value
+            or ""
+        )
+
+        normalized_raw = (
+            raw_command
+            .replace(
+                "\\",
+                "/",
+            )
+            .lower()
+        )
+
+        if (
+            "agents/tools/merchant/agent_cli.py"
+            in normalized_raw
+            and (
+                "document approve"
+                in normalized_raw
+                or (
+                    "--reused-document-revision-id"
+                    in normalized_raw
+                )
+            )
+        ):
+            return deny(
+                "Blocked: Merchant CLI must be invoked directly. "
+                "Wrapper scripts, pipelines, redirects, shell chaining, "
+                "and reconstructed Merchant commands cannot consume "
+                "trusted Document Revision entity bindings."
+            )
+
+        return None
+
+    (
+        merchant_command,
+        supplied_revision_id,
+        required_scope,
+    ) = (
+        _document_revision_id_from_cli_tokens(
+            tokens
+        )
+    )
+
+    # document resolve establishes revision evidence.
+    if (
+        merchant_command
+        == "document resolve"
+    ):
+        return None
+
+    # Command does not consume an existing revision.
+    if supplied_revision_id is None:
+        return None
+
+    if (
+        not supplied_revision_id
+        or required_scope
+        not in {
+            "PROJECT",
+            "MERCHANT",
+        }
+    ):
+        return deny(
+            "Blocked: Document Revision identity in the Merchant "
+            "CLI invocation is malformed or conflicting."
+        )
+
+    canonical_revision_id = (
+        _canonical_document_revision_uuid(
+            supplied_revision_id
+        )
+    )
+
+    if canonical_revision_id is None:
+        return deny(
+            "Blocked: revision_id must be a canonical "
+            "Document Revision UUID."
+        )
+
+    # ------------------------------------------------------------
+    # Resolve current trusted teammate owner.
+    # ------------------------------------------------------------
+
+    (
+        owner_session_id,
+        owner_record,
+        owner_resolution,
+    ) = (
+        find_unique_active_teammate_owner(
+            MERCHANT_MANAGER_AGENT
+        )
+    )
+
+    if (
+        owner_resolution
+        != "FOUND"
+        or not owner_session_id
+        or not isinstance(
+            owner_record,
+            dict,
+        )
+    ):
+        return deny(
+            "Blocked: Document Revision binding has no unique "
+            "active Merchant task owner."
+        )
+
+    owner_run_id = str(
+        owner_record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    owner_task_id = str(
+        owner_record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    if not (
+        owner_run_id
+        and owner_task_id
+    ):
+        return deny(
+            "Blocked: Document Revision binding has no exact "
+            "run/task identity."
+        )
+
+    pane_session_id = str(
+        session_id
+        or ""
+    ).strip()
+
+    if not pane_session_id:
+        return deny(
+            "Blocked: Document Revision binding requires "
+            "a session identity."
+        )
+
+    # ============================================================
+    # Parent 1: Merchant
+    #
+    # Revision evidence must never become Merchant authority.
+    # ============================================================
+
+    merchant_receipt = (
+        load_pending_merchant_resolution(
+            pane_session_id
+        )
+    )
+
+    if merchant_receipt is None:
+        return deny(
+            "Blocked: Document Revision binding requires an exact "
+            "parent Merchant resolver receipt. Run "
+            "`merchant resolve --query <merchant-reference>` first."
+        )
+
+    merchant_resolution = (
+        merchant_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        merchant_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: parent Merchant resolver evidence is malformed."
+        )
+
+    merchant_expected_query = (
+        merchant_resolution.get(
+            "query"
+        )
+    )
+
+    merchant_binding = (
+        bind_merchant_resolution_receipt(
+            merchant_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            expected_query=(
+                merchant_expected_query
+            ),
+        )
+    )
+
+    if not merchant_binding.accepted:
+        reason = (
+            merchant_binding.question
+            or (
+                "parent Merchant resolver evidence does not authorize "
+                "an exact Merchant entity binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    trusted_merchant_id = (
+        merchant_binding.merchant_id
+    )
+
+    if not trusted_merchant_id:
+        return deny(
+            "Blocked: parent Merchant binding has no Merchant UUID."
+        )
+
+    # ============================================================
+    # Parent 2: Project, only for `document approve`.
+    #
+    # project create reuse deliberately has MERCHANT scope because
+    # the new target Project does not exist yet.
+    # ============================================================
+
+    trusted_project_id = None
+
+    if required_scope == "PROJECT":
+        project_receipt = (
+            load_pending_project_resolution(
+                pane_session_id
+            )
+        )
+
+        if project_receipt is None:
+            return deny(
+                "Blocked: Document Revision PROJECT scope requires "
+                "an exact parent Project resolver receipt. Run "
+                "`project resolve --merchant-id <trusted-merchant-id> "
+                "--query <project-reference>` first."
+            )
+
+        project_resolution = (
+            project_receipt.get(
+                "resolution"
+            )
+        )
+
+        if not isinstance(
+            project_resolution,
+            dict,
+        ):
+            return deny(
+                "Blocked: parent Project resolver evidence is malformed."
+            )
+
+        project_expected_query = (
+            project_resolution.get(
+                "query"
+            )
+        )
+
+        project_binding = (
+            bind_project_resolution_receipt(
+                project_receipt,
+                pane_session_id=(
+                    pane_session_id
+                ),
+                owner_session_id=(
+                    owner_session_id
+                ),
+                teammate_name=(
+                    MERCHANT_MANAGER_AGENT
+                ),
+                run_id=(
+                    owner_run_id
+                ),
+                task_id=(
+                    owner_task_id
+                ),
+                trusted_merchant_id=(
+                    trusted_merchant_id
+                ),
+                expected_query=(
+                    project_expected_query
+                ),
+            )
+        )
+
+        if not project_binding.accepted:
+            reason = (
+                project_binding.question
+                or (
+                    "parent Project resolver evidence does not authorize "
+                    "an exact Project entity binding."
+                )
+            )
+
+            return deny(
+                "Blocked: "
+                + reason
+            )
+
+        trusted_project_id = (
+            project_binding.project_id
+        )
+
+        if not trusted_project_id:
+            return deny(
+                "Blocked: parent Project binding has no Project UUID."
+            )
+
+    # ============================================================
+    # Revision receipt
+    # ============================================================
+
+    revision_receipt = (
+        load_pending_document_revision_resolution(
+            pane_session_id
+        )
+    )
+
+    if revision_receipt is None:
+        if (
+            required_scope
+            == "PROJECT"
+        ):
+            resolver_instruction = (
+                "`document resolve --project-id "
+                "<trusted-project-id> "
+                "--query <revision-reference>`"
+            )
+        else:
+            resolver_instruction = (
+                "`document resolve --merchant-id "
+                "<trusted-merchant-id> "
+                "--query <revision-reference>`"
+            )
+
+        return deny(
+            "Blocked: this Merchant command consumes a Document Revision "
+            "UUID without an exact Document Revision resolver receipt. Run "
+            + resolver_instruction
+            + " first."
+        )
+
+    revision_resolution = (
+        revision_receipt.get(
+            "resolution"
+        )
+    )
+
+    if not isinstance(
+        revision_resolution,
+        dict,
+    ):
+        return deny(
+            "Blocked: Document Revision resolver evidence is malformed."
+        )
+
+    revision_expected_query = (
+        revision_resolution.get(
+            "query"
+        )
+    )
+
+    revision_binding = (
+        bind_document_revision_resolution_receipt(
+            revision_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            trusted_merchant_id=(
+                trusted_merchant_id
+            ),
+            trusted_project_id=(
+                trusted_project_id
+            ),
+            expected_scope=(
+                required_scope
+            ),
+            expected_query=(
+                revision_expected_query
+            ),
+        )
+    )
+
+    if (
+        not revision_binding.accepted
+        or revision_binding.outcome
+        != DOCUMENT_REVISION_BOUND
+    ):
+        reason = (
+            revision_binding.question
+            or (
+                "Document Revision resolver evidence does not authorize "
+                "an exact revision entity binding."
+            )
+        )
+
+        return deny(
+            "Blocked: "
+            + reason
+        )
+
+    # ============================================================
+    # Exact command ↔ trusted Revision equality.
+    # ============================================================
+
+    if (
+        revision_binding.revision_id
+        != canonical_revision_id
+    ):
+        return deny(
+            "Blocked: revision_id does not match the exact "
+            "Document Revision resolved for this run/task. "
+            "Do not copy or substitute a revision UUID from project "
+            "details, prose, memory, or assignment text."
+        )
+
+    return None
 
 def apply_call(
     state: dict[str, Any],
@@ -2294,6 +3057,152 @@ def _coalesced_text(
     return values[0]
 
 
+
+def _merchant_assignment_text(
+    tool_input: dict[str, Any],
+) -> str:
+    """Return the lead-authored assignment body for Agent or SendMessage."""
+
+    if not isinstance(tool_input, dict):
+        return ""
+
+    prompt = tool_input.get("prompt")
+    message = tool_input.get("message")
+
+    prompt_text = (
+        str(prompt)
+        if isinstance(prompt, str)
+        else ""
+    ).strip()
+
+    message_text = (
+        str(message)
+        if isinstance(message, str)
+        else ""
+    ).strip()
+
+    if prompt_text and message_text:
+        if prompt_text != message_text:
+            return ""
+        return prompt_text
+
+    return prompt_text or message_text
+
+
+def _merchant_propose_assignment_error(
+    assignment: str,
+) -> str | None:
+    """Reject lead-authored concrete Merchant CLI syntax for PROPOSE."""
+
+    if not isinstance(assignment, str):
+        return "assignment text is unavailable"
+
+    text = assignment.strip()
+
+    if not text:
+        return "assignment text is empty"
+
+    normalized = (
+        text
+        .replace("\\", "/")
+    )
+
+    if (
+        _MERCHANT_AGENT_CLI_REFERENCE_PATTERN.search(
+            normalized
+        )
+        is not None
+    ):
+        return (
+            "assignment contains a direct agent_cli.py reference"
+        )
+
+    if (
+        _MERCHANT_PROPOSE_ASSIGNMENT_CLI_PATTERN.search(
+            text
+        )
+        is not None
+    ):
+        return (
+            "assignment contains concrete Merchant CLI command/flag syntax"
+        )
+
+    return None
+
+
+def _record_merchant_apply_dispatch(
+    state: dict[str, Any],
+    session_id: str | None,
+    subagent_type: str,
+    teammate_name: str,
+) -> dict[str, Any] | None:
+    """Reserve LOCAL_AUTO receipt and persist one accepted apply dispatch."""
+
+    operations = {
+        str(operation)
+        for operation in state.get("operations") or []
+    }
+
+    if MERCHANT_APPLY_OPERATION not in operations:
+        return None
+
+    confirmation = state.get(
+        "merchant_confirmation"
+    )
+
+    if not isinstance(
+        confirmation,
+        dict,
+    ):
+        return deny(
+            "Blocked: Merchant apply dispatch has no validated confirmation. "
+            "Nothing was dispatched."
+        )
+
+    if (
+        str(
+            state.get(
+                MERCHANT_CONFIRMATION_MODE_FIELD
+            )
+            or MERCHANT_CONFIRMATION_MODE_MANUAL
+        )
+        == MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+    ):
+        if not session_id:
+            return deny(
+                "Blocked: LOCAL_AUTO Merchant apply dispatch requires "
+                "a valid session id. Nothing was dispatched."
+            )
+
+        reservation = reserve_receipt(
+            session_id,
+            confirmation.get(
+                "confirmation_hash"
+            ),
+        )
+
+        if not reservation.accepted:
+            return deny(
+                "Blocked: the local auto-confirm proposal receipt could "
+                f"not be reserved ({reservation.reason}). Nothing was "
+                "dispatched; generate a fresh proposal, or switch back "
+                "to manual confirmation with "
+                "`/merchant-confirmation on`."
+            )
+
+    state["merchant_dispatch_spent"] = True
+    state["merchant_dispatch"] = {
+        "operation": MERCHANT_APPLY_OPERATION,
+        "subagent_type": subagent_type,
+        "teammate_name": teammate_name,
+        "confirmation_hash": confirmation[
+            "confirmation_hash"
+        ],
+    }
+
+    return None
+
+
 def _run_task_id(state: dict[str, Any], teammate_name: str) -> str:
     """Build the internal task binding for one teammate in this run."""
     run_id = str(state.get("run_id") or "").strip()
@@ -2337,6 +3246,16 @@ def _check_teammate_message(
             f"Blocked: teammate '{recipient}' is not in selected_agents "
             f"({', '.join(selected_agents) or 'none'})."
         )
+
+    merchant_decision = _check_merchant_dispatch(
+        state,
+        recipient,
+        recipient,
+        tool_input,
+    )
+
+    if merchant_decision is not None:
+        return merchant_decision
 
     if not session_id:
         return deny(
@@ -2456,6 +3375,18 @@ def _check_teammate_message(
             f"Blocked: teammate '{recipient}' is not reusable "
             f"(status={prior_status}). Do not create a suffixed replacement."
         )
+
+    merchant_apply_decision = (
+        _record_merchant_apply_dispatch(
+            state,
+            session_id,
+            recipient,
+            recipient,
+        )
+    )
+
+    if merchant_apply_decision is not None:
+        return merchant_apply_decision
 
     if recipient not in members_used:
         members_used.append(recipient)
@@ -2620,46 +3551,17 @@ def _check_agent_dispatch(
         members_used.append(requested_teammate_name)
         state["members_used"] = members_used
 
-    if MERCHANT_APPLY_OPERATION in {
-        str(operation)
-        for operation in state.get("operations") or []
-    }:
-        confirmation = state["merchant_confirmation"]
+    merchant_apply_decision = (
+        _record_merchant_apply_dispatch(
+            state,
+            session_id,
+            subagent_type,
+            requested_teammate_name,
+        )
+    )
 
-        # A local auto-confirmed run carries no pasted token, so its single
-        # proposal receipt is what one dispatch attempt spends. Reserve it
-        # atomically here, at the last point before this dispatch is
-        # accepted, so a concurrent second attempt cannot also claim it.
-        if (
-            str(
-                state.get(MERCHANT_CONFIRMATION_MODE_FIELD)
-                or MERCHANT_CONFIRMATION_MODE_MANUAL
-            )
-            == MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
-        ):
-            reservation = reserve_receipt(
-                session_id,
-                confirmation.get("confirmation_hash"),
-            )
-
-            if not reservation.accepted:
-                return deny(
-                    "Blocked: the local auto-confirm proposal receipt could "
-                    f"not be reserved ({reservation.reason}). Nothing was "
-                    "dispatched; generate a fresh proposal, or switch back "
-                    "to manual confirmation with "
-                    "`/merchant-confirmation on`."
-                )
-
-        state["merchant_dispatch_spent"] = True
-        state["merchant_dispatch"] = {
-            "operation": MERCHANT_APPLY_OPERATION,
-            "subagent_type": subagent_type,
-            "teammate_name": requested_teammate_name,
-            "confirmation_hash": confirmation[
-                "confirmation_hash"
-            ],
-        }
+    if merchant_apply_decision is not None:
+        return merchant_apply_decision
 
     return None
 
@@ -2684,12 +3586,13 @@ def _check_merchant_dispatch(
     }
     merchant_operations = operations & MERCHANT_OPERATIONS
     confirmation = state.get("merchant_confirmation")
-    prompt = (
-        str(tool_input.get("prompt"))
-        if isinstance(tool_input.get("prompt"), str)
-        else ""
+    assignment = _merchant_assignment_text(
+        tool_input
     )
-    has_dispatch_marker = MERCHANT_DISPATCH_MARKER in prompt
+    has_dispatch_marker = (
+        MERCHANT_DISPATCH_MARKER
+        in assignment
+    )
 
     if not merchant_operations:
         if confirmation is not None or has_dispatch_marker:
@@ -2736,10 +3639,34 @@ def _check_merchant_dispatch(
             "assignment. Nothing was dispatched."
         )
 
+    if merchant_operations == {MERCHANT_PROPOSE_OPERATION}:
+        if confirmation is not None or has_dispatch_marker:
+            return deny(
+                "Blocked: proposal dispatches cannot carry Merchant "
+                "apply confirmation authority. Nothing was dispatched."
+            )
+
+        assignment_error = (
+            _merchant_propose_assignment_error(
+                assignment
+            )
+        )
+
+        if assignment_error is not None:
+            return deny(
+                "Blocked: merchant_propose assignments must be semantic-only; "
+                f"{assignment_error}. The lead must not author or copy "
+                "Merchant CLI resource/action/flag syntax into the teammate "
+                "assignment. Let merchant-manager resolve the registered "
+                "command contract itself."
+            )
+
+        return None
+
     if merchant_operations != {MERCHANT_APPLY_OPERATION}:
         if confirmation is not None or has_dispatch_marker:
             return deny(
-                "Blocked: read and proposal dispatches cannot carry Merchant "
+                "Blocked: read dispatches cannot carry Merchant "
                 "apply confirmation authority. Nothing was dispatched."
             )
 
@@ -2776,7 +3703,7 @@ def _check_merchant_dispatch(
             f"({confirmation_error}). Generate and confirm a fresh proposal."
         )
 
-    dispatch, dispatch_error = _merchant_dispatch_payload(prompt)
+    dispatch, dispatch_error = _merchant_dispatch_payload(assignment)
 
     if dispatch_error is not None:
         return deny(
@@ -3096,6 +4023,26 @@ def main() -> int:
         print(
             json.dumps(
                 step_resolution_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
+    document_revision_resolution_decision = (
+        document_revision_resolution_use_decision(
+            payload,
+            session_id,
+        )
+    )
+
+    if (
+        document_revision_resolution_decision
+        is not None
+    ):
+        print(
+            json.dumps(
+                document_revision_resolution_decision,
                 ensure_ascii=False,
             )
         )

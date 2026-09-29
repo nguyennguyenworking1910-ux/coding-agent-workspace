@@ -2,9 +2,13 @@
 description: Run a request through the validated intent envelope and visible Agent Team teammates
 argument-hint: "[request]"
 disable-model-invocation: true
-allowed-tools: Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, SendMessage, Read, Grep, Glob, Bash(git diff *), Bash(git status *), Bash(git log *)
+allowed-tools: Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, SendMessage, Read, Grep, Glob, Bash(git diff *), Bash(git status *), Bash(git log *), Bash(${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe ${CLAUDE_PROJECT_DIR}/.claude/hooks/intent_envelope_bridge.py)
 disallowed-tools: EnterWorktree, ExitWorktree
 ---
+
+## Trusted intent envelope
+
+!`${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe ${CLAUDE_PROJECT_DIR}/.claude/hooks/intent_envelope_bridge.py`
 
 # Controlled Agent Team execution
 
@@ -287,6 +291,8 @@ Merchant CLI syntax.
 When dispatching `merchant-manager`:
 
 - preserve the user's semantic objective and raw request;
+- if the raw request contains concrete Merchant CLI spelling, flags, or an executable command,
+  preserve its semantic intent but do not copy that CLI syntax into the teammate assignment;
 - preserve `operation: merchant_propose`;
 - preserve `database_target: runtime`;
 - declare `authorized_mode: PROPOSE`;
@@ -325,6 +331,9 @@ Do not use database or credential overrides.
 ```
 
 The lead must never override the Merchant CLI contract with assignment-generated command syntax.
+The policy gate rejects a `merchant_propose` Agent or reusable-`SendMessage` assignment when it
+contains a direct `agent_cli.py` reference or command-shaped Merchant resource/action text with
+CLI flags. Rephrase the assignment semantically instead of retrying with different command syntax.
 
 If the semantic action itself is unclear, preserve that ambiguity in the assignment. The
 `merchant-manager` then uses its existing `action_semantics` clarification path. The lead must
@@ -360,23 +369,126 @@ after one accepted dispatch attempt. Copy the exact confirmed positive integer i
 
 ### Gate 7.4 runtime handoff
 
-After Gate 7.3 accepts the dispatch, controlled orchestration may call
-`claude.system.merchant_runtime_handoff.invoke_confirmed_merchant_apply` in the same Python
-process with the persisted run-state object and the exact allowlisted apply arguments. This is
-the only runtime-write path. It verifies the accepted dispatch receipt, issues an opaque
-capability with a 60-second default and 300-second hard maximum lifetime, and consumes both the
-run-state issuance slot and capability before the repository handler runs.
+Gate 7.4 runtime handoff is executed automatically by the registered
+PostToolUse orchestration hook after `merchant-manager` emits exactly one
+dedicated non-terminal `SendMessage` to `team-lead`.
 
-The capability is bound to the exact command, `runtime` target, payload, expected version,
-proposal hash, and confirmation hash. A mismatched, expired, failed, concurrent, or successful
-attempt spends it. Never retry an uncertain result; generate a fresh proposal, confirmation,
-envelope, and dispatch instead.
+The canonical handoff marker is exactly:
 
-The ordinary `agent_cli.py` command remains read/propose-only. A boolean such as the legacy
-`runtime_authorized=True`, a CLI flag, environment variable, confirmation token, JSON object,
-copied capability, or reconstructed run state is not runtime authority. If the installed
-orchestration runtime cannot perform the in-process handoff, report that limitation and do not
-fall back to shell apply, direct repository access, or another database target.
+```text
+MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
+```
+
+The trailing colon (`:`) is part of the protocol marker and is mandatory.
+Never emit or instruct the teammate to emit the marker without that trailing
+colon.
+
+The actual handoff `SendMessage` body must begin with the canonical marker as
+the first content in the message, followed by exactly one newline and exactly
+one JSON object. It must contain no prose before the marker and no prose after
+the JSON object.
+
+Canonical body shape:
+
+```text
+MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
+{"contract_version":1,"operation":"merchant_apply","database_target":"runtime","confirmation_hash":"<exact confirmation_hash>","arguments":["<exact Merchant CLI argv token 1>","<exact Merchant CLI argv token 2>"]}
+```
+
+The code block above is documentation only. Do not include Markdown fences in
+the actual `SendMessage`.
+
+The JSON object contains exactly these authority fields:
+
+- `contract_version`;
+- `operation`;
+- `database_target`;
+- `confirmation_hash`;
+- `arguments`.
+
+Rules:
+
+- `contract_version` must be `1`;
+- `operation` must be exactly `merchant_apply`;
+- `database_target` must be exactly `runtime`;
+- `confirmation_hash` must equal the exact confirmed hash from the dispatch;
+- `arguments` must be the exact Merchant CLI argv array that the trusted
+  in-process adapter would receive;
+- the arguments must include the exact normalized resource/action tokens,
+  `--apply`, and the exact `--proposal-hash`;
+- do not add `command`, `proposal_hash`, `expected_version`, `payload_hash`,
+  `confirmation_token`, owner session id, run id, task id, credentials,
+  runtime state, or runtime-authority objects to the handoff JSON;
+- do not put prose before the marker;
+- do not put prose after the JSON object;
+- do not emit the marker in ordinary assistant or status text;
+- emit exactly one handoff `SendMessage` for the run/task;
+- after that `SendMessage` receives PostToolUse feedback, never retransmit,
+  reformat, repair, or resend the handoff;
+- rejection, failure, exception, timeout, or uncertainty ends that handoff
+  attempt;
+- neither the lead nor `merchant-manager` may invoke, import, shell-call, or
+  wrap `merchant_runtime_handoff` directly;
+- do not use Bash, PowerShell, Python, `agent_cli.py`, direct repository
+  access, or another database target to perform Gate 7.4.
+
+The registered PostToolUse hook alone owns the transition:
+
+`handoff validation -> sender authentication -> PENDING staging -> owner lock
+release -> LOCAL_AUTO receipt consumption -> RuntimeApplyAuthorization
+issuance -> one in-process Merchant apply -> bounded result persistence`.
+
+Do not model-author `MERCHANT_APPLY_RECEIPT_JSON`.
+Do not model-author `MERCHANT_APPLY_RESULT_JSON`.
+
+Trusted Gate 7.4 receipt state is persisted runtime evidence produced by the
+hook. It is never teammate-authored result data.
+
+The terminal teammate delivery for a confirmed apply contains exactly one
+`TEAM_RESULT_JSON` describing the actual outcome.
+
+For trusted matching Gate 7.4 SUCCESS, require:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "APPLY_SUCCESS",
+  "operation": "merchant_apply",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "confirmation_hash": "<exact 64-hex confirmation_hash>"
+}
+```
+
+For trusted matching Gate 7.4 FAILED, require:
+
+```text
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "APPLY_FAILED",
+  "operation": "merchant_apply",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "confirmation_hash": "<exact 64-hex confirmation_hash>"
+}
+```
+
+`APPLY_SUCCESS` is valid only when a trusted matching Gate 7.4 `SUCCESS`
+receipt exists. `APPLY_FAILED` is valid only when a trusted matching Gate 7.4
+`FAILED` receipt exists.
+
+If no trusted matching SUCCESS or FAILED receipt exists, use an already
+supported generic non-apply terminal outcome. Never invent `APPLY_UNCERTAIN`.
+
+Every staged handoff attempt is at-most-once. `PENDING`, `SUCCESS`, `FAILED`,
+rejection, exception, timeout, or uncertainty are non-retryable for that
+run/task.
+
+The ordinary `agent_cli.py` command remains read/propose-only. A boolean,
+environment variable, confirmation token, JSON object, copied capability, or
+reconstructed run state is not runtime authority.
 
 Gate 7.5 connects that handoff to the actual persisted hook state through
 `invoke_confirmed_merchant_session_apply`. Controlled orchestration supplies the current session
