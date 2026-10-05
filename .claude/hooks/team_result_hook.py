@@ -46,6 +46,7 @@ from contextlib import (
 from pathlib import Path
 from typing import Any
 from claude.system.merchant_runtime_handoff import (
+    MerchantRuntimeHandoffStageError,
     invoke_confirmed_merchant_session_apply,
 )
 
@@ -138,6 +139,7 @@ if __package__ in (None, ""):
         bounded_runtime_apply_result,
         failed_runtime_handoff_matches,
         successful_runtime_handoff_matches,
+        bounded_runtime_apply_failure,
     )
 
 else:
@@ -222,6 +224,7 @@ else:
         bounded_runtime_apply_result,
         failed_runtime_handoff_matches,
         successful_runtime_handoff_matches,
+        bounded_runtime_apply_failure,
     )
 
 HOOK_EVENT_NAMES = (
@@ -6005,6 +6008,7 @@ def main() -> int:
             exit_code: int | None = None
             succeeded = False
             bounded_runtime_result = None
+            runtime_failure_type: str | None = None
 
             try:
                 # merchant_cli_main writes JSON to stdout/stderr.
@@ -6043,12 +6047,31 @@ def main() -> int:
                 else:
                     succeeded = False
 
-            except Exception:
+                    runtime_failure_type = (
+                        bounded_runtime_apply_failure(
+                            runtime_stderr.getvalue()
+                        )
+                    )
+
+            except Exception as exc:
                 # The attempt was already staged PENDING before execution.
                 # Any exception is therefore an uncertain/failed one-use
                 # attempt and must never become replayable.
+                #
+                # Persist only the exception class name. Do not persist the
+                # exception message or traceback because runtime/database
+                # exceptions may contain sensitive operational data.
                 succeeded = False
                 exit_code = None
+                if isinstance(
+                    exc,
+                    MerchantRuntimeHandoffStageError,
+                ):
+                    runtime_failure_type = (
+                        f"MerchantRuntimeHandoffError:{exc.stage}"
+                    )
+                else:
+                    runtime_failure_type = type(exc).__name__
 
             result_recorded = False
 
@@ -6070,6 +6093,9 @@ def main() -> int:
                             ),
                             runtime_result=(
                                 bounded_runtime_result
+                            ),
+                            failure_type=(
+                                runtime_failure_type
                             ),
                         )
                     )

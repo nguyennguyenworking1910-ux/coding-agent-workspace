@@ -5,16 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .resolution_gate_base import (
-    BOUND,
-    REJECTED,
-    REQUIRES_CLARIFICATION,
-    build_candidates_tuple,
-    clean_text,
-    normalize_expected_query,
-    validate_receipt_dict,
-    validate_resolution_query,
-)
+try:
+    from resolution_gate_base import (
+        BOUND,
+        REJECTED,
+        REQUIRES_CLARIFICATION,
+        build_candidates_tuple,
+        clean_text,
+        normalize_expected_query,
+        validate_receipt_dict,
+        validate_resolution_query,
+    )
+except ModuleNotFoundError:
+    from .resolution_gate_base import (
+        BOUND,
+        REJECTED,
+        REQUIRES_CLARIFICATION,
+        build_candidates_tuple,
+        clean_text,
+        normalize_expected_query,
+        validate_receipt_dict,
+        validate_resolution_query,
+    )
 
 try:
     from tmux_project_resolution import (

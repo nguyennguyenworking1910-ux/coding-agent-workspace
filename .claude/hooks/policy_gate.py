@@ -3909,6 +3909,76 @@ def completed_teammate_tool_decision(
     )
 
 
+def merchant_runtime_bypass_decision(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Block merchant-manager from bypassing trusted runtime orchestration.
+
+    Merchant runtime apply authority belongs to the trusted orchestration layer.
+    The merchant-manager teammate may request a runtime apply only through the
+    registered SendMessage handoff contract; it must never import, execute, or
+    wrap the internal runtime handoff directly.
+    """
+
+    sender_agent_type = str(
+        payload.get("agent_type")
+        or ""
+    ).strip()
+
+    # This boundary applies specifically to the Merchant teammate.
+    # Trusted team-lead/orchestration remains able to use the runtime module.
+    if sender_agent_type != MERCHANT_MANAGER_AGENT:
+        return None
+
+    tool_name = str(
+        payload.get("tool_name")
+        or ""
+    ).strip()
+
+    # Only inspect executable shell surfaces.
+    # Ordinary prose mentioning the runtime module must remain harmless.
+    if tool_name not in SHELL_TOOLS:
+        return None
+
+    tool_input = payload.get("tool_input")
+
+    if not isinstance(tool_input, dict):
+        return None
+
+    executable_text = command_text(tool_input)
+
+    if not executable_text:
+        return None
+
+    normalized = (
+        executable_text
+        .replace("\\", "/")
+        .lower()
+    )
+
+    forbidden_runtime_references = (
+        "merchant_runtime_handoff.py",
+        "claude.system.merchant_runtime_handoff",
+        "invoke_confirmed_merchant_session_apply",
+        "invoke_confirmed_merchant_apply",
+        "issue_runtime_apply_authorization",
+    )
+
+    if any(
+        reference in normalized
+        for reference in forbidden_runtime_references
+    ):
+        return deny(
+            "Blocked: merchant-manager cannot invoke, import, wrap, or execute "
+            "the orchestration-only Merchant runtime handoff. For a confirmed "
+            "merchant_apply, send exactly one "
+            "MERCHANT_APPLY_HANDOFF_REQUEST_JSON: message to team-lead and let "
+            "the registered trusted orchestration own runtime authorization."
+        )
+
+    return None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -3971,6 +4041,29 @@ def main() -> int:
         return 0
 
     output: dict[str, Any] | None = None
+
+    # -------------------------------------------------
+    # Gate 12H:
+    # merchant-manager may request a confirmed apply,
+    # but runtime mutation authority remains exclusively
+    # owned by trusted orchestration.
+    # -------------------------------------------------
+
+    runtime_bypass_decision = (
+        merchant_runtime_bypass_decision(
+            payload
+        )
+    )
+
+    if runtime_bypass_decision is not None:
+        print(
+            json.dumps(
+                runtime_bypass_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
 
     resolution_decision = (
         merchant_resolution_use_decision(

@@ -43,6 +43,7 @@ if __package__ in (None, ""):
 
     from merchant_confirmation_preferences import (  # noqa: E402
         clear_preferences,
+        load_preferences,
     )
 
 else:
@@ -59,6 +60,7 @@ else:
 
     from .merchant_confirmation_preferences import (
         clear_preferences,
+        load_preferences,
     )
 
 def active_teammate_owns_run(
@@ -169,6 +171,27 @@ def main() -> int:
         clear_preferences(
             session_id
         )
+
+        # SessionEnd is authoritative final cleanup. The individual
+        # clear helpers are intentionally idempotent/fail-closed:
+        # False can mean either "already absent" or "could not safely
+        # remove". Verify the final persisted postcondition instead
+        # of interpreting their boolean return values.
+        if (
+            load_state(
+                session_id
+            )
+            is not None
+            or load_team_state(
+                session_id
+            )
+            is not None
+            or load_preferences(
+                session_id
+            )
+            is not None
+        ):
+            return 2
 
         return 0
 

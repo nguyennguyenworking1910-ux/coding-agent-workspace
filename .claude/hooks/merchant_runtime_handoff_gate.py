@@ -818,6 +818,39 @@ def bounded_runtime_apply_result(
         ),
     }
 
+def bounded_runtime_apply_failure(
+    stderr_text: str,
+) -> str | None:
+    """Extract only the bounded Merchant CLI error type."""
+
+    if not isinstance(stderr_text, str):
+        return None
+
+    text = stderr_text.strip()
+    if not text:
+        return None
+
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    error = payload.get("error")
+
+    if not isinstance(error, dict):
+        return None
+
+    error_type = error.get("type")
+
+    if not isinstance(error_type, str):
+        return None
+
+    error_type = error_type.strip()[:128]
+
+    return error_type or None
 
 def record_runtime_handoff_result(
     state: dict[str, Any],
@@ -826,6 +859,7 @@ def record_runtime_handoff_result(
     succeeded: bool,
     exit_code: int | None,
     runtime_result: Mapping[str, Any] | None = None,
+    failure_type: str | None = None,
 ) -> bool:
     """Move the exact PENDING attempt to SUCCESS or FAILED."""
 
@@ -964,6 +998,22 @@ def record_runtime_handoff_result(
             receipt[
                 "runtime_result"
             ] = bounded_result
+
+    if (
+        not succeeded
+        and isinstance(
+            failure_type,
+            str,
+        )
+    ):
+        bounded_failure_type = (
+            failure_type.strip()[:128]
+        )
+
+        if bounded_failure_type:
+            receipt[
+                "failure_type"
+            ] = bounded_failure_type
 
     return True
 
