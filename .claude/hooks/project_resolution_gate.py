@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass
 from typing import Any
+
+from .resolution_gate_base import (
+    BOUND,
+    REJECTED,
+    REQUIRES_CLARIFICATION,
+    build_candidates_tuple,
+    clean_text,
+    normalize_expected_query,
+    validate_receipt_dict,
+    validate_resolution_query,
+)
 
 try:
     from tmux_project_resolution import (
@@ -16,11 +26,6 @@ except ModuleNotFoundError:
         project_resolution_receipt_matches,
         validate_project_resolution_result,
     )
-
-
-BOUND = "BOUND"
-REQUIRES_CLARIFICATION = "REQUIRES_CLARIFICATION"
-REJECTED = "REJECTED"
 
 
 @dataclass(frozen=True)
@@ -97,44 +102,16 @@ def bind_project_resolution_receipt(
 
     This function grants no write authority.
     """
-
-    query = _normalize_expected_query(
-        expected_query
-    )
-
+    query = normalize_expected_query(expected_query)
     if query is None:
         return _rejected()
 
-    merchant_id = _clean_text(
-        trusted_merchant_id
-    )
-
+    merchant_id = clean_text(trusted_merchant_id)
     if not merchant_id:
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    if not isinstance(
-        receipt,
-        dict,
-    ):
-        return _rejected(
-            query=query
-        )
-
-    # -------------------------------------------------
-    # Exact receipt binding:
-    #
-    # pane
-    # owner
-    # teammate
-    # run
-    # task
-    # merchant
-    #
-    # The tmux Project receipt primitive performs the
-    # canonical merchant UUID validation here as well.
-    # -------------------------------------------------
+    if not validate_receipt_dict(receipt, query):
+        return _rejected(query=query)
 
     if not project_resolution_receipt_matches(
         receipt,
@@ -145,105 +122,29 @@ def bind_project_resolution_receipt(
         task_id=task_id,
         merchant_id=merchant_id,
     ):
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    # -------------------------------------------------
-    # Validate exact deterministic resolver result.
-    # -------------------------------------------------
-
-    resolution = (
-        validate_project_resolution_result(
-            receipt.get(
-                "resolution"
-            )
-        )
-    )
-
+    resolution = validate_project_resolution_result(receipt.get("resolution"))
     if resolution is None:
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    # -------------------------------------------------
-    # Cross-entity invariant.
-    #
-    # The project-resolution result itself must remain
-    # inside the exact trusted Merchant scope.
-    # -------------------------------------------------
+    if resolution.get("merchant_id") != merchant_id:
+        return _rejected(query=query)
 
-    if (
-        resolution.get(
-            "merchant_id"
-        )
-        != merchant_id
-    ):
-        return _rejected(
-            query=query
-        )
+    if not validate_resolution_query(resolution.get("query"), query):
+        return _rejected(query=query)
 
-    # -------------------------------------------------
-    # Semantic query binding.
-    #
-    # NFKC-equivalent forms are accepted, exactly as in
-    # the Merchant resolution gate.
-    # -------------------------------------------------
-
-    resolution_query = (
-        _normalize_expected_query(
-            resolution.get(
-                "query"
-            )
-        )
-    )
-
-    if resolution_query != query:
-        return _rejected(
-            query=query
-        )
-
-    candidates = tuple(
-        ProjectResolutionCandidate(
-            project_id=(
-                candidate[
-                    "project_id"
-                ]
-            ),
-            merchant_id=(
-                candidate[
-                    "merchant_id"
-                ]
-            ),
-            title=(
-                candidate[
-                    "title"
-                ]
-            ),
-            project_type=(
-                candidate[
-                    "project_type"
-                ]
-            ),
-            workflow_variant=(
-                candidate[
-                    "workflow_variant"
-                ]
-            ),
-            status=(
-                candidate[
-                    "status"
-                ]
-            ),
-            version=(
-                candidate[
-                    "version"
-                ]
-            ),
-        )
-        for candidate in resolution[
-            "candidates"
-        ]
+    candidates = build_candidates_tuple(
+        resolution["candidates"],
+        lambda c: ProjectResolutionCandidate(
+            project_id=c["project_id"],
+            merchant_id=c["merchant_id"],
+            title=c["title"],
+            project_type=c["project_type"],
+            workflow_variant=c["workflow_variant"],
+            status=c["status"],
+            version=c["version"],
+        ),
     )
 
     status = resolution[
@@ -392,34 +293,3 @@ def _rejected(
         candidates=(),
         question=None,
     )
-
-
-def _normalize_expected_query(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    normalized = (
-        unicodedata.normalize(
-            "NFKC",
-            value,
-        )
-        .strip()
-    )
-
-    if not normalized:
-        return None
-
-    return normalized
-
-
-def _clean_text(
-    value: Any,
-) -> str:
-    return str(
-        value or ""
-    ).strip()

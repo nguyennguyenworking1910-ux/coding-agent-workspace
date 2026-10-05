@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass
 from typing import Any
+
+from .resolution_gate_base import (
+    BOUND,
+    REJECTED,
+    REQUIRES_CLARIFICATION,
+    build_candidates_tuple,
+    clean_text,
+    normalize_expected_query,
+    validate_pane_id,
+    validate_receipt_dict,
+    validate_resolution_query,
+)
 
 try:
     from tmux_merchant_resolution import (
@@ -16,11 +27,6 @@ except ModuleNotFoundError:
         pending_merchant_resolution_matches,
         validate_merchant_resolution_result,
     )
-
-
-BOUND = "BOUND"
-REQUIRES_CLARIFICATION = "REQUIRES_CLARIFICATION"
-REJECTED = "REJECTED"
 
 
 @dataclass(frozen=True)
@@ -66,38 +72,15 @@ def bind_merchant_resolution_receipt(
     Missing, malformed, stale-context, wrong-task, or wrong-query evidence
     is REJECTED and must never become a Merchant binding.
     """
-
-    query = _normalize_expected_query(
-        expected_query
-    )
-
+    query = normalize_expected_query(expected_query)
     if query is None:
         return _rejected()
 
-    if not isinstance(
-        receipt,
-        dict,
-    ):
-        return _rejected(
-            query=query
-        )
+    if not validate_receipt_dict(receipt, query):
+        return _rejected(query=query)
 
-    pane_id = _clean_text(
-        pane_session_id
-    )
-
-    if (
-        not pane_id
-        or _clean_text(
-            receipt.get(
-                "pane_session_id"
-            )
-        )
-        != pane_id
-    ):
-        return _rejected(
-            query=query
-        )
+    if not validate_pane_id(pane_session_id, receipt.get("pane_session_id"), query):
+        return _rejected(query=query)
 
     if not pending_merchant_resolution_matches(
         receipt,
@@ -106,56 +89,22 @@ def bind_merchant_resolution_receipt(
         run_id=run_id,
         task_id=task_id,
     ):
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    resolution = (
-        validate_merchant_resolution_result(
-            receipt.get(
-                "resolution"
-            )
-        )
-    )
-
+    resolution = validate_merchant_resolution_result(receipt.get("resolution"))
     if resolution is None:
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    if (
-        _normalize_expected_query(
-            resolution.get(
-                "query"
-            )
-        )
-        != query
-    ):
-        return _rejected(
-            query=query
-        )
+    if not validate_resolution_query(resolution.get("query"), query):
+        return _rejected(query=query)
 
-    candidates = tuple(
-        MerchantResolutionCandidate(
-            merchant_id=(
-                candidate[
-                    "merchant_id"
-                ]
-            ),
-            code=(
-                candidate[
-                    "code"
-                ]
-            ),
-            name=(
-                candidate[
-                    "name"
-                ]
-            ),
-        )
-        for candidate in resolution[
-            "candidates"
-        ]
+    candidates = build_candidates_tuple(
+        resolution["candidates"],
+        lambda c: MerchantResolutionCandidate(
+            merchant_id=c["merchant_id"],
+            code=c["code"],
+            name=c["name"],
+        ),
     )
 
     status = resolution[
@@ -245,34 +194,3 @@ def _rejected(
         candidates=(),
         question=None,
     )
-
-
-def _normalize_expected_query(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    normalized = (
-        unicodedata.normalize(
-            "NFKC",
-            value,
-        )
-        .strip()
-    )
-
-    if not normalized:
-        return None
-
-    return normalized
-
-
-def _clean_text(
-    value: Any,
-) -> str:
-    return str(
-        value or ""
-    ).strip()

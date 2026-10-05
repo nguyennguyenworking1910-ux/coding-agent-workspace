@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
-import unicodedata
-
 from dataclasses import dataclass
 from typing import Any
+
+from .resolution_gate_base import (
+    BOUND,
+    REJECTED,
+    REQUIRES_CLARIFICATION,
+    build_candidates_tuple,
+    clean_text,
+    normalize_expected_query,
+    validate_receipt_dict,
+    validate_resolution_query,
+)
 
 try:
     from tmux_step_resolution import (
@@ -17,13 +26,6 @@ except ModuleNotFoundError:
         step_resolution_receipt_matches,
         validate_step_resolution_result,
     )
-
-
-BOUND = "BOUND"
-REQUIRES_CLARIFICATION = (
-    "REQUIRES_CLARIFICATION"
-)
-REJECTED = "REJECTED"
 
 
 @dataclass(frozen=True)
@@ -104,209 +106,58 @@ def bind_step_resolution_receipt(
 
     This function grants no write authority.
     """
-
-    query = _normalize_expected_query(
-        expected_query
-    )
-
+    query = normalize_expected_query(expected_query)
     if query is None:
         return _rejected()
 
-    merchant_id = _clean_text(
-        trusted_merchant_id
-    )
+    merchant_id = clean_text(trusted_merchant_id)
+    project_id = clean_text(trusted_project_id)
+    if not merchant_id or not project_id:
+        return _rejected(query=query)
 
-    project_id = _clean_text(
-        trusted_project_id
-    )
+    if not validate_receipt_dict(receipt, query):
+        return _rejected(query=query)
 
-    if (
-        not merchant_id
-        or not project_id
-    ):
-        return _rejected(
-            query=query
-        )
-
-    if not isinstance(
+    if not step_resolution_receipt_matches(
         receipt,
-        dict,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        teammate_name=teammate_name,
+        run_id=run_id,
+        task_id=task_id,
+        merchant_id=merchant_id,
+        project_id=project_id,
     ):
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    # -------------------------------------------------
-    # Exact receipt binding:
-    #
-    # pane
-    # owner
-    # teammate
-    # run
-    # task
-    # merchant
-    # project
-    # -------------------------------------------------
-
-    if not (
-        step_resolution_receipt_matches(
-            receipt,
-            pane_session_id=(
-                pane_session_id
-            ),
-            owner_session_id=(
-                owner_session_id
-            ),
-            teammate_name=(
-                teammate_name
-            ),
-            run_id=run_id,
-            task_id=task_id,
-            merchant_id=merchant_id,
-            project_id=project_id,
-        )
-    ):
-        return _rejected(
-            query=query
-        )
-
-    resolution = (
-        validate_step_resolution_result(
-            receipt.get(
-                "resolution"
-            )
-        )
-    )
-
+    resolution = validate_step_resolution_result(receipt.get("resolution"))
     if resolution is None:
-        return _rejected(
-            query=query
-        )
+        return _rejected(query=query)
 
-    # -------------------------------------------------
-    # Cross-entity invariant.
-    #
-    # Step result itself must remain inside the exact
-    # trusted Project.
-    # -------------------------------------------------
+    if resolution.get("project_id") != project_id:
+        return _rejected(query=query)
 
-    if (
-        resolution.get(
-            "project_id"
-        )
-        != project_id
-    ):
-        return _rejected(
-            query=query
-        )
+    if receipt.get("merchant_id") != merchant_id or receipt.get("project_id") != project_id:
+        return _rejected(query=query)
 
-    # Merchant is not present inside STEP_RESOLUTION.
-    # Merchant authority comes only from the receipt's
-    # trusted parent binding.
-    if (
-        receipt.get(
-            "merchant_id"
-        )
-        != merchant_id
-    ):
-        return _rejected(
-            query=query
-        )
+    if not validate_resolution_query(resolution.get("query"), query):
+        return _rejected(query=query)
 
-    if (
-        receipt.get(
-            "project_id"
-        )
-        != project_id
-    ):
-        return _rejected(
-            query=query
-        )
-
-    # -------------------------------------------------
-    # Semantic query binding.
-    #
-    # Accept NFKC-equivalent forms only.
-    # -------------------------------------------------
-
-    resolution_query = (
-        _normalize_expected_query(
-            resolution.get(
-                "query"
-            )
-        )
-    )
-
-    if (
-        resolution_query
-        != query
-    ):
-        return _rejected(
-            query=query
-        )
-
-    candidates = tuple(
-        StepResolutionCandidate(
-            step_id=(
-                candidate[
-                    "step_id"
-                ]
-            ),
-            project_id=(
-                candidate[
-                    "project_id"
-                ]
-            ),
-            template_step_id=(
-                candidate[
-                    "template_step_id"
-                ]
-            ),
-            branch_key=(
-                candidate[
-                    "branch_key"
-                ]
-            ),
-            step_name=(
-                candidate[
-                    "step_name"
-                ]
-            ),
-            step_type=(
-                candidate[
-                    "step_type"
-                ]
-            ),
-            status=(
-                candidate[
-                    "status"
-                ]
-            ),
-            sequence_number=(
-                candidate[
-                    "sequence_number"
-                ]
-            ),
-            version=(
-                candidate[
-                    "version"
-                ]
-            ),
-            condition_key=(
-                candidate[
-                    "condition_key"
-                ]
-            ),
-            is_optional=(
-                candidate[
-                    "is_optional"
-                ]
-            ),
-        )
-        for candidate
-        in resolution[
-            "candidates"
-        ]
+    candidates = build_candidates_tuple(
+        resolution["candidates"],
+        lambda c: StepResolutionCandidate(
+            step_id=c["step_id"],
+            project_id=c["project_id"],
+            template_step_id=c["template_step_id"],
+            branch_key=c["branch_key"],
+            step_name=c["step_name"],
+            step_type=c["step_type"],
+            status=c["status"],
+            sequence_number=c["sequence_number"],
+            version=c["version"],
+            condition_key=c["condition_key"],
+            is_optional=c["is_optional"],
+        ),
     )
 
     status = resolution[
@@ -508,35 +359,3 @@ def _rejected(
             question=None,
         )
     )
-
-
-def _normalize_expected_query(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    normalized = (
-        unicodedata.normalize(
-            "NFKC",
-            value,
-        )
-        .strip()
-    )
-
-    if not normalized:
-        return None
-
-    return normalized
-
-
-def _clean_text(
-    value: Any,
-) -> str:
-    return str(
-        value
-        or ""
-    ).strip()
