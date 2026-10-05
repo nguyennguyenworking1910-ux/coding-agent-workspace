@@ -82,3 +82,9 @@ STATE = "state"
 FIELD = "field"
 SHA256 = "sha256"
 COMMAND_MODE = "command"  # Not to be confused with COMMAND tool input
+
+# Regex patterns (compiled on first use to avoid repeated re.compile)
+import re
+
+PATTERN_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")  # 64 char hex (SHA256)
+PATTERN_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_-]")  # Non-alphanumeric/underscore/dash
