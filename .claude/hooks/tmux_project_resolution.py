@@ -20,6 +20,16 @@ Security boundary:
 
 from __future__ import annotations
 
+from .tmux_handler_base import (
+    LOCK_TIMEOUT_SECONDS,
+    MAX_RESOLUTION_AGE_SECONDS,
+    canonical_uuid_text,
+    clean_text,
+    get_handler_dir,
+    nonempty_text,
+    session_key,
+)
+
 import hashlib
 import json
 import os
@@ -45,7 +55,6 @@ PROJECT_RESOLUTION_DIR_ENV = (
 )
 
 PROJECT_RESOLUTION_TTL_SECONDS = 3600
-LOCK_TIMEOUT_SECONDS = 10.0
 
 RECEIPT_FIELDS = frozenset(
     {
@@ -146,8 +155,8 @@ def pending_project_resolution_dir() -> Path:
     )
 
 
-def _session_key(session_id: Any) -> str:
-    value = _clean_text(session_id)
+def session_key(session_id: Any) -> str:
+    value = clean_text(session_id)
 
     return hashlib.sha256(
         value.encode("utf-8")
@@ -159,7 +168,7 @@ def pending_project_resolution_path(
 ) -> Path:
     return (
         pending_project_resolution_dir()
-        / f"{_session_key(pane_session_id)}.json"
+        / f"{session_key(pane_session_id)}.json"
     )
 
 
@@ -168,11 +177,11 @@ def pending_project_resolution_lock_path(
 ) -> Path:
     return (
         pending_project_resolution_dir()
-        / f"{_session_key(pane_session_id)}.lock"
+        / f"{session_key(pane_session_id)}.lock"
     )
 
 
-def _clean_text(value: Any) -> str:
+def clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
@@ -204,7 +213,7 @@ def _optional_exact_text(
     return cleaned
 
 
-def _canonical_uuid_text(
+def canonical_uuid_text(
     value: Any,
 ) -> str | None:
     if not isinstance(value, str) or not value:
@@ -255,10 +264,10 @@ def _validate_candidate(
     if set(value) != CANDIDATE_FIELDS:
         return None
 
-    project_id = _canonical_uuid_text(
+    project_id = canonical_uuid_text(
         value.get("project_id")
     )
-    merchant_id = _canonical_uuid_text(
+    merchant_id = canonical_uuid_text(
         value.get("merchant_id")
     )
 
@@ -372,7 +381,7 @@ def validate_project_resolution_result(
     if query is None:
         return None
 
-    merchant_id = _canonical_uuid_text(
+    merchant_id = canonical_uuid_text(
         value.get("merchant_id")
     )
 
@@ -445,7 +454,7 @@ def validate_project_resolution_result(
         if match_kind not in RESOLVED_MATCH_KINDS:
             return None
 
-        project_id = _canonical_uuid_text(
+        project_id = canonical_uuid_text(
             project_id_value
         )
 
@@ -538,18 +547,18 @@ def stage_pending_project_resolution(
     """Atomically stage one exact project-resolver result."""
 
     binding = {
-        "pane_session_id": _clean_text(
+        "pane_session_id": clean_text(
             pane_session_id
         ),
-        "owner_session_id": _clean_text(
+        "owner_session_id": clean_text(
             owner_session_id
         ),
-        "teammate_name": _clean_text(
+        "teammate_name": clean_text(
             teammate_name
         ),
-        "run_id": _clean_text(run_id),
-        "task_id": _clean_text(task_id),
-        "tool_use_id": _clean_text(
+        "run_id": clean_text(run_id),
+        "task_id": clean_text(task_id),
+        "tool_use_id": clean_text(
             tool_use_id
         ),
     }
@@ -560,7 +569,7 @@ def stage_pending_project_resolution(
     ):
         return False
 
-    trusted_merchant_id = _canonical_uuid_text(
+    trusted_merchant_id = canonical_uuid_text(
         merchant_id
     )
 
@@ -661,7 +670,7 @@ def load_pending_project_resolution(
 ) -> dict[str, Any] | None:
     """Load one unexpired exact project-resolution receipt."""
 
-    pane_id = _clean_text(pane_session_id)
+    pane_id = clean_text(pane_session_id)
 
     if not pane_id:
         return None
@@ -699,7 +708,7 @@ def load_pending_project_resolution(
     if payload.get("pane_session_id") != pane_id:
         return None
 
-    merchant_id = _canonical_uuid_text(
+    merchant_id = canonical_uuid_text(
         payload.get("merchant_id")
     )
 
@@ -753,7 +762,7 @@ def pending_project_resolution_matches(
     if not isinstance(payload, dict):
         return False
 
-    trusted_merchant_id = _canonical_uuid_text(
+    trusted_merchant_id = canonical_uuid_text(
         merchant_id
     )
 
@@ -761,17 +770,17 @@ def pending_project_resolution_matches(
         return False
 
     expected = {
-        "pane_session_id": _clean_text(
+        "pane_session_id": clean_text(
             pane_session_id
         ),
-        "owner_session_id": _clean_text(
+        "owner_session_id": clean_text(
             owner_session_id
         ),
-        "teammate_name": _clean_text(
+        "teammate_name": clean_text(
             teammate_name
         ),
-        "run_id": _clean_text(run_id),
-        "task_id": _clean_text(task_id),
+        "run_id": clean_text(run_id),
+        "task_id": clean_text(task_id),
         "merchant_id": trusted_merchant_id,
     }
 
@@ -809,7 +818,7 @@ def clear_pending_project_resolution(
 ) -> bool:
     """Remove one transient project-resolution receipt."""
 
-    pane_id = _clean_text(pane_session_id)
+    pane_id = clean_text(pane_session_id)
 
     if not pane_id:
         return False

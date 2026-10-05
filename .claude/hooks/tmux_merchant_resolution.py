@@ -19,7 +19,6 @@ Security boundary:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tempfile
@@ -29,6 +28,16 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock, Timeout
+
+from .tmux_handler_base import (
+    LOCK_TIMEOUT_SECONDS,
+    MAX_RESOLUTION_AGE_SECONDS,
+    canonical_uuid_text,
+    clean_text,
+    get_handler_dir,
+    nonempty_text,
+    session_key,
+)
 
 
 CLAUDE_DIR = Path(
@@ -44,9 +53,6 @@ DEFAULT_PENDING_MERCHANT_RESOLUTION_DIR = (
 PENDING_MERCHANT_RESOLUTION_DIR_ENV_VAR = (
     "CLAUDE_PENDING_MERCHANT_RESOLUTION_DIR"
 )
-
-LOCK_TIMEOUT_SECONDS = 10.0
-MAX_RESOLUTION_AGE_SECONDS = 3600
 
 REQUIRED_BINDING_FIELDS = (
     "pane_session_id",
@@ -100,31 +106,12 @@ MATCH_KINDS = frozenset(
 
 
 def pending_merchant_resolution_dir() -> Path:
-    override = os.environ.get(
-        PENDING_MERCHANT_RESOLUTION_DIR_ENV_VAR
-    )
-
-    return (
-        Path(
-            override
-        )
-        if override
-        else DEFAULT_PENDING_MERCHANT_RESOLUTION_DIR
+    return get_handler_dir(
+        PENDING_MERCHANT_RESOLUTION_DIR_ENV_VAR,
+        DEFAULT_PENDING_MERCHANT_RESOLUTION_DIR,
     )
 
 
-def _session_key(
-    session_id: Any,
-) -> str:
-    value = _clean_text(
-        session_id
-    )
-
-    return hashlib.sha256(
-        value.encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
 
 def pending_merchant_resolution_path(
@@ -133,7 +120,7 @@ def pending_merchant_resolution_path(
     return (
         pending_merchant_resolution_dir()
         / (
-            f"{_session_key(pane_session_id)}"
+            f"{session_key(pane_session_id)}"
             ".json"
         )
     )
@@ -145,69 +132,12 @@ def pending_merchant_resolution_lock_path(
     return (
         pending_merchant_resolution_dir()
         / (
-            f"{_session_key(pane_session_id)}"
+            f"{session_key(pane_session_id)}"
             ".lock"
         )
     )
 
 
-def _clean_text(
-    value: Any,
-) -> str:
-    return str(
-        value or ""
-    ).strip()
-
-
-def _nonempty_text(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    cleaned = value.strip()
-
-    if (
-        not cleaned
-        or cleaned != value
-    ):
-        return None
-
-    return cleaned
-
-
-def _canonical_uuid_text(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    if not value:
-        return None
-
-    try:
-        canonical = str(
-            uuid.UUID(
-                value
-            )
-        )
-    except (
-        AttributeError,
-        TypeError,
-        ValueError,
-    ):
-        return None
-
-    if canonical != value:
-        return None
-
-    return canonical
 
 
 def _validate_candidates(
@@ -241,20 +171,20 @@ def _validate_candidates(
             return None
 
         merchant_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 candidate.get(
                     "merchant_id"
                 )
             )
         )
 
-        code = _nonempty_text(
+        code = nonempty_text(
             candidate.get(
                 "code"
             )
         )
 
-        name = _nonempty_text(
+        name = nonempty_text(
             candidate.get(
                 "name"
             )
@@ -320,7 +250,7 @@ def validate_merchant_resolution_result(
     ):
         return None
 
-    query = _nonempty_text(
+    query = nonempty_text(
         value.get(
             "query"
         )
@@ -396,7 +326,7 @@ def validate_merchant_resolution_result(
             return None
 
         merchant_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 merchant_id_value
             )
         )
@@ -489,19 +419,19 @@ def stage_pending_merchant_resolution(
     """Atomically stage one exact resolver result."""
 
     binding = {
-        "pane_session_id": _clean_text(
+        "pane_session_id": clean_text(
             pane_session_id
         ),
-        "owner_session_id": _clean_text(
+        "owner_session_id": clean_text(
             owner_session_id
         ),
-        "teammate_name": _clean_text(
+        "teammate_name": clean_text(
             teammate_name
         ),
-        "run_id": _clean_text(
+        "run_id": clean_text(
             run_id
         ),
-        "task_id": _clean_text(
+        "task_id": clean_text(
             task_id
         ),
     }
@@ -553,7 +483,7 @@ def stage_pending_merchant_resolution(
 
     payload = {
         **binding,
-        "tool_use_id": _clean_text(
+        "tool_use_id": clean_text(
             tool_use_id
         ),
         "resolution": validated,
@@ -631,7 +561,7 @@ def load_pending_merchant_resolution(
 ) -> dict[str, Any] | None:
     """Load one unexpired resolution receipt."""
 
-    pane_id = _clean_text(
+    pane_id = clean_text(
         pane_session_id
     )
 
@@ -665,7 +595,7 @@ def load_pending_merchant_resolution(
         return None
 
     for field in REQUIRED_BINDING_FIELDS:
-        if not _clean_text(
+        if not clean_text(
             payload.get(
                 field
             )
@@ -735,16 +665,16 @@ def pending_merchant_resolution_matches(
         return False
 
     expected = {
-        "owner_session_id": _clean_text(
+        "owner_session_id": clean_text(
             owner_session_id
         ),
-        "teammate_name": _clean_text(
+        "teammate_name": clean_text(
             teammate_name
         ),
-        "run_id": _clean_text(
+        "run_id": clean_text(
             run_id
         ),
-        "task_id": _clean_text(
+        "task_id": clean_text(
             task_id
         ),
     }
@@ -756,7 +686,7 @@ def pending_merchant_resolution_matches(
         return False
 
     return all(
-        _clean_text(
+        clean_text(
             payload.get(
                 field
             )
@@ -774,7 +704,7 @@ def clear_pending_merchant_resolution(
 ) -> bool:
     """Remove one transient resolution receipt."""
 
-    pane_id = _clean_text(
+    pane_id = clean_text(
         pane_session_id
     )
 

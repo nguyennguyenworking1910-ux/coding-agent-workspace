@@ -21,6 +21,16 @@ Security boundary:
 
 from __future__ import annotations
 
+from .tmux_handler_base import (
+    LOCK_TIMEOUT_SECONDS,
+    MAX_RESOLUTION_AGE_SECONDS,
+    canonical_uuid_text,
+    clean_text,
+    get_handler_dir,
+    nonempty_text,
+    session_key,
+)
+
 import hashlib
 import json
 import os
@@ -47,7 +57,6 @@ STEP_RESOLUTION_DIR_ENV = (
 )
 
 STEP_RESOLUTION_TTL_SECONDS = 3600
-LOCK_TIMEOUT_SECONDS = 10.0
 
 
 RECEIPT_FIELDS = frozenset(
@@ -168,10 +177,10 @@ def pending_step_resolution_dir() -> Path:
     )
 
 
-def _session_key(
+def session_key(
     session_id: Any,
 ) -> str:
-    value = _clean_text(
+    value = clean_text(
         session_id
     )
 
@@ -187,7 +196,7 @@ def pending_step_resolution_path(
 ) -> Path:
     return (
         pending_step_resolution_dir()
-        / f"{_session_key(pane_session_id)}.json"
+        / f"{session_key(pane_session_id)}.json"
     )
 
 
@@ -196,11 +205,11 @@ def pending_step_resolution_lock_path(
 ) -> Path:
     return (
         pending_step_resolution_dir()
-        / f"{_session_key(pane_session_id)}.lock"
+        / f"{session_key(pane_session_id)}.lock"
     )
 
 
-def _clean_text(
+def clean_text(
     value: Any,
 ) -> str:
     return str(
@@ -246,7 +255,7 @@ def _optional_exact_text(
     return cleaned
 
 
-def _canonical_uuid_text(
+def canonical_uuid_text(
     value: Any,
 ) -> str | None:
     if (
@@ -347,7 +356,7 @@ def _validate_candidate(
         return None
 
     step_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "step_id"
             )
@@ -355,7 +364,7 @@ def _validate_candidate(
     )
 
     project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "project_id"
             )
@@ -363,7 +372,7 @@ def _validate_candidate(
     )
 
     template_step_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "template_step_id"
             )
@@ -593,7 +602,7 @@ def validate_step_resolution_result(
         return None
 
     project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "project_id"
             )
@@ -755,13 +764,13 @@ def validate_step_resolution_result(
             return None
 
         step_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 step_id_value
             )
         )
 
         template_step_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 template_step_id_value
             )
         )
@@ -913,32 +922,32 @@ def stage_pending_step_resolution(
 
     binding = {
         "pane_session_id": (
-            _clean_text(
+            clean_text(
                 pane_session_id
             )
         ),
         "owner_session_id": (
-            _clean_text(
+            clean_text(
                 owner_session_id
             )
         ),
         "teammate_name": (
-            _clean_text(
+            clean_text(
                 teammate_name
             )
         ),
         "run_id": (
-            _clean_text(
+            clean_text(
                 run_id
             )
         ),
         "task_id": (
-            _clean_text(
+            clean_text(
                 task_id
             )
         ),
         "tool_use_id": (
-            _clean_text(
+            clean_text(
                 tool_use_id
             )
         ),
@@ -952,13 +961,13 @@ def stage_pending_step_resolution(
         return False
 
     trusted_merchant_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             merchant_id
         )
     )
 
     trusted_project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             project_id
         )
     )
@@ -1103,7 +1112,7 @@ def load_pending_step_resolution(
     """Load one unexpired exact Step-resolution receipt."""
 
     pane_id = (
-        _clean_text(
+        clean_text(
             pane_session_id
         )
     )
@@ -1164,7 +1173,7 @@ def load_pending_step_resolution(
         return None
 
     merchant_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             payload.get(
                 "merchant_id"
             )
@@ -1172,7 +1181,7 @@ def load_pending_step_resolution(
     )
 
     project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             payload.get(
                 "project_id"
             )
@@ -1259,13 +1268,13 @@ def pending_step_resolution_matches(
         return False
 
     trusted_merchant_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             merchant_id
         )
     )
 
     trusted_project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             project_id
         )
     )
@@ -1280,27 +1289,27 @@ def pending_step_resolution_matches(
 
     expected = {
         "pane_session_id": (
-            _clean_text(
+            clean_text(
                 pane_session_id
             )
         ),
         "owner_session_id": (
-            _clean_text(
+            clean_text(
                 owner_session_id
             )
         ),
         "teammate_name": (
-            _clean_text(
+            clean_text(
                 teammate_name
             )
         ),
         "run_id": (
-            _clean_text(
+            clean_text(
                 run_id
             )
         ),
         "task_id": (
-            _clean_text(
+            clean_text(
                 task_id
             )
         ),
@@ -1357,7 +1366,7 @@ def clear_pending_step_resolution(
     """Remove one transient Step-resolution receipt."""
 
     pane_id = (
-        _clean_text(
+        clean_text(
             pane_session_id
         )
     )

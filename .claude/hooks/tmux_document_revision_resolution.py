@@ -26,6 +26,16 @@ Security boundary:
 
 from __future__ import annotations
 
+from .tmux_handler_base import (
+    LOCK_TIMEOUT_SECONDS,
+    MAX_RESOLUTION_AGE_SECONDS,
+    canonical_uuid_text,
+    clean_text,
+    get_handler_dir,
+    nonempty_text,
+    session_key,
+)
+
 import hashlib
 import json
 import os
@@ -53,7 +63,6 @@ DOCUMENT_REVISION_RESOLUTION_DIR_ENV = (
 )
 
 DOCUMENT_REVISION_RESOLUTION_TTL_SECONDS = 3600
-LOCK_TIMEOUT_SECONDS = 10.0
 
 SCOPE_PROJECT = "PROJECT"
 SCOPE_MERCHANT = "MERCHANT"
@@ -177,10 +186,10 @@ def pending_document_revision_resolution_dir() -> Path:
     )
 
 
-def _session_key(
+def session_key(
     session_id: Any,
 ) -> str:
-    value = _clean_text(
+    value = clean_text(
         session_id
     )
 
@@ -194,7 +203,7 @@ def pending_document_revision_resolution_path(
 ) -> Path:
     return (
         pending_document_revision_resolution_dir()
-        / f"{_session_key(pane_session_id)}.json"
+        / f"{session_key(pane_session_id)}.json"
     )
 
 
@@ -203,11 +212,11 @@ def pending_document_revision_resolution_lock_path(
 ) -> Path:
     return (
         pending_document_revision_resolution_dir()
-        / f"{_session_key(pane_session_id)}.lock"
+        / f"{session_key(pane_session_id)}.lock"
     )
 
 
-def _clean_text(
+def clean_text(
     value: Any,
 ) -> str:
     return str(
@@ -235,7 +244,7 @@ def _nonempty_exact_text(
     return cleaned
 
 
-def _canonical_uuid_text(
+def canonical_uuid_text(
     value: Any,
 ) -> str | None:
     if (
@@ -272,7 +281,7 @@ def _optional_uuid_text(
     if value is None:
         return None
 
-    canonical = _canonical_uuid_text(
+    canonical = canonical_uuid_text(
         value
     )
 
@@ -383,7 +392,7 @@ def _scope_parent(
         return None
 
     trusted_merchant_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             merchant_id
         )
     )
@@ -402,7 +411,7 @@ def _scope_parent(
         )
 
     trusted_project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             project_id
         )
     )
@@ -436,7 +445,7 @@ def _validate_candidate(
         return None
 
     revision_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "revision_id"
             )
@@ -444,7 +453,7 @@ def _validate_candidate(
     )
 
     project_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "project_id"
             )
@@ -452,7 +461,7 @@ def _validate_candidate(
     )
 
     merchant_id = (
-        _canonical_uuid_text(
+        canonical_uuid_text(
             value.get(
                 "merchant_id"
             )
@@ -800,13 +809,13 @@ def validate_document_revision_resolution_result(
             return None
 
         revision_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 revision_id_value
             )
         )
 
         source_project_id = (
-            _canonical_uuid_text(
+            canonical_uuid_text(
                 source_project_id_value
             )
         )
@@ -940,32 +949,32 @@ def stage_pending_document_revision_resolution(
 
     binding = {
         "pane_session_id": (
-            _clean_text(
+            clean_text(
                 pane_session_id
             )
         ),
         "owner_session_id": (
-            _clean_text(
+            clean_text(
                 owner_session_id
             )
         ),
         "teammate_name": (
-            _clean_text(
+            clean_text(
                 teammate_name
             )
         ),
         "run_id": (
-            _clean_text(
+            clean_text(
                 run_id
             )
         ),
         "task_id": (
-            _clean_text(
+            clean_text(
                 task_id
             )
         ),
         "tool_use_id": (
-            _clean_text(
+            clean_text(
                 tool_use_id
             )
         ),
@@ -1129,7 +1138,7 @@ def load_pending_document_revision_resolution(
 ) -> dict[str, Any] | None:
     """Load one unexpired exact document-revision resolution receipt."""
 
-    pane_id = _clean_text(
+    pane_id = clean_text(
         pane_session_id
     )
 
@@ -1306,27 +1315,27 @@ def pending_document_revision_resolution_matches(
 
     expected = {
         "pane_session_id": (
-            _clean_text(
+            clean_text(
                 pane_session_id
             )
         ),
         "owner_session_id": (
-            _clean_text(
+            clean_text(
                 owner_session_id
             )
         ),
         "teammate_name": (
-            _clean_text(
+            clean_text(
                 teammate_name
             )
         ),
         "run_id": (
-            _clean_text(
+            clean_text(
                 run_id
             )
         ),
         "task_id": (
-            _clean_text(
+            clean_text(
                 task_id
             )
         ),
@@ -1397,7 +1406,7 @@ def clear_pending_document_revision_resolution(
 ) -> bool:
     """Remove one transient document-revision resolution receipt."""
 
-    pane_id = _clean_text(
+    pane_id = clean_text(
         pane_session_id
     )
 
