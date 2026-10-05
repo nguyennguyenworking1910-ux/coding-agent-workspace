@@ -18,6 +18,22 @@ from claude.hooks.runtime_state import (
 from claude.hooks.team_lifecycle import (
     TeammateAllocationDecision,
     allocate_teammate,
+    load_team_state,
+    mark_teammate_idle_reusable,
+    mark_teammate_running,
+)
+
+from claude.hooks.merchant_confirmation_preferences import (
+    MODE_LOCAL_AUTO,
+    load_preferences,
+    new_preferences,
+    save_preferences,
+)
+
+from claude.hooks.team_lifecycle import (
+    TeammateAllocationDecision,
+    allocate_teammate,
+    load_team_state,
     mark_teammate_idle_reusable,
     mark_teammate_running,
 )
@@ -55,6 +71,18 @@ def isolated_state(
             tmp_path
             / "preferences"
         ),
+    )
+
+def _create_confirmation_preference():
+    document = new_preferences(
+        SESSION_ID
+    )
+
+    document["mode"] = MODE_LOCAL_AUTO
+
+    save_preferences(
+        SESSION_ID,
+        document,
     )
 
 
@@ -195,13 +223,26 @@ def test_stop_clears_run_state_after_teammate_released(
         is None
     )
 
-
 def test_session_end_clears_even_with_active_teammate(
     isolated_state,
     monkeypatch,
 ):
     _create_run()
     _create_running_teammate()
+
+    assert (
+        load_state(
+            SESSION_ID
+        )
+        is not None
+    )
+
+    assert (
+        load_team_state(
+            SESSION_ID
+        )
+        is not None
+    )
 
     _run_cleanup(
         monkeypatch,
@@ -214,3 +255,126 @@ def test_session_end_clears_even_with_active_teammate(
         )
         is None
     )
+
+    assert (
+        load_team_state(
+            SESSION_ID
+        )
+        is None
+    )
+
+
+def test_session_end_fails_closed_when_run_state_cannot_be_cleared(
+    isolated_state,
+    monkeypatch,
+):
+    _create_run()
+    _create_running_teammate()
+
+    monkeypatch.setattr(
+        cleanup_state,
+        "clear_state",
+        lambda session_id: False,
+    )
+
+    assert (
+        cleanup_state.clear_state(
+            SESSION_ID
+        )
+        is False
+    )
+
+    monkeypatch.setattr(
+        cleanup_state.sys,
+        "stdin",
+        StringIO(
+            json.dumps(
+                {
+                    "hook_event_name": "SessionEnd",
+                    "session_id": SESSION_ID,
+                }
+            )
+        ),
+    )
+
+    assert (
+        cleanup_state.main()
+        != 0
+    )
+
+
+def test_session_end_clears_all_session_scoped_state(
+    isolated_state,
+    monkeypatch,
+):
+    _create_run()
+    _create_running_teammate()
+    _create_confirmation_preference()
+
+    assert load_state(
+        SESSION_ID
+    ) is not None
+
+    assert load_team_state(
+        SESSION_ID
+    ) is not None
+
+    assert load_preferences(
+        SESSION_ID
+    ) is not None
+
+    _run_cleanup(
+        monkeypatch,
+        "SessionEnd",
+    )
+
+    assert load_state(
+        SESSION_ID
+    ) is None
+
+    assert load_team_state(
+        SESSION_ID
+    ) is None
+
+    assert load_preferences(
+        SESSION_ID
+    ) is None
+
+def test_session_end_reports_incomplete_cleanup(
+    isolated_state,
+    monkeypatch,
+):
+    _create_run()
+    _create_running_teammate()
+
+    monkeypatch.setattr(
+        cleanup_state,
+        "clear_team_state",
+        lambda session_id: False,
+    )
+
+    monkeypatch.setattr(
+        cleanup_state.sys,
+        "stdin",
+        StringIO(
+            json.dumps(
+                {
+                    "hook_event_name": "SessionEnd",
+                    "session_id": SESSION_ID,
+                }
+            )
+        ),
+    )
+
+    assert (
+        cleanup_state.main()
+        == 2
+    )
+
+    assert (
+        load_team_state(
+            SESSION_ID
+        )
+        is not None
+    )
+    

@@ -736,3 +736,158 @@ def test_bounded_runtime_result_persists_hash_not_raw_result():
             ]
         )
     )
+
+def test_failure_persists_bounded_failure_type_and_is_not_retryable():
+    confirmation = (
+        _confirmation()
+    )
+
+    state = _state(
+        confirmation
+    )
+
+    candidate = _candidate(
+        confirmation
+    )
+
+    attempt, reason = _stage(
+        state,
+        candidate,
+    )
+
+    assert reason == ""
+    assert attempt is not None
+
+    assert (
+        record_runtime_handoff_result(
+            state,
+            attempt,
+            succeeded=False,
+            exit_code=None,
+            failure_type=(
+                "MerchantRuntimeHandoffError"
+            ),
+        )
+        is True
+    )
+
+    receipt = state[
+        HANDOFF_STATE_KEY
+    ]
+
+    assert (
+        receipt[
+            "status"
+        ]
+        == HANDOFF_FAILED
+    )
+
+    assert (
+        receipt[
+            "failure_type"
+        ]
+        == "MerchantRuntimeHandoffError"
+    )
+
+    assert (
+        "runtime_result"
+        not in receipt
+    )
+
+    retry, retry_reason = _stage(
+        state,
+        candidate,
+    )
+
+    assert retry is None
+    assert "already FAILED" in (
+        retry_reason
+    )
+
+
+def test_success_persists_runtime_result_without_failure_type():
+    confirmation = (
+        _confirmation()
+    )
+
+    state = _state(
+        confirmation
+    )
+
+    attempt, reason = _stage(
+        state,
+        _candidate(
+            confirmation
+        ),
+    )
+
+    assert reason == ""
+    assert attempt is not None
+
+    raw = json.dumps(
+        {
+            "contract_version": 1,
+            "success": True,
+            "mode": "APPLY",
+            "command": (
+                attempt.command
+            ),
+            "database": "runtime",
+            "proposal_hash": (
+                attempt.proposal_hash
+            ),
+            "result": {
+                "project_id": (
+                    PROJECT_ID
+                ),
+                "status": (
+                    "IN_PROGRESS"
+                ),
+            },
+        }
+    )
+
+    bounded = (
+        bounded_runtime_apply_result(
+            raw,
+            attempt,
+        )
+    )
+
+    assert bounded is not None
+
+    assert (
+        record_runtime_handoff_result(
+            state,
+            attempt,
+            succeeded=True,
+            exit_code=0,
+            runtime_result=(
+                bounded
+            ),
+        )
+        is True
+    )
+
+    receipt = state[
+        HANDOFF_STATE_KEY
+    ]
+
+    assert (
+        receipt[
+            "status"
+        ]
+        == HANDOFF_SUCCESS
+    )
+
+    assert (
+        receipt[
+            "runtime_result"
+        ]
+        == bounded
+    )
+
+    assert (
+        "failure_type"
+        not in receipt
+    )

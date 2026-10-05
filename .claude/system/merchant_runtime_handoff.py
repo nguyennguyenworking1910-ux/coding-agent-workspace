@@ -55,6 +55,15 @@ _HANDOFF_LOCK = threading.Lock()
 class MerchantRuntimeHandoffError(RuntimeWriteDeniedError):
     """Raised before CLI dispatch when trusted run state is unusable."""
 
+class MerchantRuntimeHandoffStageError(MerchantRuntimeHandoffError):
+    """Bounded stage-aware failure for trusted session apply."""
+
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+        super().__init__(
+            f"Merchant runtime handoff failed at stage {stage}"
+        )
+
 
 def invoke_confirmed_merchant_apply(
     arguments: Sequence[str],
@@ -100,62 +109,84 @@ def invoke_confirmed_merchant_session_apply(
     *,
     write_command_factory: WriteCommandFactory | None = None,
 ) -> int:
-    """Consume one policy-accepted persisted session and invoke its apply.
-
-    The issuance slot is saved under the session file lock before an opaque
-    capability is issued or a repository adapter can run. A process failure
-    can therefore lose an intended apply, but it cannot make an uncertain
-    apply replayable. This deliberately provides at-most-once execution.
-    """
+    """Consume one policy-accepted persisted session and invoke its apply."""
 
     if not isinstance(session_id, str) or not session_id.strip():
-        raise MerchantRuntimeHandoffError(
-            "Trusted Merchant handoff requires an exact session id"
+        raise MerchantRuntimeHandoffStageError(
+            "SESSION_ID"
         )
 
-    prepared = _prepare_exact_apply(arguments)
+    try:
+        prepared = _prepare_exact_apply(arguments)
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "PREPARE"
+        ) from exc
+
     confirmation: dict[str, Any] | None = None
     dispatch_receipt: dict[str, Any] | None = None
     confirmation_mode = MODE_MANUAL
 
-    # Persist the spend before constructing the capability or entering the
-    # database adapter. Holding the file lock only for reservation keeps other
-    # hooks responsive during the potentially slower repository call.
-    with locked_state(session_id) as persisted_state:
-        if persisted_state is None:
-            raise MerchantRuntimeHandoffError(
-                "No trusted Merchant run state exists for this session"
+    try:
+        with locked_state(session_id) as persisted_state:
+            if persisted_state is None:
+                raise MerchantRuntimeHandoffError(
+                    "No trusted Merchant run state exists for this session"
+                )
+
+            state = _validated_state(
+                persisted_state
             )
 
-        state = _validated_state(persisted_state)
-        confirmation_mode = _confirmation_mode(state)
-        confirmation, dispatch_receipt = _reserve_authorization(state)
+            confirmation_mode = _confirmation_mode(
+                state
+            )
+
+            confirmation, dispatch_receipt = (
+                _reserve_authorization(state)
+            )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "RESERVE_AUTHORIZATION"
+        ) from exc
 
     if confirmation_mode == MODE_LOCAL_AUTO:
-        # The run-state slot is already spent, so this attempt is the one
-        # attempt whatever happens next. Spending the proposal receipt now
-        # keeps a crash, timeout, or uncertain outcome non-replayable.
-        consumption = consume_receipt(
-            session_id,
-            confirmation["confirmation_hash"],
-        )
-
-        if not consumption.accepted:
-            raise MerchantRuntimeHandoffError(
-                "The local auto-confirm proposal receipt could not be "
-                f"consumed: {consumption.reason}"
+        try:
+            consumption = consume_receipt(
+                session_id,
+                confirmation["confirmation_hash"],
             )
 
-    authorization = issue_runtime_apply_authorization(
-        confirmation,
-        dispatch_receipt,
-    )
+            if not consumption.accepted:
+                raise MerchantRuntimeHandoffError(
+                    "Local auto-confirm proposal receipt "
+                    "could not be consumed"
+                )
+        except Exception as exc:
+            raise MerchantRuntimeHandoffStageError(
+                "CONSUME_RECEIPT"
+            ) from exc
 
-    return _invoke_authorized_apply(
-        prepared,
-        authorization,
-        write_command_factory=write_command_factory,
-    )
+    try:
+        authorization = issue_runtime_apply_authorization(
+            confirmation,
+            dispatch_receipt,
+        )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "ISSUE_AUTHORIZATION"
+        ) from exc
+
+    try:
+        return _invoke_authorized_apply(
+            prepared,
+            authorization,
+            write_command_factory=write_command_factory,
+        )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "CLI_INVOKE"
+        ) from exc
 
 
 def _prepare_exact_apply(arguments: Sequence[str]) -> tuple[str, ...]:

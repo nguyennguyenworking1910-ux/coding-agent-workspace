@@ -12,6 +12,9 @@ import pytest
 from claude.agents.tools.merchant.cli_contract import (
     build_confirmation_envelope,
 )
+from claude.agents.tools.merchant.write_commands import (
+    MerchantWriteCommands,
+)
 from claude.hooks import (
     team_result_hook,
 )
@@ -23,6 +26,7 @@ from claude.hooks.merchant_runtime_handoff_gate import (
     handoff_candidate_from_message,
 )
 from claude.hooks.runtime_state import (
+    MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
     load_state,
     new_state,
     save_state,
@@ -35,6 +39,23 @@ from claude.hooks.team_lifecycle import (
     locked_team_state,
     mark_teammate_running,
 )
+
+from claude.hooks.merchant_confirmation_preferences import (
+    MODE_LOCAL_AUTO,
+    RECEIPT_CONSUMED,
+    RECEIPT_RESERVED,
+    capture_proposal_receipt,
+    locked_preferences,
+    receipt_state,
+    reserve_receipt,
+)
+from claude.hooks.runtime_state import (
+    MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
+    load_state,
+    new_state,
+    save_state,
+)
+from claude.system import merchant_runtime_handoff
 
 OWNER_SESSION_ID = (
     "gate-12h-owner"
@@ -89,6 +110,13 @@ def isolated_state(
         ),
     )
 
+    monkeypatch.setenv(
+        "CLAUDE_MERCHANT_PREFERENCES_DIR",
+        str(
+            tmp_path
+            / "merchant-confirmation"
+        ),
+    )
 
 def _confirmation():
     return (
@@ -526,13 +554,32 @@ def test_runtime_exception_records_failed_and_cannot_retry(
 
     assert state is not None
 
+    receipt = state[
+        HANDOFF_STATE_KEY
+    ]
+
     assert (
-        state[
-            HANDOFF_STATE_KEY
-        ][
+        receipt[
             "status"
         ]
         == HANDOFF_FAILED
+    )
+
+    assert (
+        receipt[
+            "failure_type"
+        ]
+        == "RuntimeError"
+    )
+
+    assert (
+        "runtime_result"
+        not in receipt
+    )
+
+    assert (
+        "exit_code"
+        not in receipt
     )
 
     # Same request cannot execute the runtime invocation twice.
@@ -546,6 +593,81 @@ def test_runtime_exception_records_failed_and_cannot_retry(
 
     assert len(calls) == 1
 
+def test_nonzero_runtime_exit_records_bounded_cli_failure_type(
+    isolated_state,
+    monkeypatch,
+):
+    confirmation = _setup_owner()
+
+    def failing_cli_invoke(
+        session_id,
+        arguments,
+    ):
+        print(
+            '{"success":false,"error":'
+            '{"type":"MerchantRepositoryError",'
+            '"message":"sensitive database detail"}}',
+            file=sys.stderr,
+        )
+        return 1
+
+    monkeypatch.setattr(
+        team_result_hook,
+        "invoke_confirmed_merchant_session_apply",
+        failing_cli_invoke,
+    )
+
+    payload = _payload(
+        confirmation
+    )
+
+    assert (
+        _run_hook(
+            monkeypatch,
+            payload,
+        )
+        == 0
+    )
+
+    state = load_state(
+        OWNER_SESSION_ID
+    )
+
+    assert state is not None
+
+    receipt = state[
+        HANDOFF_STATE_KEY
+    ]
+
+    assert (
+        receipt["status"]
+        == HANDOFF_FAILED
+    )
+
+    assert (
+        receipt["exit_code"]
+        == 1
+    )
+
+    assert (
+        receipt["failure_type"]
+        == "MerchantRepositoryError"
+    )
+
+    assert (
+        "runtime_result"
+        not in receipt
+    )
+
+    serialized_receipt = json.dumps(
+        receipt,
+        sort_keys=True,
+    )
+
+    assert (
+        "sensitive database detail"
+        not in serialized_receipt
+    )
 
 def test_handoff_is_rejected_for_wrong_authenticated_sender(
     isolated_state,
@@ -874,3 +996,496 @@ def test_project_create_canonical_handoff_message_parses():
     assert candidate["operation"] == "merchant_apply"
     assert candidate["database_target"] == "runtime"
     assert candidate["confirmation_hash"] == CONFIRMATION_HASH
+
+
+def test_local_auto_posttooluse_composition_consumes_receipt_before_cli_failure(
+    isolated_state,
+    monkeypatch,
+):
+    proposal_commands = MerchantWriteCommands(
+        {
+            "project update": (
+                lambda payload: {
+                    "status": "committed",
+                    "project_id": payload[
+                        "project_id"
+                    ],
+                }
+            ),
+        }
+    )
+
+    proposal = proposal_commands.propose(
+        "project update",
+        "runtime",
+        {
+            "project_id": PROJECT_ID,
+            "status": "IN_PROGRESS",
+            "expected_version": 3,
+            "occurred_at": None,
+            "triggered_by": None,
+            "allow_reopen": False,
+        },
+    )
+
+    confirmation = proposal[
+        "confirmation"
+    ]
+
+    # ------------------------------------------------------------
+    # Session-local LOCAL_AUTO proposal authority.
+    # ------------------------------------------------------------
+
+    with locked_preferences(
+        OWNER_SESSION_ID,
+        create=True,
+    ) as document:
+        assert document is not None
+        document["mode"] = MODE_LOCAL_AUTO
+        document["receipt"] = None
+
+    captured = capture_proposal_receipt(
+        OWNER_SESSION_ID,
+        proposal,
+    )
+
+    assert captured.accepted is True
+
+    reserved = reserve_receipt(
+        OWNER_SESSION_ID,
+        confirmation["confirmation_hash"],
+    )
+
+    assert reserved.accepted is True
+
+    assert (
+        receipt_state(OWNER_SESSION_ID)
+        == RECEIPT_RESERVED
+    )
+
+    # ------------------------------------------------------------
+    # Exact trusted merchant_apply owner state.
+    # ------------------------------------------------------------
+
+    state = new_state(
+        request="Apply exact Merchant project update",
+        task_class="small_task",
+        risk_level="external_write",
+        selected_agents=[
+            "merchant-manager",
+        ],
+        operations=[
+            "merchant_apply",
+        ],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 3,
+            "max_total_tool_calls": 12,
+            "max_run_budget_usd": 2.0,
+        },
+        confirmed=True,
+        merchant_confirmation=confirmation,
+        merchant_confirmation_mode=(
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        ),
+        run_id=RUN_ID,
+    )
+
+    state["merchant_dispatch_spent"] = True
+
+    state["merchant_dispatch"] = {
+        "operation": "merchant_apply",
+        "subagent_type": "merchant-manager",
+        "teammate_name": "merchant-manager",
+        "confirmation_hash": confirmation[
+            "confirmation_hash"
+        ],
+    }
+
+    save_state(
+        OWNER_SESSION_ID,
+        state,
+    )
+
+    decision, name = allocate_teammate(
+        OWNER_SESSION_ID,
+        "merchant-manager",
+        "merchant-manager",
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert name == "merchant-manager"
+
+    assert (
+        mark_teammate_running(
+            OWNER_SESSION_ID,
+            "merchant-manager",
+            RUN_ID,
+            TASK_ID,
+            operations=[
+                "merchant_apply",
+            ],
+            selected_agents=[
+                "merchant-manager",
+            ],
+        )
+        is True
+    )
+
+    _bind_trusted_pane()
+
+    # ------------------------------------------------------------
+    # Patch only the lowest CLI boundary.
+    #
+    # Everything above merchant_cli_main remains real:
+    # PostToolUse -> Gate 7.4 -> session handoff ->
+    # LOCAL_AUTO consume -> runtime authorization.
+    # ------------------------------------------------------------
+
+    cli_calls = []
+
+    def failing_cli(
+        arguments,
+        *,
+        write_command_factory=None,
+        runtime_authorization=None,
+    ):
+        cli_calls.append(
+            (
+                tuple(arguments),
+                runtime_authorization,
+            )
+        )
+
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "type": "MerchantRepositoryError",
+                        "message": "simulated",
+                    },
+                }
+            ),
+            file=sys.stderr,
+        )
+
+        return 1
+
+    monkeypatch.setattr(
+        merchant_runtime_handoff,
+        "merchant_cli_main",
+        failing_cli,
+    )
+
+    # Actual live reused-teammate shape:
+    # PostToolUse originates from pane session.
+    payload = _payload(
+        confirmation
+    )
+
+    payload.pop(
+        "agent_id"
+    )
+
+    assert (
+        _run_hook(
+            monkeypatch,
+            payload,
+        )
+        == 0
+    )
+
+    # ------------------------------------------------------------
+    # Critical 12H.5 invariant.
+    # ------------------------------------------------------------
+
+    assert (
+        receipt_state(OWNER_SESSION_ID)
+        == RECEIPT_CONSUMED
+    )
+
+    assert len(cli_calls) == 1
+
+    persisted = load_state(
+        OWNER_SESSION_ID
+    )
+
+    assert persisted is not None
+
+    handoff = persisted[
+        HANDOFF_STATE_KEY
+    ]
+
+    assert (
+        handoff["status"]
+        == HANDOFF_FAILED
+    )
+
+    assert (
+        handoff["exit_code"]
+        == 1
+    )
+
+    assert (
+        handoff["failure_type"]
+        == "MerchantRepositoryError"
+    )
+
+    assert (
+        persisted[
+            "merchant_runtime_authorization_issued"
+        ]
+        is True
+    )
+
+
+def test_local_auto_consume_rejection_persists_bounded_failure_stage(
+    isolated_state,
+    monkeypatch,
+):
+    proposal_commands = MerchantWriteCommands(
+        {
+            "project update": (
+                lambda payload: {
+                    "status": "committed",
+                    "project_id": payload[
+                        "project_id"
+                    ],
+                }
+            ),
+        }
+    )
+
+    proposal = proposal_commands.propose(
+        "project update",
+        "runtime",
+        {
+            "project_id": PROJECT_ID,
+            "status": "IN_PROGRESS",
+            "expected_version": 3,
+            "occurred_at": None,
+            "triggered_by": None,
+            "allow_reopen": False,
+        },
+    )
+
+    confirmation = proposal[
+        "confirmation"
+    ]
+
+    # ------------------------------------------------------------
+    # Session-local LOCAL_AUTO proposal authority.
+    # ------------------------------------------------------------
+
+    with locked_preferences(
+        OWNER_SESSION_ID,
+        create=True,
+    ) as document:
+        assert document is not None
+        document["mode"] = MODE_LOCAL_AUTO
+        document["receipt"] = None
+
+    captured = capture_proposal_receipt(
+        OWNER_SESSION_ID,
+        proposal,
+    )
+
+    assert captured.accepted is True
+
+    reserved = reserve_receipt(
+        OWNER_SESSION_ID,
+        confirmation["confirmation_hash"],
+    )
+
+    assert reserved.accepted is True
+
+    assert (
+        receipt_state(
+            OWNER_SESSION_ID
+        )
+        == RECEIPT_RESERVED
+    )
+
+    # ------------------------------------------------------------
+    # Exact trusted merchant_apply owner state.
+    # ------------------------------------------------------------
+
+    state = new_state(
+        request="Apply exact Merchant project update",
+        task_class="small_task",
+        risk_level="external_write",
+        selected_agents=[
+            "merchant-manager",
+        ],
+        operations=[
+            "merchant_apply",
+        ],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 3,
+            "max_total_tool_calls": 12,
+            "max_run_budget_usd": 2.0,
+        },
+        confirmed=True,
+        merchant_confirmation=confirmation,
+        merchant_confirmation_mode=(
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        ),
+        run_id=RUN_ID,
+    )
+
+    state[
+        "merchant_dispatch_spent"
+    ] = True
+
+    state[
+        "merchant_dispatch"
+    ] = {
+        "operation": "merchant_apply",
+        "subagent_type": "merchant-manager",
+        "teammate_name": "merchant-manager",
+        "confirmation_hash": confirmation[
+            "confirmation_hash"
+        ],
+    }
+
+    save_state(
+        OWNER_SESSION_ID,
+        state,
+    )
+
+    decision, name = allocate_teammate(
+        OWNER_SESSION_ID,
+        "merchant-manager",
+        "merchant-manager",
+    )
+
+    assert (
+        decision
+        == TeammateAllocationDecision.CREATE
+    )
+
+    assert name == "merchant-manager"
+
+    assert (
+        mark_teammate_running(
+            OWNER_SESSION_ID,
+            "merchant-manager",
+            RUN_ID,
+            TASK_ID,
+            operations=[
+                "merchant_apply",
+            ],
+            selected_agents=[
+                "merchant-manager",
+            ],
+        )
+        is True
+    )
+
+    # Required for the live reused-pane PostToolUse shape.
+    _bind_trusted_pane()
+
+    # ------------------------------------------------------------
+    # Force ONLY the LOCAL_AUTO receipt-consumption boundary
+    # to reject.
+    #
+    # Gate 7.4, owner resolution, session handoff and
+    # _reserve_authorization remain real.
+    # ------------------------------------------------------------
+
+    class RejectedConsumption:
+        accepted = False
+        reason = "TEST_REJECTED"
+
+    def reject_consumption(
+        session_id,
+        confirmation_hash,
+    ):
+        return RejectedConsumption()
+
+    monkeypatch.setattr(
+        merchant_runtime_handoff,
+        "consume_receipt",
+        reject_consumption,
+    )
+
+    # ------------------------------------------------------------
+    # Actual live reused-teammate PostToolUse shape.
+    # ------------------------------------------------------------
+
+    payload = _payload(
+        confirmation
+    )
+
+    payload.pop(
+        "agent_id"
+    )
+
+    assert (
+        _run_hook(
+            monkeypatch,
+            payload,
+        )
+        == 0
+    )
+
+    # ------------------------------------------------------------
+    # Receipt itself was rejected, so it remains RESERVED.
+    # ------------------------------------------------------------
+
+    assert (
+        receipt_state(
+            OWNER_SESSION_ID
+        )
+        == RECEIPT_RESERVED
+    )
+
+    # ------------------------------------------------------------
+    # But runtime authorization reservation happened first.
+    # ------------------------------------------------------------
+
+    persisted = load_state(
+        OWNER_SESSION_ID
+    )
+
+    assert persisted is not None
+
+    assert (
+        persisted[
+            "merchant_runtime_authorization_issued"
+        ]
+        is True
+    )
+
+    # ------------------------------------------------------------
+    # Gate 12H must persist only the bounded failure stage.
+    # No raw receipt reason or sensitive runtime information.
+    # ------------------------------------------------------------
+
+    handoff = persisted[
+        HANDOFF_STATE_KEY
+    ]
+
+    assert (
+        handoff["status"]
+        == HANDOFF_FAILED
+    )
+
+    assert (
+        handoff.get("exit_code")
+        is None
+    )
+
+    assert (
+        handoff["failure_type"]
+        == (
+            "MerchantRuntimeHandoffError:"
+            "CONSUME_RECEIPT"
+        )
+    )

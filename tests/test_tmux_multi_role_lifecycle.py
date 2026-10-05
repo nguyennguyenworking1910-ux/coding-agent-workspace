@@ -1664,6 +1664,10 @@ def test_tmux_merchant_proposal_stages_after_lead_run_state_is_cleared(
         {
             "subagent_type": "merchant-manager",
             "name": "merchant-manager",
+            "prompt": (
+                "Prepare the Merchant proposal required by the current "
+                "authorized run using the registered Merchant tooling."
+            ),
         },
         lead_session_id,
     ) is None

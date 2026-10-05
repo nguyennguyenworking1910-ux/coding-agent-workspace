@@ -778,5 +778,162 @@ def test_reuse_path_validates_before_lifecycle_reservation(
         "permissionDecisionReason"
     ]
 
+
+def test_merchant_manager_cannot_bash_runtime_handoff_directly():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                "python .claude/system/"
+                "merchant_runtime_handoff.py"
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is not None
+    assert (
+        decision["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+    assert (
+        "MERCHANT_APPLY_HANDOFF_REQUEST_JSON:"
+        in decision["hookSpecificOutput"][
+            "permissionDecisionReason"
+        ]
+    )
+
+
+def test_merchant_manager_cannot_powershell_runtime_handoff_directly():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "PowerShell",
+        "tool_input": {
+            "command": (
+                "python .claude/system/"
+                "merchant_runtime_handoff.py"
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is not None
+    assert (
+        decision["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+
+
+def test_merchant_manager_cannot_import_runtime_authority_with_python_c():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                'python -c "from '
+                'claude.system.merchant_runtime_handoff '
+                'import invoke_confirmed_merchant_session_apply"'
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is not None
+    assert (
+        decision["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+
+
+def test_merchant_manager_cannot_invoke_runtime_authority_function():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                'python -c "'
+                'invoke_confirmed_merchant_apply()"'
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is not None
+    assert (
+        decision["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+
+
+def test_merchant_manager_normal_agent_cli_not_blocked_by_runtime_boundary():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                "python "
+                ".claude/agents/tools/merchant/agent_cli.py "
+                "project list"
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is None
+
+
+def test_team_lead_runtime_handoff_not_blocked_by_teammate_boundary():
+    payload = {
+        "agent_type": "",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": (
+                "python .claude/system/"
+                "merchant_runtime_handoff.py"
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is None
+
+
+def test_non_shell_runtime_handoff_text_not_blocked():
+    payload = {
+        "agent_type": "merchant-manager",
+        "tool_name": "SendMessage",
+        "tool_input": {
+            "content": (
+                "merchant_runtime_handoff.py is owned "
+                "by trusted orchestration"
+            )
+        },
+    }
+
+    decision = policy_gate.merchant_runtime_bypass_decision(
+        payload
+    )
+
+    assert decision is None
+
 if __name__ == "__main__":
     unittest.main()

@@ -516,7 +516,20 @@ external operation is the allowlisted Merchant CLI boundary described above.
 ### Merchant confirmed-apply terminal result
 
 After a confirmed `merchant_apply` handoff has completed, the final
-`SendMessage` must contain exactly one `TEAM_RESULT_JSON`.
+`SendMessage` must consist only of exactly one `TEAM_RESULT_JSON` block.
+
+For `merchant_apply`, this terminal `SendMessage` is a strict machine-readable
+protocol message:
+
+- the first non-whitespace content must be `TEAM_RESULT_JSON:`;
+- the JSON object must be copied as the complete terminal result;
+- do not write prose, Markdown, headings, explanations, failure reports, CLI
+  summaries, or any other content before or after the JSON object;
+- after the closing `}` of the JSON object, the message must end;
+- the general reporting requirements below do not add content to this terminal
+  `merchant_apply` SendMessage;
+- any human-readable diagnostic information remains in the teammate pane and
+  must not be appended to this terminal protocol message.
 
 Successful apply:
 
@@ -709,6 +722,11 @@ Before you go idle:
 1. If the lead gave you a shared task, mark it completed with `TaskUpdate` only after the CLI
    outcome and complete report are ready.
 2. As your **final action**, send the complete report to `team-lead` with `SendMessage`.
+
+The reporting requirements below apply to ordinary Merchant reports and
+`merchant_propose` delivery. They do not override the strict terminal
+`merchant_apply` message contract above. For terminal `merchant_apply`, send
+only the required `TEAM_RESULT_JSON` block.
 
 Carry the operation, database, mode, redacted CLI result, exit outcome, confirmation state,
 failures, and unresolved work in the message body. If `SendMessage` explicitly reports that

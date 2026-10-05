@@ -26,6 +26,7 @@ from claude.hooks.runtime_state import (
 )
 from claude.system.merchant_runtime_handoff import (
     MerchantRuntimeHandoffError,
+    MerchantRuntimeHandoffStageError,
     invoke_confirmed_merchant_session_apply,
 )
 
@@ -70,6 +71,15 @@ class RecordingHandler:
                 ]
             ),
         }
+
+
+class FailingHandler:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, payload):
+        self.calls.append(payload)
+        raise RuntimeError("simulated runtime failure")
 
 
 def _apply_arguments(
@@ -365,9 +375,12 @@ def test_local_auto_reserved_receipt_is_consumed_only_by_session_handoff(
     # ------------------------------------------------------------
 
     with pytest.raises(
-        MerchantRuntimeHandoffError,
-        match="already issued",
-    ):
+        MerchantRuntimeHandoffStageError,
+        match=(
+            "Merchant runtime handoff failed "
+            "at stage RESERVE_AUTHORIZATION"
+        ),
+    ) as exc_info:
         invoke_confirmed_merchant_session_apply(
             SESSION_ID,
             _apply_arguments(
@@ -392,4 +405,134 @@ def test_local_auto_reserved_receipt_is_consumed_only_by_session_handoff(
             SESSION_ID
         )
         == RECEIPT_CONSUMED
+    )
+
+    assert (
+        exc_info.value.stage
+        == "RESERVE_AUTHORIZATION"
+    )
+
+
+def test_local_auto_receipt_remains_consumed_when_runtime_apply_fails(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "CLAUDE_RUNTIME_STATE_DIR",
+        str(tmp_path / "runtime"),
+    )
+
+    monkeypatch.setenv(
+        "CLAUDE_MERCHANT_PREFERENCES_DIR",
+        str(tmp_path / "merchant-confirmation"),
+    )
+
+    handler = FailingHandler()
+
+    commands = MerchantWriteCommands(
+        {
+            "project update": handler,
+        }
+    )
+
+    proposal = commands.propose(
+        "project update",
+        "runtime",
+        PAYLOAD,
+    )
+
+    confirmation = proposal["confirmation"]
+
+    with locked_preferences(
+        SESSION_ID,
+        create=True,
+    ) as document:
+        assert document is not None
+        document["mode"] = MODE_LOCAL_AUTO
+        document["receipt"] = None
+
+    captured = capture_proposal_receipt(
+        SESSION_ID,
+        proposal,
+    )
+
+    assert captured.accepted is True
+
+    reserved = reserve_receipt(
+        SESSION_ID,
+        confirmation["confirmation_hash"],
+    )
+
+    assert reserved.accepted is True
+    assert receipt_state(SESSION_ID) == RECEIPT_RESERVED
+
+    state = new_state(
+        request="Apply exact Merchant project update proposal",
+        task_class="small_task",
+        risk_level="external_write",
+        selected_agents=[
+            "merchant-manager",
+        ],
+        operations=[
+            "merchant_apply",
+        ],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 1,
+            "max_total_tool_calls": 6,
+            "max_run_budget_usd": 1.0,
+        },
+        confirmed=True,
+        merchant_confirmation=confirmation,
+        merchant_confirmation_mode=(
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        ),
+        run_id=RUN_ID,
+    )
+
+    state["merchant_dispatch_spent"] = True
+
+    state["merchant_dispatch"] = {
+        "operation": "merchant_apply",
+        "subagent_type": "merchant-manager",
+        "teammate_name": "merchant-manager",
+        "confirmation_hash": confirmation[
+            "confirmation_hash"
+        ],
+    }
+
+    save_state(
+        SESSION_ID,
+        state,
+    )
+
+    exit_code = invoke_confirmed_merchant_session_apply(
+        SESSION_ID,
+        _apply_arguments(proposal),
+        write_command_factory=(
+            lambda database: commands
+        ),
+    )
+
+    assert exit_code != 0
+
+    # Critical invariant:
+    # once Gate 7.5 starts the one allowed runtime attempt,
+    # downstream failure must never make the proposal replayable.
+    assert (
+        receipt_state(SESSION_ID)
+        == RECEIPT_CONSUMED
+    )
+
+    assert handler.calls == [PAYLOAD]
+
+    persisted = load_state(SESSION_ID)
+
+    assert persisted is not None
+
+    assert (
+        persisted[
+            "merchant_runtime_authorization_issued"
+        ]
+        is True
     )

@@ -128,3 +128,50 @@ def test_merchant_manager_requires_exactly_one_handoff_sendmessage():
         "`SendMessage`"
         in text
     )
+
+
+def test_merchant_manager_terminal_apply_sendmessage_is_machine_only():
+    text = _read(
+        MERCHANT_MANAGER
+    )
+
+    assert (
+        "`SendMessage` must consist only of exactly one "
+        "`TEAM_RESULT_JSON` block."
+        in text
+    )
+
+    assert (
+        "the first non-whitespace content must be "
+        "`TEAM_RESULT_JSON:`"
+        in text
+    )
+
+    assert (
+        "after the closing `}` of the JSON object, "
+        "the message must end"
+        in text
+    )
+
+    assert (
+        "do not write prose, Markdown, headings, explanations, "
+        "failure reports, CLI"
+        in text
+    )
+
+
+def test_general_reporting_does_not_override_terminal_apply_contract():
+    text = _read(
+        MERCHANT_MANAGER
+    )
+
+    assert (
+        "They do not override the strict terminal"
+        in text
+    )
+
+    assert re.search(
+        r"For terminal `merchant_apply`, send\s+"
+        r"only the required `TEAM_RESULT_JSON` block\.",
+        text,
+    )
