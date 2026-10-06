@@ -1,4 +1,4 @@
-"""Trusted in-process bridge for one confirmed Merchant runtime apply.
+﻿"""Trusted in-process bridge for one confirmed Merchant runtime apply.
 
 This module intentionally has no command-line entry point. The ordinary
 Merchant Manager adapter remains read/propose-only. Controlled orchestration
@@ -58,12 +58,24 @@ class MerchantRuntimeHandoffError(RuntimeWriteDeniedError):
 class MerchantRuntimeHandoffStageError(MerchantRuntimeHandoffError):
     """Bounded stage-aware failure for trusted session apply."""
 
-    def __init__(self, stage: str) -> None:
+    def __init__(
+        self,
+        stage: str,
+        cause: Exception | None = None,
+    ) -> None:
         self.stage = stage
-        super().__init__(
+
+        message = (
             f"Merchant runtime handoff failed at stage {stage}"
         )
 
+        if cause is not None:
+            detail = str(cause).strip()
+
+            if detail:
+                message = f"{message}: {detail}"
+
+        super().__init__(message)
 
 def invoke_confirmed_merchant_apply(
     arguments: Sequence[str],
@@ -119,9 +131,7 @@ def invoke_confirmed_merchant_session_apply(
     try:
         prepared = _prepare_exact_apply(arguments)
     except Exception as exc:
-        raise MerchantRuntimeHandoffStageError(
-            "PREPARE"
-        ) from exc
+        raise MerchantRuntimeHandoffStageError("PREPARE", exc) from exc
 
     confirmation: dict[str, Any] | None = None
     dispatch_receipt: dict[str, Any] | None = None
@@ -147,7 +157,8 @@ def invoke_confirmed_merchant_session_apply(
             )
     except Exception as exc:
         raise MerchantRuntimeHandoffStageError(
-            "RESERVE_AUTHORIZATION"
+            "RESERVE_AUTHORIZATION",
+            exc,
         ) from exc
 
     if confirmation_mode == MODE_LOCAL_AUTO:
@@ -163,9 +174,7 @@ def invoke_confirmed_merchant_session_apply(
                     "could not be consumed"
                 )
         except Exception as exc:
-            raise MerchantRuntimeHandoffStageError(
-                "CONSUME_RECEIPT"
-            ) from exc
+            raise MerchantRuntimeHandoffStageError("CONSUME_RECEIPT", exc) from exc
 
     try:
         authorization = issue_runtime_apply_authorization(
@@ -173,9 +182,7 @@ def invoke_confirmed_merchant_session_apply(
             dispatch_receipt,
         )
     except Exception as exc:
-        raise MerchantRuntimeHandoffStageError(
-            "ISSUE_AUTHORIZATION"
-        ) from exc
+        raise MerchantRuntimeHandoffStageError("ISSUE_AUTHORIZATION", exc) from exc
 
     try:
         return _invoke_authorized_apply(
@@ -184,9 +191,7 @@ def invoke_confirmed_merchant_session_apply(
             write_command_factory=write_command_factory,
         )
     except Exception as exc:
-        raise MerchantRuntimeHandoffStageError(
-            "CLI_INVOKE"
-        ) from exc
+        raise MerchantRuntimeHandoffStageError("CLI_INVOKE", exc) from exc
 
 
 def _prepare_exact_apply(arguments: Sequence[str]) -> tuple[str, ...]:

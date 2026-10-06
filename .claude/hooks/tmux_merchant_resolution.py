@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Transient exact Merchant resolution receipts for tmux teammates.
 
 A resolution receipt preserves the exact JSON emitted by:
@@ -342,11 +342,11 @@ def validate_merchant_resolution_result(
             )
         )
 
-        code = _nonempty_text(
+        code = nonempty_text(
             code_value
         )
 
-        name = _nonempty_text(
+        name = nonempty_text(
             name_value
         )
 

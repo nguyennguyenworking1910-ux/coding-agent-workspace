@@ -1,4 +1,4 @@
-"""Pure trusted-consumption gate for Document Revision resolution receipts."""
+﻿"""Pure trusted-consumption gate for Document Revision resolution receipts."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ try:
         build_candidates_tuple,
         clean_text,
         normalize_expected_query,
+        validate_pane_id,
         validate_receipt_dict,
         validate_resolution_query,
     )
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
         build_candidates_tuple,
         clean_text,
         normalize_expected_query,
+        validate_pane_id,
         validate_receipt_dict,
         validate_resolution_query,
     )
@@ -481,5 +483,3 @@ def _normalize_scope(
         return None
 
     return normalized
-
-
