@@ -542,4 +542,3 @@ class PrepareMerchantRuntimeHandoffFn(Protocol):
         str,
     ]:
         ...
-
