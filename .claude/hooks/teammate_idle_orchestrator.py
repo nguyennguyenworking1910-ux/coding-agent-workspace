@@ -10,14 +10,54 @@ monkeypatch and dependency-injection seams remain compatible.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+
+@dataclass(frozen=True)
+class TeammateIdleDependencies:
+    """Explicit dependencies required by TeammateIdle orchestration."""
+
+    MERCHANT_APPLY_FAILED_OUTCOME: str
+    MERCHANT_APPLY_SUCCESS_OUTCOME: str
+    MERCHANT_MANAGER_AGENT: str
+    MERCHANT_PROPOSAL_READY_OUTCOME: str
+    MERCHANT_PROPOSE_OPERATION: str
+    MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES: Any
+    MISSING_RESULT_FEEDBACK: str
+    PENDING_RESULT_FEEDBACK: str
+    _clear_merchant_resolution_after_release: Callable[..., Any]
+    active_task_id: Callable[..., Any]
+    bind_reported_teammate_pane_session: Callable[..., Any]
+    bound_merchant_completeness_receipt: Callable[..., Any]
+    bounded_terminal_result_failure: Callable[..., Any]
+    capture_proposal_receipt: Callable[..., Any]
+    clear_pending_merchant_completeness: Callable[..., Any]
+    clear_pending_merchant_proposal: Callable[..., Any]
+    clear_pending_result: Callable[..., Any]
+    failed_runtime_handoff_matches: Callable[..., Any]
+    find_unique_active_teammate_owner: Callable[..., Any]
+    load_pending_merchant_proposal: Callable[..., Any]
+    load_pending_result: Callable[..., Any]
+    load_team_state: Callable[..., Any]
+    locked_state: Callable[..., Any]
+    mark_bound_report_received: Callable[..., Any]
+    mark_recovery_sent: Callable[..., Any]
+    mark_report_received: Callable[..., Any]
+    pending_merchant_proposal_matches: Callable[..., Any]
+    record_teammate_result: Callable[..., Any]
+    release_reported_teammate_to_idle: Callable[..., Any]
+    successful_runtime_handoff_matches: Callable[..., Any]
+    task_result_candidate_from_message: Callable[..., Any]
+    validate_completeness_receipt_for_outcome: Callable[..., Any]
 
 
 def handle_teammate_idle(
     state: dict[str, Any] | None,
     payload: dict[str, Any],
     session_id: Any = None,
-    dependencies: Any = None,
+    dependencies: TeammateIdleDependencies | None = None,
 ) -> str:
     """Handle TeammateIdle as the trusted delivery/lifecycle gate."""
 

@@ -9,10 +9,38 @@ test and monkeypatch seams remain compatible.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 
-def main(*, dependencies: Any = None) -> int:
+
+@dataclass(frozen=True)
+class DispatcherDependencies:
+    """Explicit dependencies required by hook event dispatch."""
+
+    HOOK_EVENT_NAMES: Any
+    MerchantRuntimeHandoffStageError: Any
+    bounded_runtime_apply_failure: Callable[..., Any]
+    bounded_runtime_apply_result: Callable[..., Any]
+    emit_post_tool_context: Callable[..., Any]
+    handle_merchant_proposal_receipt: Callable[..., Any]
+    handle_post_tool_use: Callable[..., Any]
+    handle_teammate_idle: Callable[..., Any]
+    invoke_confirmed_merchant_session_apply: Callable[..., Any]
+    io: Any
+    json: Any
+    locked_state: Callable[..., Any]
+    prepare_merchant_runtime_handoff: Callable[..., Any]
+    record_runtime_handoff_result: Callable[..., Any]
+    redirect_stderr: Callable[..., Any]
+    redirect_stdout: Callable[..., Any]
+    sys: Any
+
+
+def main(
+    *,
+    dependencies: DispatcherDependencies | None = None,
+) -> int:
 
     if dependencies is None:
         raise RuntimeError(

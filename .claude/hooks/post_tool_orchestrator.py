@@ -9,14 +9,42 @@ seams remain compatible.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+@dataclass(frozen=True)
+class PostToolDependencies:
+    """Explicit dependencies required by PostToolUse orchestration."""
+
+    MERCHANT_MANAGER_AGENT: str
+    MERCHANT_PROPOSE_OPERATION: str
+    _coalesced_text: Callable[..., Any]
+    _stage_exact_tmux_document_revision_resolution: Callable[..., Any]
+    _stage_exact_tmux_merchant_completeness: Callable[..., Any]
+    _stage_exact_tmux_merchant_proposal: Callable[..., Any]
+    _stage_exact_tmux_merchant_resolution: Callable[..., Any]
+    _stage_exact_tmux_project_resolution: Callable[..., Any]
+    _stage_exact_tmux_step_resolution: Callable[..., Any]
+    _trusted_tmux_merchant_stage_context: Callable[..., Any]
+    active_task_id: Callable[..., Any]
+    find_unique_active_teammate_owner: Callable[..., Any]
+    mark_report_received: Callable[..., Any]
+    merchant_completeness_from_tool_response: Callable[..., Any]
+    merchant_proposal_from_tool_response: Callable[..., Any]
+    merchant_resolution_from_tool_response: Callable[..., Any]
+    record_teammate_result: Callable[..., Any]
+    send_message_body: Callable[..., Any]
+    stage_pending_result: Callable[..., Any]
+    trusted_post_tool_sender: Callable[..., Any]
+
 
 
 def handle_post_tool_use(
     state: dict[str, Any] | None,
     payload: dict[str, Any],
     session_id: Any = None,
-    dependencies: Any = None,
+    dependencies: PostToolDependencies | None = None,
 ) -> None:
     """Handle exact Merchant CLI staging plus canonical SendMessage delivery."""
 

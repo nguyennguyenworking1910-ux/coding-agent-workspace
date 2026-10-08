@@ -8,11 +8,20 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from merchant_resolution_tool_contract import (
+        ResidualMerchantDependencies,
+    )
+except ImportError:
+    from .merchant_resolution_tool_contract import (
+        ResidualMerchantDependencies,
+    )
+
 
 def _clear_merchant_resolution_after_release(
     session_id: Any,
     teammate_name: str,
-    dependencies: Any = None,
+    dependencies: ResidualMerchantDependencies | None = None,
 ) -> None:
     """Clear the task-scoped entity-resolution chain after release."""
 

@@ -11,12 +11,38 @@ from __future__ import annotations
 
 import shlex
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+
+@dataclass(frozen=True)
+class MerchantRuntimeDependencies:
+    """Explicit dependencies required by Merchant runtime orchestration."""
+
+    MERCHANT_MANAGER_AGENT: str
+    MERCHANT_PROPOSE_OPERATION: str
+    _coalesced_text: Callable[..., Any]
+    capture_merchant_proposal_from_message: Callable[..., Any]
+    capture_proposal_receipt: Callable[..., Any]
+    contains_handoff_marker: Callable[..., Any]
+    find_unique_active_teammate_owner: Callable[..., Any]
+    handoff_candidate_from_message: Callable[..., Any]
+    load_pending_merchant_completeness: Callable[..., Any]
+    locked_state: Callable[..., Any]
+    merchant_proposal_candidate_from_message: Callable[..., Any]
+    merchant_report_sender: Callable[..., Any]
+    pending_merchant_completeness_matches: Callable[..., Any]
+    send_message_body: Callable[..., Any]
+    shlex: Any
+    stage_runtime_handoff_attempt: Callable[..., Any]
+    trusted_post_tool_sender: Callable[..., Any]
+    trusted_teammate_pane_session_matches: Callable[..., Any]
 
 
 def _project_resolve_invocation(
     command: Any,
-    dependencies: Any = None,
+    dependencies: MerchantRuntimeDependencies | None = None,
 ) -> tuple[str, str] | None:
     """Parse one exact direct project-resolve Merchant CLI invocation."""
 
@@ -285,7 +311,7 @@ def _project_resolve_invocation(
 
 def prepare_merchant_runtime_handoff(
     payload: dict[str, Any],
-    dependencies: Any = None,
+    dependencies: MerchantRuntimeDependencies | None = None,
 ) -> tuple[
     bool,
     PreparedRuntimeHandoff | None,
@@ -664,7 +690,7 @@ def bound_merchant_completeness_receipt(
     teammate_name: str,
     run_id: str,
     task_id: str,
-    dependencies: Any = None,
+    dependencies: MerchantRuntimeDependencies | None = None,
 ) -> dict[str, Any] | None:
     """Return completeness evidence only for the exact current task."""
 
@@ -713,7 +739,7 @@ def capture_merchant_proposal_from_message(
     session_id: Any,
     teammate_name: str,
     message: str,
-    dependencies: Any = None,
+    dependencies: MerchantRuntimeDependencies | None = None,
 ) -> bool:
     """Capture proposal from an authenticated direct teammate report."""
 
@@ -814,7 +840,7 @@ def handle_merchant_proposal_receipt(
     state: dict[str, Any],
     payload: dict[str, Any],
     session_id: Any = None,
-    dependencies: Any = None,
+    dependencies: MerchantRuntimeDependencies | None = None,
 ) -> bool:
     """Compatibility path for authenticated direct merchant-manager reports.
 

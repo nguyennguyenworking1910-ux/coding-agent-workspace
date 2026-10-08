@@ -7,12 +7,30 @@ compatibility layer.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+
+@dataclass(frozen=True)
+class ResidualMerchantDependencies:
+    """Explicit dependencies for residual Merchant resolution helpers."""
+
+    MERCHANT_MANAGER_AGENT: str
+    _merchant_resolution_invocation_query: Callable[..., Any]
+    clear_pending_document_revision_resolution: Callable[..., Any]
+    clear_pending_merchant_resolution: Callable[..., Any]
+    clear_pending_project_resolution: Callable[..., Any]
+    clear_pending_step_resolution: Callable[..., Any]
+    json: Any
+    shlex: Any
+    unicodedata: Any
+    validate_merchant_resolution_result: Callable[..., Any]
 
 
 def _merchant_resolution_invocation_query(
     payload: dict[str, Any],
-    dependencies: Any = None,
+    dependencies: ResidualMerchantDependencies | None = None,
 ) -> str:
     """Return query only for one direct allowlisted resolver invocation.
 
@@ -168,7 +186,7 @@ def _merchant_resolution_invocation_query(
 
 def merchant_resolution_from_tool_response(
     payload: dict[str, Any],
-    dependencies: Any = None,
+    dependencies: ResidualMerchantDependencies | None = None,
 ) -> dict[str, Any] | None:
     """Extract one exact validated Merchant resolver CLI result."""
 
