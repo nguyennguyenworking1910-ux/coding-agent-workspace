@@ -14,6 +14,44 @@ import shlex
 from dataclasses import dataclass
 from typing import Any, Callable
 
+try:
+    from team_result_dependency_protocols import (
+        CoalescedTextFn,
+        HandoffCandidateFromMessageFn,
+        MerchantReportSenderFn,
+        MessageCandidateFn,
+        SendMessageBodyFn,
+        CaptureMerchantProposalFromMessageFn,
+        LoadPendingMerchantCompletenessFn,
+        ContainsHandoffMarkerFn,
+        PendingMerchantCompletenessMatchesFn,
+        CaptureProposalReceiptFn,
+        StageRuntimeHandoffAttemptFn,
+        FindUniqueActiveTeammateOwnerFn,
+        LockedStateFn,
+        TrustedPostToolSenderFn,
+        TrustedTeammatePaneSessionMatchesFn,
+    )
+except ImportError:
+    from .team_result_dependency_protocols import (
+        CoalescedTextFn,
+        HandoffCandidateFromMessageFn,
+        MerchantReportSenderFn,
+        MessageCandidateFn,
+        SendMessageBodyFn,
+        CaptureMerchantProposalFromMessageFn,
+        LoadPendingMerchantCompletenessFn,
+        ContainsHandoffMarkerFn,
+        PendingMerchantCompletenessMatchesFn,
+        CaptureProposalReceiptFn,
+        StageRuntimeHandoffAttemptFn,
+        FindUniqueActiveTeammateOwnerFn,
+        LockedStateFn,
+        TrustedPostToolSenderFn,
+        TrustedTeammatePaneSessionMatchesFn,
+    )
+
+
 
 
 @dataclass(frozen=True)
@@ -22,22 +60,22 @@ class MerchantRuntimeDependencies:
 
     MERCHANT_MANAGER_AGENT: str
     MERCHANT_PROPOSE_OPERATION: str
-    _coalesced_text: Callable[..., Any]
-    capture_merchant_proposal_from_message: Callable[..., Any]
-    capture_proposal_receipt: Callable[..., Any]
-    contains_handoff_marker: Callable[..., Any]
-    find_unique_active_teammate_owner: Callable[..., Any]
-    handoff_candidate_from_message: Callable[..., Any]
-    load_pending_merchant_completeness: Callable[..., Any]
-    locked_state: Callable[..., Any]
-    merchant_proposal_candidate_from_message: Callable[..., Any]
-    merchant_report_sender: Callable[..., Any]
-    pending_merchant_completeness_matches: Callable[..., Any]
-    send_message_body: Callable[..., Any]
+    _coalesced_text: CoalescedTextFn
+    capture_merchant_proposal_from_message: CaptureMerchantProposalFromMessageFn
+    capture_proposal_receipt: CaptureProposalReceiptFn
+    contains_handoff_marker: ContainsHandoffMarkerFn
+    find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
+    handoff_candidate_from_message: HandoffCandidateFromMessageFn
+    load_pending_merchant_completeness: LoadPendingMerchantCompletenessFn
+    locked_state: LockedStateFn
+    merchant_proposal_candidate_from_message: MessageCandidateFn
+    merchant_report_sender: MerchantReportSenderFn
+    pending_merchant_completeness_matches: PendingMerchantCompletenessMatchesFn
+    send_message_body: SendMessageBodyFn
     shlex: Any
-    stage_runtime_handoff_attempt: Callable[..., Any]
-    trusted_post_tool_sender: Callable[..., Any]
-    trusted_teammate_pane_session_matches: Callable[..., Any]
+    stage_runtime_handoff_attempt: StageRuntimeHandoffAttemptFn
+    trusted_post_tool_sender: TrustedPostToolSenderFn
+    trusted_teammate_pane_session_matches: TrustedTeammatePaneSessionMatchesFn
 
 
 def _project_resolve_invocation(

@@ -13,6 +13,54 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+try:
+    from team_result_dependency_protocols import (
+        BoundedTerminalResultFailureFn,
+        ClearMerchantResolutionAfterReleaseFn,
+        ActiveTaskIdFn,
+        BoundMerchantCompletenessReceiptFn,
+        MessageCandidateFn,
+        BindReportedTeammatePaneSessionFn,
+        ClearPendingMerchantCompletenessFn,
+        ClearPendingReceiptFn,
+        LoadPendingStateFn,
+        MarkBoundReportReceivedFn,
+        MarkRecoverySentFn,
+        MarkReportReceivedFn,
+        PendingMerchantProposalMatchesFn,
+        RuntimeHandoffMatchesFn,
+        CaptureProposalReceiptFn,
+        ValidateCompletenessReceiptForOutcomeFn,
+        FindUniqueActiveTeammateOwnerFn,
+        LockedStateFn,
+        RecordTeammateResultFn,
+        ReleaseReportedTeammateToIdleFn,
+    )
+except ImportError:
+    from .team_result_dependency_protocols import (
+        BoundedTerminalResultFailureFn,
+        ClearMerchantResolutionAfterReleaseFn,
+        ActiveTaskIdFn,
+        BoundMerchantCompletenessReceiptFn,
+        MessageCandidateFn,
+        BindReportedTeammatePaneSessionFn,
+        ClearPendingMerchantCompletenessFn,
+        ClearPendingReceiptFn,
+        LoadPendingStateFn,
+        MarkBoundReportReceivedFn,
+        MarkRecoverySentFn,
+        MarkReportReceivedFn,
+        PendingMerchantProposalMatchesFn,
+        RuntimeHandoffMatchesFn,
+        CaptureProposalReceiptFn,
+        ValidateCompletenessReceiptForOutcomeFn,
+        FindUniqueActiveTeammateOwnerFn,
+        LockedStateFn,
+        RecordTeammateResultFn,
+        ReleaseReportedTeammateToIdleFn,
+    )
+
+
 
 
 @dataclass(frozen=True)
@@ -27,30 +75,30 @@ class TeammateIdleDependencies:
     MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES: Any
     MISSING_RESULT_FEEDBACK: str
     PENDING_RESULT_FEEDBACK: str
-    _clear_merchant_resolution_after_release: Callable[..., Any]
-    active_task_id: Callable[..., Any]
-    bind_reported_teammate_pane_session: Callable[..., Any]
-    bound_merchant_completeness_receipt: Callable[..., Any]
-    bounded_terminal_result_failure: Callable[..., Any]
-    capture_proposal_receipt: Callable[..., Any]
-    clear_pending_merchant_completeness: Callable[..., Any]
-    clear_pending_merchant_proposal: Callable[..., Any]
-    clear_pending_result: Callable[..., Any]
-    failed_runtime_handoff_matches: Callable[..., Any]
-    find_unique_active_teammate_owner: Callable[..., Any]
-    load_pending_merchant_proposal: Callable[..., Any]
-    load_pending_result: Callable[..., Any]
-    load_team_state: Callable[..., Any]
-    locked_state: Callable[..., Any]
-    mark_bound_report_received: Callable[..., Any]
-    mark_recovery_sent: Callable[..., Any]
-    mark_report_received: Callable[..., Any]
-    pending_merchant_proposal_matches: Callable[..., Any]
-    record_teammate_result: Callable[..., Any]
-    release_reported_teammate_to_idle: Callable[..., Any]
-    successful_runtime_handoff_matches: Callable[..., Any]
-    task_result_candidate_from_message: Callable[..., Any]
-    validate_completeness_receipt_for_outcome: Callable[..., Any]
+    _clear_merchant_resolution_after_release: ClearMerchantResolutionAfterReleaseFn
+    active_task_id: ActiveTaskIdFn
+    bind_reported_teammate_pane_session: BindReportedTeammatePaneSessionFn
+    bound_merchant_completeness_receipt: BoundMerchantCompletenessReceiptFn
+    bounded_terminal_result_failure: BoundedTerminalResultFailureFn
+    capture_proposal_receipt: CaptureProposalReceiptFn
+    clear_pending_merchant_completeness: ClearPendingMerchantCompletenessFn
+    clear_pending_merchant_proposal: ClearPendingReceiptFn
+    clear_pending_result: ClearPendingReceiptFn
+    failed_runtime_handoff_matches: RuntimeHandoffMatchesFn
+    find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
+    load_pending_merchant_proposal: LoadPendingStateFn
+    load_pending_result: LoadPendingStateFn
+    load_team_state: LoadPendingStateFn
+    locked_state: LockedStateFn
+    mark_bound_report_received: MarkBoundReportReceivedFn
+    mark_recovery_sent: MarkRecoverySentFn
+    mark_report_received: MarkReportReceivedFn
+    pending_merchant_proposal_matches: PendingMerchantProposalMatchesFn
+    record_teammate_result: RecordTeammateResultFn
+    release_reported_teammate_to_idle: ReleaseReportedTeammateToIdleFn
+    successful_runtime_handoff_matches: RuntimeHandoffMatchesFn
+    task_result_candidate_from_message: MessageCandidateFn
+    validate_completeness_receipt_for_outcome: ValidateCompletenessReceiptForOutcomeFn
 
 
 def handle_teammate_idle(

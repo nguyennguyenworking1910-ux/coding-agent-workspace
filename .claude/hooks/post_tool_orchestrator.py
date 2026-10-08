@@ -12,6 +12,42 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+try:
+    from team_result_dependency_protocols import (
+        MerchantCompletenessStageFn,
+        MerchantProposalStageFn,
+        MerchantResolutionStageFn,
+        ResolutionStageFn,
+        ActiveTaskIdFn,
+        CoalescedTextFn,
+        SendMessageBodyFn,
+        ToolResponseCandidateFn,
+        TrustedTmuxMerchantStageContextFn,
+        MarkReportReceivedFn,
+        StagePendingResultFn,
+        FindUniqueActiveTeammateOwnerFn,
+        RecordTeammateResultFn,
+        TrustedPostToolSenderFn,
+    )
+except ImportError:
+    from .team_result_dependency_protocols import (
+        MerchantCompletenessStageFn,
+        MerchantProposalStageFn,
+        MerchantResolutionStageFn,
+        ResolutionStageFn,
+        ActiveTaskIdFn,
+        CoalescedTextFn,
+        SendMessageBodyFn,
+        ToolResponseCandidateFn,
+        TrustedTmuxMerchantStageContextFn,
+        MarkReportReceivedFn,
+        StagePendingResultFn,
+        FindUniqueActiveTeammateOwnerFn,
+        RecordTeammateResultFn,
+        TrustedPostToolSenderFn,
+    )
+
+
 
 @dataclass(frozen=True)
 class PostToolDependencies:
@@ -19,24 +55,24 @@ class PostToolDependencies:
 
     MERCHANT_MANAGER_AGENT: str
     MERCHANT_PROPOSE_OPERATION: str
-    _coalesced_text: Callable[..., Any]
-    _stage_exact_tmux_document_revision_resolution: Callable[..., Any]
-    _stage_exact_tmux_merchant_completeness: Callable[..., Any]
-    _stage_exact_tmux_merchant_proposal: Callable[..., Any]
-    _stage_exact_tmux_merchant_resolution: Callable[..., Any]
-    _stage_exact_tmux_project_resolution: Callable[..., Any]
-    _stage_exact_tmux_step_resolution: Callable[..., Any]
-    _trusted_tmux_merchant_stage_context: Callable[..., Any]
-    active_task_id: Callable[..., Any]
-    find_unique_active_teammate_owner: Callable[..., Any]
-    mark_report_received: Callable[..., Any]
-    merchant_completeness_from_tool_response: Callable[..., Any]
-    merchant_proposal_from_tool_response: Callable[..., Any]
-    merchant_resolution_from_tool_response: Callable[..., Any]
-    record_teammate_result: Callable[..., Any]
-    send_message_body: Callable[..., Any]
-    stage_pending_result: Callable[..., Any]
-    trusted_post_tool_sender: Callable[..., Any]
+    _coalesced_text: CoalescedTextFn
+    _stage_exact_tmux_document_revision_resolution: ResolutionStageFn
+    _stage_exact_tmux_merchant_completeness: MerchantCompletenessStageFn
+    _stage_exact_tmux_merchant_proposal: MerchantProposalStageFn
+    _stage_exact_tmux_merchant_resolution: MerchantResolutionStageFn
+    _stage_exact_tmux_project_resolution: ResolutionStageFn
+    _stage_exact_tmux_step_resolution: ResolutionStageFn
+    _trusted_tmux_merchant_stage_context: TrustedTmuxMerchantStageContextFn
+    active_task_id: ActiveTaskIdFn
+    find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
+    mark_report_received: MarkReportReceivedFn
+    merchant_completeness_from_tool_response: ToolResponseCandidateFn
+    merchant_proposal_from_tool_response: ToolResponseCandidateFn
+    merchant_resolution_from_tool_response: ToolResponseCandidateFn
+    record_teammate_result: RecordTeammateResultFn
+    send_message_body: SendMessageBodyFn
+    stage_pending_result: StagePendingResultFn
+    trusted_post_tool_sender: TrustedPostToolSenderFn
 
 
 

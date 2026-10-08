@@ -12,6 +12,34 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+try:
+    from team_result_dependency_protocols import (
+        BoundedRuntimeApplyFailureFn,
+        BoundedRuntimeApplyResultFn,
+        EmitPostToolContextFn,
+        HandleMerchantProposalReceiptFn,
+        HandlePostToolUseFn,
+        HandleTeammateIdleFn,
+        PrepareMerchantRuntimeHandoffFn,
+        RecordRuntimeHandoffResultFn,
+        InvokeConfirmedMerchantSessionApplyFn,
+        LockedStateFn,
+    )
+except ImportError:
+    from .team_result_dependency_protocols import (
+        BoundedRuntimeApplyFailureFn,
+        BoundedRuntimeApplyResultFn,
+        EmitPostToolContextFn,
+        HandleMerchantProposalReceiptFn,
+        HandlePostToolUseFn,
+        HandleTeammateIdleFn,
+        PrepareMerchantRuntimeHandoffFn,
+        RecordRuntimeHandoffResultFn,
+        InvokeConfirmedMerchantSessionApplyFn,
+        LockedStateFn,
+    )
+
+
 
 
 @dataclass(frozen=True)
@@ -20,18 +48,18 @@ class DispatcherDependencies:
 
     HOOK_EVENT_NAMES: Any
     MerchantRuntimeHandoffStageError: Any
-    bounded_runtime_apply_failure: Callable[..., Any]
-    bounded_runtime_apply_result: Callable[..., Any]
-    emit_post_tool_context: Callable[..., Any]
-    handle_merchant_proposal_receipt: Callable[..., Any]
-    handle_post_tool_use: Callable[..., Any]
-    handle_teammate_idle: Callable[..., Any]
-    invoke_confirmed_merchant_session_apply: Callable[..., Any]
+    bounded_runtime_apply_failure: BoundedRuntimeApplyFailureFn
+    bounded_runtime_apply_result: BoundedRuntimeApplyResultFn
+    emit_post_tool_context: EmitPostToolContextFn
+    handle_merchant_proposal_receipt: HandleMerchantProposalReceiptFn
+    handle_post_tool_use: HandlePostToolUseFn
+    handle_teammate_idle: HandleTeammateIdleFn
+    invoke_confirmed_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn
     io: Any
     json: Any
-    locked_state: Callable[..., Any]
-    prepare_merchant_runtime_handoff: Callable[..., Any]
-    record_runtime_handoff_result: Callable[..., Any]
+    locked_state: LockedStateFn
+    prepare_merchant_runtime_handoff: PrepareMerchantRuntimeHandoffFn
+    record_runtime_handoff_result: RecordRuntimeHandoffResultFn
     redirect_stderr: Callable[..., Any]
     redirect_stdout: Callable[..., Any]
     sys: Any

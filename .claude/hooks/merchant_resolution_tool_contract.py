@@ -10,6 +10,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+try:
+    from team_result_dependency_protocols import (
+        MerchantResolutionInvocationQueryFn,
+        ClearPendingReceiptFn,
+        ValidateMerchantResolutionResultFn,
+    )
+except ImportError:
+    from .team_result_dependency_protocols import (
+        MerchantResolutionInvocationQueryFn,
+        ClearPendingReceiptFn,
+        ValidateMerchantResolutionResultFn,
+    )
+
+
 
 
 @dataclass(frozen=True)
@@ -17,15 +31,15 @@ class ResidualMerchantDependencies:
     """Explicit dependencies for residual Merchant resolution helpers."""
 
     MERCHANT_MANAGER_AGENT: str
-    _merchant_resolution_invocation_query: Callable[..., Any]
-    clear_pending_document_revision_resolution: Callable[..., Any]
-    clear_pending_merchant_resolution: Callable[..., Any]
-    clear_pending_project_resolution: Callable[..., Any]
-    clear_pending_step_resolution: Callable[..., Any]
+    _merchant_resolution_invocation_query: MerchantResolutionInvocationQueryFn
+    clear_pending_document_revision_resolution: ClearPendingReceiptFn
+    clear_pending_merchant_resolution: ClearPendingReceiptFn
+    clear_pending_project_resolution: ClearPendingReceiptFn
+    clear_pending_step_resolution: ClearPendingReceiptFn
     json: Any
     shlex: Any
     unicodedata: Any
-    validate_merchant_resolution_result: Callable[..., Any]
+    validate_merchant_resolution_result: ValidateMerchantResolutionResultFn
 
 
 def _merchant_resolution_invocation_query(
