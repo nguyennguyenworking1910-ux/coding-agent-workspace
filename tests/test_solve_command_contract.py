@@ -36,3 +36,37 @@ def test_solve_keeps_completed_teammates_idle_reusable():
         "Session-scoped teammate cleanup belongs to `SessionEnd`"
         in content
     )
+
+
+def test_solve_requires_fresh_primary_inputs_for_reused_teammates():
+    solve = (
+        Path(".claude/commands/solve.md")
+        .read_text(
+            encoding="utf-8-sig"
+        )
+    )
+
+    assert (
+        "Treat the assignment as a fresh work unit."
+        in solve
+    )
+
+    assert (
+        "Re-read every primary input file"
+        in solve
+    )
+
+    normalized = " ".join(
+        line.lstrip("> ").strip()
+        for line in solve.splitlines()
+    )
+
+    assert (
+        "Prior-run file contents"
+        in normalized
+    )
+
+    assert (
+        "read the current file during this assignment"
+        in normalized
+    )

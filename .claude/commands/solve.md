@@ -206,6 +206,11 @@ For an existing reusable teammate, the direct semantic instruction is:
 
 > Send the new bounded assignment to the existing canonical teammate with
 > `SendMessage`. Do not invoke `Agent`, create another pane, or add a suffix.
+>
+> Treat the assignment as a fresh work unit. Re-read every primary input file
+> owned by the new task before making findings or changes. Prior-run file
+> contents, observations, cached context, and conclusions are not authoritative
+> for the new task unless the assignment explicitly says to reuse them.
 
 Whether the assignment goes to a newly created teammate or an existing
 `IDLE_REUSABLE` teammate, the same result-delivery contract applies. After
@@ -690,6 +695,8 @@ Every teammate assignment must include:
 - exact objective;
 - relevant request context;
 - owned files or domain;
+- for every primary input file owned by the task, an instruction to read the
+  current file during this assignment rather than relying on prior-run context;
 - whether writing is permitted;
 - expected output;
 - task dependencies;

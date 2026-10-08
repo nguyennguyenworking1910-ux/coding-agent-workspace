@@ -30,6 +30,7 @@ if __package__ in (None, ""):
         CLAUDE_DIR,
         MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
         MERCHANT_CONFIRMATION_MODE_MANUAL,
+        load_state,
         new_state,
         redact_secrets,
         save_state,
@@ -42,6 +43,7 @@ if __package__ in (None, ""):
         handle_toggle_command,
     )
     from intent_envelope_bridge import (
+        load_intent_envelope,
         save_intent_envelope,
     )
 else:
@@ -49,6 +51,7 @@ else:
         CLAUDE_DIR,
         MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
         MERCHANT_CONFIRMATION_MODE_MANUAL,
+        load_state,
         new_state,
         redact_secrets,
         save_state,
@@ -61,6 +64,7 @@ else:
         handle_toggle_command,
     )
     from .intent_envelope_bridge import (
+        load_intent_envelope,
         save_intent_envelope,
     )
 
@@ -402,6 +406,49 @@ def run(
             f"/{command} requests must not contain credentials or secrets. "
             "Remove the sensitive value and resubmit. Nothing was dispatched."
         )
+
+    if hook_event_name == "UserPromptSubmit":
+        persisted_envelope = load_intent_envelope(
+            payload.get("session_id")
+        )
+        persisted_state = load_state(
+            payload.get("session_id")
+        )
+
+        if (
+            isinstance(
+                persisted_envelope,
+                dict,
+            )
+            and isinstance(
+                persisted_state,
+                dict,
+            )
+            and isinstance(
+                persisted_envelope.get("raw_request"),
+                str,
+            )
+            and isinstance(
+                persisted_state.get("request"),
+                str,
+            )
+            and persisted_envelope["raw_request"].strip()
+            == request.strip()
+            and persisted_state["request"].strip()
+            == request.strip()
+            and str(
+                persisted_state.get("run_id")
+                or ""
+            ).strip()
+        ):
+            # UserPromptExpansion already classified this exact
+            # controlled request and the /solve bridge renders
+            # that persisted envelope into the command body.
+            #
+            # Stay silent here: re-classifying would create a
+            # second request_id and therefore two competing
+            # authority envelopes for one logical run.
+            return {}
 
     try:
         preparsed = load_preparsed_envelope(request, dict(environment))
