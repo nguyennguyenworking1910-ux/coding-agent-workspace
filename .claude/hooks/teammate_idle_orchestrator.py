@@ -1,4 +1,4 @@
-"""TeammateIdle orchestration extracted from team_result_hook.
+﻿"""TeammateIdle orchestration extracted from team_result_hook.
 
 This module preserves trusted result reconciliation, Merchant
 proposal/completeness enforcement, runtime apply verification,
@@ -35,6 +35,7 @@ try:
         LockedStateFn,
         RecordTeammateResultFn,
         ReleaseReportedTeammateToIdleFn,
+        ProposalRequiresLocalAutoReceiptFn,
     )
 except ImportError:
     from .team_result_dependency_protocols import (
@@ -58,6 +59,7 @@ except ImportError:
         LockedStateFn,
         RecordTeammateResultFn,
         ReleaseReportedTeammateToIdleFn,
+        ProposalRequiresLocalAutoReceiptFn,
     )
 
 
@@ -99,6 +101,9 @@ class TeammateIdleDependencies:
     successful_runtime_handoff_matches: RuntimeHandoffMatchesFn
     task_result_candidate_from_message: MessageCandidateFn
     validate_completeness_receipt_for_outcome: ValidateCompletenessReceiptForOutcomeFn
+    proposal_requires_local_auto_receipt: (
+        ProposalRequiresLocalAutoReceiptFn
+    )
 
 
 def handle_teammate_idle(
@@ -240,6 +245,9 @@ def handle_teammate_idle(
 
     validate_completeness_receipt_for_outcome = (
         dependencies.validate_completeness_receipt_for_outcome
+    )
+    proposal_requires_local_auto_receipt = (
+        dependencies.proposal_requires_local_auto_receipt
     )
 
     teammate_name = str(
@@ -424,7 +432,6 @@ def handle_teammate_idle(
             # Missing/mismatched proposal state does not invent authority.
             # It also does not undo a valid report delivery.
             # --------------------------------------------------------
-            merchant_proposal_captured = False
 
             owner_authorized_operations = [
                 str(operation)
@@ -914,20 +921,25 @@ def handle_teammate_idle(
                         PENDING_RESULT_FEEDBACK
                     )
 
-                capture_outcome = (
-                    capture_proposal_receipt(
+                requires_local_auto_receipt = (
+                    proposal_requires_local_auto_receipt(
                         owner_session_id,
                         proposal,
                     )
                 )
 
-                # Critical Gate 11I fail-closed boundary:
-                # do not release the teammate and do not delete
-                # transient evidence when receipt capture fails.
-                if not capture_outcome.accepted:
-                    return PENDING_RESULT_FEEDBACK
+                if requires_local_auto_receipt:
+                    capture_outcome = (
+                        capture_proposal_receipt(
+                            owner_session_id,
+                            proposal,
+                        )
+                    )
 
-                merchant_proposal_captured = True
+                    # LOCAL_AUTO receipt authority remains fail-closed.
+                    if not capture_outcome.accepted:
+                        return PENDING_RESULT_FEEDBACK
+
 
             # Update the lead run ledger when it still exists.
             # Stop may already have removed it; team state remains the
@@ -986,7 +998,11 @@ def handle_teammate_idle(
             # lifecycle reconciliation. SendMessage receipt is cleared in
             # the same successful path.
             if session_id:
-                if merchant_proposal_captured:
+                # The staged proposal may contain the raw confirmation token.
+                # Once exact proposal reconciliation and lifecycle release succeed,
+                # it must be removed regardless of whether LOCAL_AUTO receipt
+                # persistence applied to this command.
+                if requires_exact_merchant_proposal:
                     clear_pending_merchant_proposal(
                         session_id
                     )

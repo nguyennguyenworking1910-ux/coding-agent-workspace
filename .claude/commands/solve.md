@@ -344,6 +344,18 @@ If the semantic action itself is unclear, preserve that ambiguity in the assignm
 `merchant-manager` then uses its existing `action_semantics` clarification path. The lead must
 not choose one write family merely to make the assignment executable.
 
+For a confirmed apply assignment, the lead must also preserve the exact business fields needed
+to reconstruct the already-proposed normalized Merchant write command. Do not reduce the
+assignment to only a merchant code, label, proposal hash, or generic instruction such as
+"apply the exact confirmed proposal" when the underlying write command requires additional
+business fields.
+
+For `merchant create`, copy the exact proposed `code`, `name`, and `region_code` into the
+confirmed-apply assignment. These values are execution context only; they do not grant runtime
+write authority. If the exact required business context is unavailable, do not dispatch an
+incomplete apply assignment. Fail closed instead of asking `merchant-manager` to guess or
+reconstruct omitted values.
+
 For a confirmed apply assignment, include exactly one block in this form, copying every value
 from the injected `merchant_confirmation` object without reconstructing or changing it:
 

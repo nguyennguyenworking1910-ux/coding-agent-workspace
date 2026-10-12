@@ -324,3 +324,72 @@ def test_missing_merchant_manager_fails_closed_without_fallback():
         raise AssertionError(
             "Merchant routing must fail closed without merchant-manager"
         )
+def test_merchant_domain_source_code_fix_routes_to_bug_fixer():
+    result = _parse(
+        "Fix the bug in merchant_runtime_handoff.py",
+        _decision(
+            operations=[Operation.FIX],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.WRITE,
+        ),
+    )
+
+    assert result.operations == ["fix"]
+    assert result.domains == ["merchant"]
+    assert result.candidate_agents == ["bug-fixer"]
+    assert result.selected_agents == ["bug-fixer"]
+    assert result.risk_level == RiskLevel.WRITE
+
+
+def test_merchant_domain_refactor_routes_to_coder():
+    result = _parse(
+        "Refactor the Merchant runtime handoff implementation",
+        _decision(
+            operations=[Operation.REFACTOR],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.WRITE,
+        ),
+    )
+
+    assert result.operations == ["refactor"]
+    assert result.domains == ["merchant"]
+    assert result.candidate_agents == ["coder"]
+    assert result.selected_agents == ["coder"]
+    assert result.risk_level == RiskLevel.WRITE
+
+
+def test_merchant_domain_build_routes_to_coder():
+    result = _parse(
+        "Implement a new validation helper in the Merchant CLI",
+        _decision(
+            operations=[Operation.BUILD],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.WRITE,
+        ),
+    )
+
+    assert result.operations == ["build"]
+    assert result.candidate_agents == ["coder"]
+    assert result.selected_agents == ["coder"]
+
+
+def test_explicit_merchant_operation_still_overrides_code_operation():
+    result = _parse(
+        "Apply the approved Merchant proposal",
+        _decision(
+            operations=[
+                Operation.FIX,
+                Operation.MERCHANT_APPLY,
+            ],
+            domains=[
+                Domain.CODE,
+                Domain.MERCHANT,
+            ],
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+        ),
+    )
+
+    assert result.operations == ["merchant_apply"]
+    assert result.candidate_agents == ["merchant-manager"]
+    assert result.selected_agents == ["merchant-manager"]
+    assert result.risk_level == RiskLevel.EXTERNAL_WRITE

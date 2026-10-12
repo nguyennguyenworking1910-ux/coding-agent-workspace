@@ -899,6 +899,27 @@ def _validate_entity_binding(
     return {"field": field, "sha256": digest}
 
 
+def proposal_requires_local_auto_receipt(
+    session_id: Any,
+    result: Any,
+) -> bool:
+    """Return whether this proposal must produce a LOCAL_AUTO receipt."""
+
+    if current_mode(session_id) != MODE_LOCAL_AUTO:
+        return False
+
+    confirmation = validate_proposal_result(
+        result
+    )
+
+    if confirmation is None:
+        return False
+
+    return (
+        confirmation["command"]
+        in LOCAL_AUTO_COMMANDS
+    )
+
 def capture_proposal_receipt(
     session_id: Any,
     result: Any,

@@ -1169,9 +1169,29 @@ class IntentParser:
         operations: Sequence[str],
         domains: Sequence[str],
     ) -> list[str]:
+        operation_set = set(operations)
+
+        software_development_requested = bool(
+            {
+                Operation.FIX.value,
+                Operation.BUILD.value,
+                Operation.REFACTOR.value,
+                Operation.REVIEW.value,
+                Operation.TEST.value,
+            }
+            & operation_set
+        )
+
         merchant_requested = (
-            bool(MERCHANT_OPERATIONS & set(operations))
-            or Domain.MERCHANT.value in domains
+            bool(
+                MERCHANT_OPERATIONS
+                & operation_set
+            )
+            or (
+                Domain.MERCHANT.value
+                in domains
+                and not software_development_requested
+            )
         )
 
         if merchant_requested:

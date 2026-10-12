@@ -336,12 +336,18 @@ def main(
                 return 0
 
             if result_recorded:
+                bounded_failure = (
+                    runtime_failure_type
+                    or "UNKNOWN"
+                )
+
                 emit_post_tool_context(
                     "Gate 7.4 trusted runtime handoff was attempted but did "
-                    "not complete successfully. The attempt is spent and is "
-                    "not retryable. Do not execute Merchant apply through "
-                    "Bash, Python, agent_cli --apply, or another handoff "
-                    "request."
+                    "not complete successfully. "
+                    f"Failure: {bounded_failure}. "
+                    "The attempt is spent and is not retryable. "
+                    "Do not execute Merchant apply through Bash, Python, "
+                    "agent_cli --apply, or another handoff request."
                 )
 
                 return 0

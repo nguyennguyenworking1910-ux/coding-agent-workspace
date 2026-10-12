@@ -161,6 +161,7 @@ if __package__ in (None, ""):
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
         validate_proposal_result,
+        proposal_requires_local_auto_receipt,
     )
     from tmux_result_receipt import (
         clear_pending_result,
@@ -329,6 +330,7 @@ else:
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
         validate_proposal_result,
+        proposal_requires_local_auto_receipt,
     )
     from .tmux_result_receipt import (
         clear_pending_result,
@@ -1047,6 +1049,9 @@ def _teammate_idle_dependencies(
         validate_completeness_receipt_for_outcome=(
             validate_completeness_receipt_for_outcome
         ),
+        proposal_requires_local_auto_receipt=(
+            proposal_requires_local_auto_receipt
+        ),
     )
 
 
@@ -1128,7 +1133,157 @@ def _dispatcher_dependencies(
         ),
     )
 
+def reconcile_reported_merchant_for_reuse(
+    owner_session_id: Any,
+    teammate_name: str,
+) -> bool:
+    """Replay trusted idle reconciliation for one completed Merchant report.
 
+    This is a narrow recovery path for a missed live TeammateIdle event.
+    REPORT_RECEIVED is not made reusable by status alone: the existing
+    TeammateIdle orchestration must successfully validate and settle the
+    exact persisted Merchant evidence first.
+    """
+
+    owner_id = str(
+        owner_session_id
+        or ""
+    ).strip()
+
+    teammate = str(
+        teammate_name
+        or ""
+    ).strip()
+
+    if (
+        not owner_id
+        or teammate
+        != MERCHANT_MANAGER_AGENT
+    ):
+        return False
+
+    team_state = load_team_state(
+        owner_id
+    )
+
+    if not isinstance(
+        team_state,
+        dict,
+    ):
+        return False
+
+    record = (
+        team_state.get(
+            "teammates",
+            {},
+        ).get(
+            teammate
+        )
+    )
+
+    if not isinstance(
+        record,
+        dict,
+    ):
+        return False
+
+    if (
+        record.get("status")
+        != "REPORT_RECEIVED"
+        or record.get(
+            "result_received"
+        )
+        is not True
+        or record.get(
+            "report_source"
+        )
+        != "sendmessage"
+    ):
+        return False
+
+    run_id = str(
+        record.get(
+            "current_run_id"
+        )
+        or ""
+    ).strip()
+
+    task_id = str(
+        record.get(
+            "current_task_id"
+        )
+        or ""
+    ).strip()
+
+    pane_session_id = str(
+        record.get(
+            "trusted_pane_session_id"
+        )
+        or ""
+    ).strip()
+
+    if (
+        not run_id
+        or not task_id
+        or not pane_session_id
+    ):
+        return False
+
+    feedback = handle_teammate_idle(
+        None,
+        {
+            "hook_event_name": "TeammateIdle",
+            "session_id": pane_session_id,
+            "agent_type": teammate,
+            "teammate_name": teammate,
+        },
+        pane_session_id,
+    )
+
+    if feedback:
+        return False
+
+    settled_state = load_team_state(
+        owner_id
+    )
+
+    if not isinstance(
+        settled_state,
+        dict,
+    ):
+        return False
+
+    settled_record = (
+        settled_state.get(
+            "teammates",
+            {},
+        ).get(
+            teammate
+        )
+    )
+
+    return (
+        isinstance(
+            settled_record,
+            dict,
+        )
+        and settled_record.get(
+            "status"
+        )
+        == "IDLE_REUSABLE"
+        and settled_record.get(
+            "last_completed_task_id"
+        )
+        == task_id
+        and settled_record.get(
+            "current_run_id"
+        )
+        is None
+        and settled_record.get(
+            "current_task_id"
+        )
+        is None
+    )
 
 def main() -> None:
     """Compatibility entrypoint for extracted hook dispatcher."""

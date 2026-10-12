@@ -616,6 +616,12 @@ def test_tmux_merchant_proposal_is_captured_for_lead_session(
         fake_capture,
     )
 
+    monkeypatch.setattr(
+        team_result_hook,
+        "proposal_requires_local_auto_receipt",
+        lambda session_id, proposal: True,
+    )
+
     exact_proposal = {
         "success": True,
         "mode": "PROPOSE",
@@ -919,6 +925,12 @@ def test_tmux_merchant_proposal_survives_stop_before_idle(
         team_result_hook,
         "capture_proposal_receipt",
         fake_capture,
+    )
+
+    monkeypatch.setattr(
+        team_result_hook,
+        "proposal_requires_local_auto_receipt",
+        lambda session_id, proposal: True,
     )
 
     exact_proposal = {
@@ -1572,6 +1584,12 @@ def test_tmux_merchant_proposal_capture_failure_blocks_idle_and_preserves_eviden
         ),
     )
 
+
+    monkeypatch.setattr(
+        team_result_hook,
+        "proposal_requires_local_auto_receipt",
+        lambda session_id, proposal: True,
+    )
     result = run_hook(
         {
             "hook_event_name": "TeammateIdle",
@@ -3834,5 +3852,3 @@ def test_lifecycle_transitions_refresh_last_transition_at(
         record["last_transition_at"]
         == 1300.0
     )
-
-

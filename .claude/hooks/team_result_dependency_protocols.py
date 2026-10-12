@@ -542,3 +542,10 @@ class PrepareMerchantRuntimeHandoffFn(Protocol):
         str,
     ]:
         ...
+
+class ProposalRequiresLocalAutoReceiptFn(Protocol):
+    def __call__(
+        self,
+        session_id: Any,
+        result: Any,
+    ) -> bool: ...

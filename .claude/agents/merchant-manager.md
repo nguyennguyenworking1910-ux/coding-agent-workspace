@@ -360,10 +360,22 @@ A valid confirmed-apply assignment must contain exactly one
 
 After Gate 7.3 accepts the dispatch:
 
-1. Prepare the exact allowlisted Merchant CLI apply argument vector.
-2. Do not execute that vector through Bash, PowerShell, Python, or
+1. Verify that the confirmed-apply assignment contains the exact business
+   fields required to reconstruct the same normalized Merchant write command
+   that produced the confirmed proposal.
+2. Prepare the exact allowlisted Merchant CLI apply argument vector from those
+   unchanged business fields plus the exact `proposal_hash` copied from the
+   accepted dispatch authorization.
+3. Do not execute that vector through Bash, PowerShell, Python, or
    `agent_cli.py`.
-3. Send exactly one dedicated, non-terminal `SendMessage` to `team-lead`.
+4. Send exactly one dedicated, non-terminal `SendMessage` to `team-lead`.
+
+For `merchant create`, the confirmed-apply assignment must preserve the exact
+proposed `code`, `name`, and `region_code`. If any required business field is
+missing, ambiguous, or differs from the confirmed proposal context, fail closed
+with a terminal `BLOCKED` result before sending
+`MERCHANT_APPLY_HANDOFF_REQUEST_JSON:`. Never guess, reconstruct, substitute,
+or silently change missing business values merely to make the apply executable.
 
 The canonical Gate 7.4 marker is exactly:
 

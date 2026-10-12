@@ -1,4 +1,4 @@
-"""Gate 12C.7.3B: machine-enforced Merchant completeness lifecycle."""
+﻿"""Gate 12C.7.3B: machine-enforced Merchant completeness lifecycle."""
 
 from __future__ import annotations
 from pathlib import Path
@@ -523,6 +523,12 @@ def test_proposal_ready_with_complete_receipt_and_exact_proposal_releases(
     captured = _install_proposal_capture(
         monkeypatch,
         exact_proposal,
+    )
+
+    monkeypatch.setattr(
+        team_result_hook,
+        "proposal_requires_local_auto_receipt",
+        lambda session_id, proposal: True,
     )
 
     _stage_completeness(

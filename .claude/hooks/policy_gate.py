@@ -88,6 +88,10 @@ if __package__ in (None, ""):
         bind_document_revision_resolution_receipt,
     )
 
+    from team_result_hook import (  # noqa: E402
+        reconcile_reported_merchant_for_reuse,
+    )
+
 else:
     from .runtime_state import (
         MERCHANT_CONFIRMATION_MODE_FIELD,
@@ -141,6 +145,10 @@ else:
     from .document_revision_resolution_gate import (
         BOUND as DOCUMENT_REVISION_BOUND,
         bind_document_revision_resolution_receipt,
+    )
+
+    from .team_result_hook import (
+        reconcile_reported_merchant_for_reuse,
     )
 
 HOOK_EVENT_NAME = "PreToolUse"
@@ -3369,6 +3377,53 @@ def _check_teammate_message(
         ],
         selected_agents=selected_agents,
     )
+
+    # -------------------------------------------------
+    # Missed-TeammateIdle recovery.
+    #
+    # REPORT_RECEIVED remains non-reusable by default.
+    # Only merchant-manager may enter this recovery path,
+    # and only the existing trusted TeammateIdle
+    # reconciliation is allowed to settle its old task.
+    # -------------------------------------------------
+    if (
+        not reserved
+        and recipient
+        == MERCHANT_MANAGER_AGENT
+        and prior_status
+        == TeammateLifecycleStatus.REPORT_RECEIVED.value
+    ):
+        reconciled = (
+            reconcile_reported_merchant_for_reuse(
+                session_id,
+                recipient,
+            )
+        )
+
+        if reconciled:
+            reserved, prior_status = (
+                reserve_reusable_teammate(
+                    session_id,
+                    recipient,
+                    str(
+                        state.get(
+                            "run_id"
+                        )
+                        or ""
+                    ),
+                    task_id,
+                    operations=[
+                        str(operation)
+                        for operation in (
+                            state.get(
+                                "operations"
+                            )
+                            or []
+                        )
+                    ],
+                    selected_agents=selected_agents,
+                )
+            )
 
     if not reserved:
         return deny(
