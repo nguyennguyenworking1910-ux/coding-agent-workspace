@@ -73,6 +73,7 @@ def test_migrations_are_discovered_in_version_order():
         (3, "add_cli_write_grants"),
         (4, "add_alert_delivery_leases"),
         (5, "merchant_execution_ledger"),
+        (6, "merchant_execution_claims"),
     ]
 
 
