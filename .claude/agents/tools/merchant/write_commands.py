@@ -197,6 +197,98 @@ class MerchantWriteCommands:
             ),
         }
 
+
+    def execute(
+        self,
+        command: str,
+        database: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Execute a validated write without proposal authorization."""
+
+        normalized_command = normalize_command(command)
+
+        if normalized_command == "merchant create":
+            raise PermissionError(
+                "Merchant Create requires trusted durable "
+                "reservation and reserved execution"
+            )
+
+        normalized_database = normalize_database_target(database)
+        handler = self._handler(normalized_command)
+
+        validator = self._preflight_validators.get(
+            normalized_command
+        )
+
+        preflight_result = None
+        if validator is not None:
+            preflight_result = validator(payload)
+
+        prepared_payload = materialize_write_payload(
+            normalized_command,
+            normalized_database,
+            payload,
+            preflight_result=preflight_result,
+        )
+
+        # A direct create must generate a fresh identity.
+        # Legacy proposal IDs are deterministic from the payload.
+        generated_field = GENERATED_ID_FIELDS.get(
+            normalized_command
+        )
+
+        if (
+            generated_field is not None
+            and payload.get(generated_field) is None
+        ):
+            prepared_payload[generated_field] = str(
+                uuid.uuid4()
+            )
+
+        if normalized_command == "contact import":
+            source_contacts = payload.get("contacts")
+            prepared_contacts = prepared_payload.get(
+                "contacts"
+            )
+
+            if (
+                isinstance(source_contacts, list)
+                and isinstance(prepared_contacts, list)
+            ):
+                for original, prepared in zip(
+                    source_contacts,
+                    prepared_contacts,
+                ):
+                    if (
+                        isinstance(original, dict)
+                        and isinstance(prepared, dict)
+                        and original.get("contact_id") is None
+                        and original.get("id") is None
+                    ):
+                        prepared["contact_id"] = str(
+                            uuid.uuid4()
+                        )
+
+        result = handler(to_json_value(prepared_payload))
+
+        sensitive_fields = COMMAND_SENSITIVE_FIELDS.get(
+            normalized_command,
+            frozenset(),
+        )
+
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "success": True,
+            "mode": "EXECUTE",
+            "command": normalized_command,
+            "database": normalized_database,
+            "result": redact_payload(
+                result,
+                extra_sensitive_fields=sensitive_fields,
+            ),
+        }
+
     def _handler(self, command: str) -> WriteHandler:
         handler = self._handlers.get(command)
 

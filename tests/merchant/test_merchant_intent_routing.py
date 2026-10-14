@@ -393,3 +393,65 @@ def test_explicit_merchant_operation_still_overrides_code_operation():
     assert result.candidate_agents == ["merchant-manager"]
     assert result.selected_agents == ["merchant-manager"]
     assert result.risk_level == RiskLevel.EXTERNAL_WRITE
+
+
+def test_merchant_apply_history_in_source_code_diagnosis_routes_to_diagnostician():
+    request = (
+        "Diagnose the most recent merchant-manager confirmed project-create "
+        "apply. This is a source-code/orchestration diagnosis only, not a "
+        "Merchant runtime operation. The previous run passed Gate 7.3 but "
+        "returned BLOCKED before MERCHANT_APPLY_HANDOFF_REQUEST_JSON. "
+        "Read-only investigation only. Inspect the Gate 7.4 hook and policy. "
+        "Do not create a proposal. Do not confirm or apply anything. "
+        "Do not mutate Merchant runtime."
+    )
+
+    result = _parse(
+        request,
+        _decision(
+            operations=[Operation.MERCHANT_APPLY],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+        ),
+    )
+
+    assert result.operations == ["diagnose"]
+    assert result.domains == ["code"]
+    assert result.candidate_agents == ["diagnostician"]
+    assert result.selected_agents == ["diagnostician"]
+
+
+def test_historical_apply_words_do_not_override_read_only_diagnostic_boundary():
+    request = (
+        "Source-code diagnosis of why the prior Merchant proposal apply "
+        "was blocked before Gate 7.4. Read-only diagnosis. "
+        "Not a Merchant runtime operation. Do not apply anything."
+    )
+
+    assert (
+        IntentParser._is_merchant_source_code_diagnosis(
+            request.lower()
+        )
+        is True
+    )
+
+    assert (
+        IntentParser._detect_local_merchant_operation(
+            request.lower()
+        )
+        is None
+    )
+
+
+def test_real_merchant_apply_still_routes_to_merchant_manager():
+    result = _parse(
+        "Apply the prior Merchant proposal with --apply",
+        _decision(
+            operations=[Operation.MERCHANT_APPLY],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.EXTERNAL_WRITE,
+        ),
+    )
+
+    assert result.operations == ["merchant_apply"]
+    assert result.selected_agents == ["merchant-manager"]

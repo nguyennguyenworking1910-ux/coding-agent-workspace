@@ -351,10 +351,44 @@ assignment to only a merchant code, label, proposal hash, or generic instruction
 business fields.
 
 For `merchant create`, copy the exact proposed `code`, `name`, and `region_code` into the
-confirmed-apply assignment. These values are execution context only; they do not grant runtime
-write authority. If the exact required business context is unavailable, do not dispatch an
-incomplete apply assignment. Fail closed instead of asking `merchant-manager` to guess or
-reconstruct omitted values.
+confirmed-apply assignment.
+
+For `project create`, copy the exact proposed `merchant_id`, `project_id`, `project_type`,
+`workflow_variant`, `requires_procurement`, `payment_period_number`,
+`reused_document_revision_id`, `title`, and `created_by` values when present.
+
+<!-- NULL_OPTIONAL_PROJECT_CREATE_ARGV_CONTRACT -->
+For `project create`, confirmed null optional values must be represented by
+omitting the corresponding CLI flag entirely:
+
+For confirmed Merchant apply, the ordinary-agent prohibition on `--apply`
+is an authority boundary, not evidence of invalid CLI syntax. Neither the lead
+nor merchant-manager may classify an argv vector as `INVALID_NORMALIZED_ARGV`
+merely because `agent_cli.py`, `prepare_agent_cli_argv()`, or
+`invoke_agent_cli()` intentionally reject runtime apply. Final apply argv
+validation belongs to Gate 7.4 and `merchant_runtime_handoff.py`.
+
+- `payment_period_number` -> no `--payment-period-number`;
+- `reused_document_revision_id` -> no `--reused-document-revision-id`;
+- `created_by` -> no `--created-by`.
+
+Never pass the literal string `null` as a CLI argument value.
+
+Preserve null or absent optional values exactly rather than inventing replacements.
+
+For `project create`, confirmed `requires_procurement: false` is represented by
+omitting the `--requires-procurement` flag from normalized CLI argv. That
+omission is the canonical representation of false and must not be treated as
+missing or changed business context. Confirmed `requires_procurement: true`
+requires that flag.
+
+`project create` is a new-entity write and the confirmed apply is bound by the exact
+`proposal_hash`, not an `expected_version`.
+
+These values are execution context only; they do not grant runtime write authority.
+If the exact required business context is unavailable, do not dispatch an incomplete
+apply assignment. Fail closed instead of asking `merchant-manager` to guess or reconstruct
+omitted values.
 
 For a confirmed apply assignment, include exactly one block in this form, copying every value
 from the injected `merchant_confirmation` object without reconstructing or changing it:
@@ -498,6 +532,18 @@ receipt exists. `APPLY_FAILED` is valid only when a trusted matching Gate 7.4
 
 If no trusted matching SUCCESS or FAILED receipt exists, use an already
 supported generic non-apply terminal outcome. Never invent `APPLY_UNCERTAIN`.
+
+For `merchant_apply` blocked before the Gate 7.4 handoff is sent, the teammate
+must return a bounded machine-readable `BLOCKED` terminal result with:
+
+- `blocked_stage` must be `PRE_GATE_7_4`;
+- an allowlisted `reason_code`;
+- `missing_fields`;
+- `mismatched_fields`.
+
+The diagnostic fields contain field names only. They must never contain raw
+business values, confirmation tokens, hashes, credentials, proposal payloads,
+runtime authority objects, or exception text.
 
 Every staged handoff attempt is at-most-once. `PENDING`, `SUCCESS`, `FAILED`,
 rejection, exception, timeout, or uncertainty are non-retryable for that

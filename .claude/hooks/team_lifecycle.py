@@ -542,6 +542,9 @@ def _reconcile_stale_owner(
         ):
             return False
 
+        if has_unresolved_direct_writes(record):
+            return False
+
         record["status"] = (
             TeammateLifecycleStatus.FAILED.value
         )
@@ -902,6 +905,12 @@ def allocate_teammate(
                         .value
                     )
                 ):
+                    if has_unresolved_direct_writes(existing_record):
+                        return (
+                            TeammateAllocationDecision.BUSY,
+                            canonical_text,
+                        )
+
                     existing_record[
                         "status"
                     ] = (
@@ -1010,6 +1019,26 @@ def get_or_create_teammate(
     return name, is_new
 
 
+
+def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
+    """Fail closed when any persisted direct write is unresolved."""
+    if "direct_writes" not in record:
+        return False
+
+    writes = record["direct_writes"]
+
+    if not isinstance(writes, dict):
+        return True
+
+    for write in writes.values():
+        if not isinstance(write, dict):
+            return True
+        if write.get("status") != "VERIFIED":
+            return True
+
+    return False
+
+
 def mark_teammate_running(
     session_id: Any,
     teammate_name: str,
@@ -1066,6 +1095,9 @@ def mark_teammate_running(
             != teammate_name
         ):
             return False
+
+        if has_unresolved_direct_writes(record):
+                return False
 
         record["status"] = (
             TeammateLifecycleStatus.RUNNING.value
@@ -1292,6 +1324,9 @@ def reserve_reusable_teammate(
                         prior_status,
                     )
 
+                if has_unresolved_direct_writes(record):
+                        return False, "UNRESOLVED_DIRECT_WRITE"
+
                 record["status"] = (TeammateLifecycleStatus.RUNNING.value                )
                 record["current_run_id"] = run_id
                 record["current_task_id"] = task_id
@@ -1342,7 +1377,17 @@ def mark_report_received(
         teammates = state.get("teammates", {})
         record = teammates.get(teammate_name)
 
-        if record is None:
+        if not isinstance(record, dict):
+            return False
+
+        # Legacy reporting must never bypass trusted
+        # run/task-bound Merchant Direct completion.
+        if "merchant_execute" in (
+            record.get("authorized_operations") or []
+        ):
+            return False
+
+        if has_unresolved_direct_writes(record):
             return False
 
         if record.get("result_received"):
@@ -1379,6 +1424,9 @@ def release_reported_teammate_to_idle(
 
         if record.get("canonical_name") != teammate_name:
             return False, "NON_CANONICAL"
+
+        if has_unresolved_direct_writes(record):
+                return False, "UNRESOLVED_DIRECT_WRITE"
 
         prior_status = str(record.get("status") or "UNKNOWN")
 
@@ -1454,6 +1502,9 @@ def mark_teammate_idle_reusable(
             return False
 
         current_task_id = str(record.get("current_task_id") or "").strip()
+
+        if has_unresolved_direct_writes(record):
+                return False
 
         record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
 
@@ -1564,6 +1615,9 @@ def mark_teammate_failed(
         if record is None:
             return False
 
+        if has_unresolved_direct_writes(record):
+                return False
+
         record["status"] = TeammateLifecycleStatus.FAILED.value
         if reason:
             record["failure_reason"] = reason
@@ -1659,6 +1713,9 @@ def recover_failed_teammate_to_idle(
             != "sendmessage"
         ):
             return False, "TERMINAL_REPORT_NOT_RECEIVED"
+
+        if has_unresolved_direct_writes(record):
+                return False, "UNRESOLVED_DIRECT_WRITE"
 
         record[
             "status"
@@ -1843,6 +1900,36 @@ def mark_bound_report_received(
 
         if current_task_id != str(task_id):
             return False
+
+        # Direct execution completion requires trusted, persisted
+        # PostgreSQL evidence for every write in this task.
+        # Legacy operations preserve their existing report behavior.
+        if "merchant_execute" in (
+            record.get("authorized_operations") or []
+        ):
+            writes = record.get("direct_writes")
+
+            if not isinstance(writes, dict) or not writes:
+                return False
+
+            matching = [
+                write
+                for write in writes.values()
+                if isinstance(write, dict)
+                and write.get("run_id") == current_run_id
+                and write.get("task_id") == current_task_id
+            ]
+
+            if not matching:
+                return False
+
+            if any(
+                not isinstance(write, dict)
+                or write.get("status") != "VERIFIED"
+                for write in writes.values()
+            ):
+                return False
+
 
         # Idempotent duplicate delivery:
         # do not extend the lease again for the same already-recorded report.

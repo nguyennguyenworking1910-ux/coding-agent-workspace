@@ -33,6 +33,9 @@ MERCHANT_APPLY_FAILED_OUTCOME = (
     "APPLY_FAILED"
 )
 
+MERCHANT_EXECUTE_SUCCESS_OUTCOME = "EXECUTE_SUCCESS"
+MERCHANT_EXECUTE_FAILED_OUTCOME = "EXECUTE_FAILED"
+
 MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES = {
     "REQUIRES_CLARIFICATION",
     "FAILED",
@@ -187,6 +190,8 @@ def task_result_candidate_from_message(
         MERCHANT_PROPOSAL_READY_OUTCOME,
         MERCHANT_APPLY_SUCCESS_OUTCOME,
         MERCHANT_APPLY_FAILED_OUTCOME,
+        MERCHANT_EXECUTE_SUCCESS_OUTCOME,
+        MERCHANT_EXECUTE_FAILED_OUTCOME,
         *MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
     }
 
@@ -217,6 +222,32 @@ def task_result_candidate_from_message(
             return None
 
         if has_proposal_delivery_block:
+            return None
+
+    if outcome in {
+        MERCHANT_EXECUTE_SUCCESS_OUTCOME,
+        MERCHANT_EXECUTE_FAILED_OUTCOME,
+    }:
+        if (
+            operation != "merchant_execute"
+            or database_target != "runtime"
+            or proposal_emitted is not False
+            or has_proposal_delivery_block
+        ):
+            return None
+
+        command = candidate.get("command")
+
+        if not isinstance(command, str):
+            return None
+
+        if not command.strip() or len(command) > 128:
+            return None
+
+        if "confirmation_hash" in candidate:
+            return None
+
+        if "proposal_hash" in candidate:
             return None
 
     if outcome in {

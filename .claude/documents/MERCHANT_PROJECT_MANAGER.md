@@ -1231,11 +1231,31 @@ contact import --apply --merchant-id <id> --file <csv> --expected-version <versi
 ```
 
 #### `project create`
-Create a new project with initial workflow steps
-```bash
-project create --propose --merchant-id <id> --type MEDIA_TOP_UP --variant MEDIA_TOP_UP_NEW_DOCUMENT
-project create --apply --merchant-id <id> --type MEDIA_TOP_UP --variant MEDIA_TOP_UP_NEW_DOCUMENT --expected-version <version>
-```
+Create a new project with initial workflow steps.
+
+`project create` is a new-entity write.
+
+Confirmed apply is bound to the exact proposal by `--proposal-hash`.
+It does not use `--expected-version`.
+
+Supported business fields:
+
+- `--merchant-id`
+- `--type`
+- `--variant`
+- optional `--requires-procurement`
+- optional `--payment-period-number`
+- optional `--reused-document-revision-id`
+- optional `--title`
+- optional `--created-by`
+- optional `--project-id`
+
+For a confirmed apply, preserve the exact proposal business fields.
+
+Boolean false for `requires_procurement` is represented by the absence of
+`--requires-procurement`; do not treat that absence as missing business context.
+
+Optional values that were null or absent in the proposal must not be invented.
 
 #### `project update`
 Update project properties

@@ -68,21 +68,25 @@ class RecordingWrites:
     def __init__(self):
         self.calls = []
 
-    def propose(self, command, database, payload):
+    def execute(self, command, database, payload):
         self.calls.append(
-            ("propose", command, database, payload)
+            ("execute", command, database, payload)
         )
         return {
             "success": True,
-            "mode": "PROPOSE",
+            "mode": "EXECUTE",
             "command": command,
             "database": database,
-            "proposal_hash": "a" * 64,
-            "requires_confirmation": True,
+            "result": {
+                "merchant_id": payload["merchant_id"]
+            },
         }
 
+    def propose(self, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("Legacy propose must not be called")
+
     def apply(self, *args, **kwargs):  # pragma: no cover
-        raise AssertionError("Agent adapter must never dispatch apply")
+        raise AssertionError("Legacy apply must not be called")
 
 
 @pytest.mark.parametrize(
@@ -123,38 +127,31 @@ def test_agent_read_invocation_uses_runtime_repository(capsys):
     assert result == [{"code": "SAFE", "name": "Safe Merchant"}]
 
 
-def test_agent_write_invocation_dispatches_only_propose(capsys):
-    writes = RecordingWrites()
-    selected_targets = []
+def test_agent_write_invocation_dispatches_direct_execute(capsys):
+    factory_calls = []
 
-    def factory(database):
-        selected_targets.append(database)
-        return writes
+    def forbidden_factory(database):
+        factory_calls.append(database)
+        raise AssertionError("Write factory must not be called")
 
-    exit_code = invoke_agent_cli(
+    from claude.agents.tools.merchant.agent_cli import (
+        invoke_agent_cli,
+    )
+
+    code = invoke_agent_cli(
         [
-            "merchant",
-            "create",
-            "--propose",
-            "--code",
-            "SAFE",
-            "--name",
-            "Fictitious Merchant",
+                        "merchant", "create",
+            "--code", "SECURITY_TEST",
+            "--name", "Unauthorized Merchant",
         ],
-        write_command_factory=factory,
+        write_command_factory=forbidden_factory,
     )
 
-    assert exit_code == 0
-    assert selected_targets == ["runtime"]
-    assert len(writes.calls) == 1
-    assert writes.calls[0][:3] == (
-        "propose",
-        "merchant create",
-        "runtime",
-    )
-    result = json.loads(capsys.readouterr().out)
-    assert result["mode"] == "PROPOSE"
-    assert result["requires_confirmation"] is True
+    captured = capsys.readouterr()
+
+    assert code != 0
+    assert factory_calls == []
+    assert captured.out.strip() == ""
 
 
 @pytest.mark.parametrize(
@@ -194,7 +191,7 @@ def test_agent_rejects_equals_form_credential_options():
         )
 
 
-def test_agent_rejects_runtime_apply_before_dispatch():
+def test_agent_rejects_legacy_apply_before_dispatch():
     factory_called = False
 
     def factory(database):
@@ -204,7 +201,7 @@ def test_agent_rejects_runtime_apply_before_dispatch():
 
     with pytest.raises(
         MerchantAgentCliError,
-        match="may not apply",
+        match="legacy proposal/apply modes are unsupported",
     ):
         invoke_agent_cli(
             [

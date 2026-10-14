@@ -368,14 +368,90 @@ After Gate 7.3 accepts the dispatch:
    accepted dispatch authorization.
 3. Do not execute that vector through Bash, PowerShell, Python, or
    `agent_cli.py`.
-4. Send exactly one dedicated, non-terminal `SendMessage` to `team-lead`.
+4. Do not validate a confirmed apply vector through `agent_cli.py`,
+   `prepare_agent_cli_argv()`, `invoke_agent_cli()`, or any ordinary-agent
+   wrapper. Those boundaries intentionally reject runtime `--apply`.
+   Construct the argv only from the checked-in Merchant CLI parser contract.
+   Gate 7.4 and `merchant_runtime_handoff.py` own trusted apply validation.
+   The ordinary-agent prohibition on `--apply` is an authority restriction,
+   not an argv-syntax failure. It must never by itself produce
+   `INVALID_NORMALIZED_ARGV`. If the checked-in parser can represent the
+   command and all confirmed business fields map deterministically to CLI
+   tokens, send the Gate 7.4 handoff and let the trusted handoff parser perform
+   final validation.
+5. Send exactly one dedicated, non-terminal `SendMessage` to `team-lead`.
 
 For `merchant create`, the confirmed-apply assignment must preserve the exact
-proposed `code`, `name`, and `region_code`. If any required business field is
-missing, ambiguous, or differs from the confirmed proposal context, fail closed
-with a terminal `BLOCKED` result before sending
-`MERCHANT_APPLY_HANDOFF_REQUEST_JSON:`. Never guess, reconstruct, substitute,
-or silently change missing business values merely to make the apply executable.
+proposed `code`, `name`, and `region_code`.
+
+For `project create`, the confirmed-apply assignment must preserve the exact
+proposed business fields needed to reproduce the proposal, including
+`merchant_id`, `project_id`, `project_type`, `workflow_variant`,
+`requires_procurement`, `payment_period_number`,
+`reused_document_revision_id`, `title`, and `created_by` when present.
+
+<!-- NULL_OPTIONAL_PROJECT_CREATE_ARGV_CONTRACT -->
+For `project create`, confirmed `null` values for optional business fields are
+represented by absence of their corresponding CLI flags.
+
+This applies to:
+
+- `payment_period_number` -> omit `--payment-period-number`;
+- `reused_document_revision_id` -> omit `--reused-document-revision-id`;
+- `created_by` -> omit `--created-by`.
+
+Never render the literal string `null` into normalized CLI argv. Omission is
+the canonical representation of a confirmed null optional value and must not
+be treated as missing, changed, ambiguous, or `INVALID_NORMALIZED_ARGV`.
+
+A field that was absent or null in the confirmed proposal must not be invented
+merely to make the apply executable.
+
+For `project create`, boolean `requires_procurement: false` is represented by
+the absence of the `--requires-procurement` flag in normalized CLI argv.
+That omission is the canonical CLI representation of the confirmed false value
+and must not be treated as missing, changed, or ambiguous business context.
+
+Conversely, `requires_procurement: true` requires the
+`--requires-procurement` flag.
+
+`project create` is a new-entity write and its apply binding uses the exact
+`proposal_hash`, not `expected_version`.
+
+The actual CLI parser and registered Merchant command contract are authoritative
+for normalized argv construction. Descriptive documentation must never be used
+to remove or reject a business field that the registered CLI contract accepts.
+
+If any required business field is missing, ambiguous, or differs from the
+confirmed proposal context, fail closed with a terminal `BLOCKED` result before
+sending `MERCHANT_APPLY_HANDOFF_REQUEST_JSON:`. Never guess, reconstruct,
+substitute, or silently change missing business values merely to make the apply
+executable.
+
+For a pre-Gate-7.4 `merchant_apply` block, record a bounded diagnostic reason
+in the terminal result so the lead can distinguish missing context from a
+mismatch without exposing confirmation tokens, credentials, raw payloads, or
+runtime authority state.
+
+The terminal diagnostic keys are `blocked_stage`, `reason_code`,
+`missing_fields`, and `mismatched_fields`.
+
+Allowed pre-Gate-7.4 reason codes are:
+
+- `MISSING_BUSINESS_CONTEXT`
+- `MISMATCHED_BUSINESS_CONTEXT`
+- `AMBIGUOUS_BUSINESS_CONTEXT`
+- `INVALID_NORMALIZED_ARGV`
+- `DISPATCH_PRECONDITION_FAILED`
+
+For these outcomes:
+
+- `blocked_stage` must be `PRE_GATE_7_4`;
+- `missing_fields` contains only normalized business-field names;
+- `mismatched_fields` contains only normalized business-field names;
+- both lists are empty when not applicable;
+- never include field values, hashes, tokens, credentials, raw proposal data,
+  runtime authorization objects, or exception text.
 
 The canonical Gate 7.4 marker is exactly:
 
@@ -565,6 +641,22 @@ TEAM_RESULT_JSON:
   "database_target": "runtime",
   "proposal_emitted": false,
   "confirmation_hash": "<exact confirmation hash>"
+}
+
+
+Blocked before Gate 7.4 handoff:
+
+TEAM_RESULT_JSON:
+{
+  "contract_version": 1,
+  "outcome": "BLOCKED",
+  "operation": "merchant_apply",
+  "database_target": "runtime",
+  "proposal_emitted": false,
+  "blocked_stage": "PRE_GATE_7_4",
+  "reason_code": "<allowed bounded reason code>",
+  "missing_fields": [],
+  "mismatched_fields": []
 }
 
 Rules:

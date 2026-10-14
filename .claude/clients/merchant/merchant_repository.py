@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -202,6 +204,7 @@ class MerchantEntityRepository:
         name: str,
         region_code: str | None = None,
         created_by: str | None = None,
+        connection: Any | None = None,
     ) -> MerchantCreationResult:
         plan = propose_merchant_creation(
             merchant_id=merchant_id,
@@ -213,9 +216,14 @@ class MerchantEntityRepository:
         event_id = uuid.uuid4()
 
         try:
-            with self.repository.connection() as connection:
-                with connection.transaction():
-                    with connection.cursor(
+            connection_context = (
+                self.repository.connection()
+                if connection is None
+                else nullcontext(connection)
+            )
+            with connection_context as active_connection:
+                with active_connection.transaction():
+                    with active_connection.cursor(
                         row_factory=dict_row,
                     ) as cursor:
                         self._insert_merchant(cursor, plan)

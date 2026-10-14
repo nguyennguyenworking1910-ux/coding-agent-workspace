@@ -963,6 +963,45 @@ class IntentParser:
     ) -> tuple[list[str], list[str], str | None, str | None]:
         """Make Merchant operational ownership deterministic and exclusive."""
 
+        merchant_source_code_diagnosis = (
+            cls._is_merchant_source_code_diagnosis(text)
+        )
+
+        if merchant_source_code_diagnosis:
+            reconciled_operations = [
+                operation
+                for operation in operations
+                if operation not in MERCHANT_OPERATIONS
+            ]
+
+            if Operation.DIAGNOSE.value not in reconciled_operations:
+                reconciled_operations.append(
+                    Operation.DIAGNOSE.value
+                )
+
+            reconciled_domains = unique_values(
+                [
+                    Domain.CODE.value,
+                    *(
+                        domain
+                        for domain in domains
+                        if domain
+                        not in {
+                            Domain.MERCHANT.value,
+                            Domain.GENERAL.value,
+                        }
+                    ),
+                ]
+            )
+
+            return (
+                unique_values(reconciled_operations),
+                reconciled_domains,
+                None,
+                "Merchant source-code/orchestration diagnosis "
+                "remains non-operational and read-only",
+            )
+
         local_operation = (
             cls._detect_local_merchant_operation(text)
         )
@@ -1047,10 +1086,53 @@ class IntentParser:
         )
 
     @staticmethod
+    def _is_merchant_source_code_diagnosis(
+        text: str,
+    ) -> bool:
+        """Return True for read-only diagnosis of Merchant orchestration/code.
+
+        Historical mentions of proposals, confirmations, applies, Gate 7.3,
+        or Gate 7.4 are evidence being investigated, not requested runtime
+        Merchant operations, when the request explicitly establishes a
+        source-code/orchestration read-only boundary.
+        """
+
+        diagnostic_patterns = (
+            r"\bsource[- ]code\b",
+            r"\borchestration diagnosis\b",
+            r"\bsource[- ]code/orchestration diagnosis\b",
+            r"\bdiagnos(?:e|is|tic)\b.{0,80}\b(?:hook|gate|orchestration|code|parser|policy)\b",
+            r"\binspect\b.{0,80}\b(?:hook|gate|orchestration|ledger|runtime state|policy)\b",
+        )
+
+        boundary_patterns = (
+            r"\bread[- ]only investigation\b",
+            r"\bread[- ]only diagnosis\b",
+            r"\bnot a merchant runtime operation\b",
+            r"\bdo not mutate merchant runtime\b",
+            r"\bdo not (?:create|confirm|apply|execute)\b",
+            r"\bdo not retry\b",
+        )
+
+        return (
+            any(
+                re.search(pattern, text)
+                for pattern in diagnostic_patterns
+            )
+            and any(
+                re.search(pattern, text)
+                for pattern in boundary_patterns
+            )
+        )
+
+    @staticmethod
     def _detect_local_merchant_operation(
         text: str,
     ) -> str | None:
         """Recognize common Merchant operations without claiming code work."""
+
+        if IntentParser._is_merchant_source_code_diagnosis(text):
+            return None
 
         merchant_context_patterns = (
             r"\bmerchants?\b",

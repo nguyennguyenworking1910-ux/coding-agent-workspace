@@ -52,6 +52,7 @@ def test_generic_runner_discovers_migrations_one_through_four():
         (2, "add_project_payment_period"),
         (3, "add_cli_write_grants"),
         (4, "add_alert_delivery_leases"),
+        (5, "merchant_execution_ledger"),
     ]
 
 

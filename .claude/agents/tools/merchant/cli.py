@@ -654,7 +654,27 @@ def dispatch_write_command(
             f"Merchant write command is not allowlisted: {command!r}"
         )
 
+    # Reject unauthorized direct create before payload parsing.
+    if args.mode == "EXECUTE" and command == "merchant create":
+        raise PermissionError(
+            "Direct Merchant Create requires a trusted "
+            "durable reservation; generic CLI execution "
+            "is not authorized"
+        )
+
     payload = build_write_payload(args, command)
+
+    if args.mode == "EXECUTE":
+        if args.proposal_hash is not None:
+            raise ValueError(
+                "--proposal-hash is not valid with --execute"
+            )
+
+        return commands.execute(
+            command,
+            database,
+            payload,
+        )
 
     if args.mode == "PROPOSE":
         if args.proposal_hash is not None:
@@ -1071,6 +1091,14 @@ def main(
                 commands,
             )
         elif command in WRITE_COMMANDS:
+            # Fail closed before constructing write handlers.
+            if args.mode == "EXECUTE" and command == "merchant create":
+                raise PermissionError(
+                    "Direct Merchant Create requires a trusted "
+                    "durable reservation; generic CLI execution "
+                    "is not authorized"
+                )
+
             factory = (
                 write_command_factory
                 or build_write_commands
@@ -1185,7 +1213,14 @@ def _selected_alert_project_id(
 
 
 def _add_write_mode(parser: argparse.ArgumentParser) -> None:
-    modes = parser.add_mutually_exclusive_group(required=True)
+    modes = parser.add_mutually_exclusive_group(required=False)
+    parser.set_defaults(mode="EXECUTE")
+    modes.add_argument(
+        "--execute",
+        dest="mode",
+        action="store_const",
+        const="EXECUTE",
+    )
     modes.add_argument(
         "--propose",
         dest="mode",

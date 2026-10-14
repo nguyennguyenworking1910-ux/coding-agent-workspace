@@ -429,3 +429,77 @@ def _optional_datetime(value: Any) -> datetime | None:
         )
 
     return parsed.astimezone(timezone.utc)
+
+
+def execute_protected_merchant_create(
+    *,
+    database: str,
+    operation_key: str,
+    payload: dict[str, Any],
+    repository: MerchantRepository | None = None,
+) -> dict[str, Any]:
+    """Execute an atomic Merchant create from a trusted caller.
+
+    This function does not authenticate the caller.
+    It must not be exposed directly to agent-supplied CLI arguments.
+    """
+    from claude.clients.merchant.atomic_create import (
+        atomic_create_merchant,
+    )
+
+    normalized_database = normalize_database_target(database)
+
+    if not isinstance(operation_key, str) or not operation_key.strip():
+        raise WriteAdapterError("Protected execution key is required")
+
+    if not isinstance(payload, dict):
+        raise WriteAdapterError("Payload must be a dictionary")
+
+    allowed = {
+        "merchant_id",
+        "code",
+        "name",
+        "region_code",
+        "created_by",
+    }
+
+    if set(payload) - allowed:
+        raise WriteAdapterError(
+            "Unexpected protected Merchant create fields"
+        )
+
+    if not all(
+        isinstance(payload.get(field), str)
+        and payload[field].strip()
+        for field in ("code", "name")
+    ):
+        raise WriteAdapterError(
+            "Merchant code and name are required"
+        )
+
+    base_repository = repository or MerchantRepository(
+        role=repository_role_for_target(normalized_database)
+    )
+
+    entity_repository = MerchantEntityRepository(base_repository)
+
+    result, replayed = atomic_create_merchant(
+        base_repository,
+        entity_repository,
+        operation_key=operation_key,
+        merchant_id=payload.get("merchant_id"),
+        code=payload["code"],
+        name=payload["name"],
+        region_code=payload.get("region_code"),
+        created_by=payload.get("created_by"),
+    )
+
+    return {
+        "contract_version": 1,
+        "success": True,
+        "mode": "EXECUTE",
+        "command": "merchant create",
+        "database": normalized_database,
+        "result": result,
+        "replayed": replayed,
+    }

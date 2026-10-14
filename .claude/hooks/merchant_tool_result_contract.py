@@ -163,3 +163,73 @@ def merchant_completeness_from_tool_response(
         return None
 
     return candidate
+
+
+def merchant_execute_from_tool_response(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Parse a structurally valid Direct Execute CLI result.
+
+    This function validates the result shape only. A caller must
+    separately authenticate the tool invocation, associate it with
+    the expected run/task, and persist evidence before accepting
+    a teammate's success claim.
+    """
+    try:
+        from claude.agents.tools.merchant.cli_contract import (
+            WRITE_COMMANDS,
+            normalize_command,
+        )
+    except ModuleNotFoundError:
+        from agents.tools.merchant.cli_contract import (
+            WRITE_COMMANDS,
+            normalize_command,
+        )
+
+    candidate = _exact_json_object(payload)
+
+    if candidate is None:
+        return None
+
+    if candidate.get("success") is not True:
+        return None
+
+    if candidate.get("mode") != "EXECUTE":
+        return None
+
+    if candidate.get("database") != "runtime":
+        return None
+
+    command = candidate.get("command")
+
+    if not isinstance(command, str):
+        return None
+
+    try:
+        normalized = normalize_command(command)
+    except (TypeError, ValueError):
+        return None
+
+    if normalized not in WRITE_COMMANDS:
+        return None
+
+    if command != normalized:
+        return None
+
+    result = candidate.get("result")
+
+    if not isinstance(result, dict):
+        return None
+
+    if any(
+        field in candidate
+        for field in (
+            "proposal_hash",
+            "confirmation_hash",
+            "requires_confirmation",
+            "runtime_authorization",
+        )
+    ):
+        return None
+
+    return candidate

@@ -97,10 +97,12 @@ def prepare_agent_cli_argv(
     )
 
     if command in WRITE_COMMANDS:
-        if getattr(args, "mode", None) != "PROPOSE":
+        if getattr(args, "mode", None) != "EXECUTE":
             raise MerchantAgentCliError(
-                "Merchant Manager may propose runtime writes but may not "
-                "apply them until trusted Checkpoint 7 authority exists"
+                "Merchant writes use direct execution; "
+                "ordinary agents may not apply changes; "
+                "legacy proposal/apply modes are unsupported "
+                "through the operational adapter"
             )
     elif command not in READ_COMMANDS:  # pragma: no cover
         raise MerchantAgentCliError(

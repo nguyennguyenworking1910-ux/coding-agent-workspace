@@ -629,14 +629,6 @@ def test_main_routes_write_without_building_read_commands(capsys):
         [
             "merchant",
             "create",
-            "--code",
-            "BETA",
-            "--name",
-            "Beta Media",
-        ],
-        [
-            "merchant",
-            "create",
             "--propose",
             "--apply",
             "--code",

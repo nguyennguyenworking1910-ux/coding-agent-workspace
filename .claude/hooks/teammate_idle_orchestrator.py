@@ -1,4 +1,4 @@
-﻿"""TeammateIdle orchestration extracted from team_result_hook.
+"""TeammateIdle orchestration extracted from team_result_hook.
 
 This module preserves trusted result reconciliation, Merchant
 proposal/completeness enforcement, runtime apply verification,
@@ -11,6 +11,7 @@ monkeypatch and dependency-injection seams remain compatible.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from typing import Any, Callable
 
 try:
@@ -65,10 +66,23 @@ except ImportError:
 
 
 
+
+class ReconcileDirectWritesFn(Protocol):
+    def __call__(
+        self,
+        *,
+        owner_session_id: str,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+    ) -> bool: ...
+
+
 @dataclass(frozen=True)
 class TeammateIdleDependencies:
     """Explicit dependencies required by TeammateIdle orchestration."""
 
+    reconcile_direct_writes: ReconcileDirectWritesFn
     MERCHANT_APPLY_FAILED_OUTCOME: str
     MERCHANT_APPLY_SUCCESS_OUTCOME: str
     MERCHANT_MANAGER_AGENT: str
@@ -408,6 +422,45 @@ def handle_teammate_idle(
                 return (
                     MISSING_RESULT_FEEDBACK
                 )
+
+            # Direct Execute: committed PostgreSQL evidence must
+            # be reconciled before accepting SendMessage.
+            # Never derive write identity from message content.
+            owner_direct_operations = (
+                owner_record.get("authorized_operations")
+            )
+
+            # No merchant_execute task may fall through to the
+            # legacy report/release path because its teammate
+            # or selected-agent binding is malformed.
+            if "merchant_execute" in (
+                owner_direct_operations or []
+            ):
+                if (
+                    teammate_name != MERCHANT_MANAGER_AGENT
+                    or owner_direct_operations
+                    != ["merchant_execute"]
+                    or owner_record.get(
+                        "authorized_selected_agents"
+                    )
+                    != [MERCHANT_MANAGER_AGENT]
+                ):
+                    return PENDING_RESULT_FEEDBACK
+
+                try:
+                    direct_verified = (
+                        dependencies.reconcile_direct_writes(
+                            owner_session_id=owner_session_id,
+                            teammate_name=teammate_name,
+                            run_id=owner_run_id,
+                            task_id=owner_task_id,
+                        )
+                    )
+                except Exception:
+                    return PENDING_RESULT_FEEDBACK
+
+                if direct_verified is not True:
+                    return PENDING_RESULT_FEEDBACK
 
             marked = (
                 mark_bound_report_received(

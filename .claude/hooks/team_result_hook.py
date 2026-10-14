@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """PostToolUse and TeammateIdle hooks: exact teammate result delivery.
 
 `SendMessage` to `team-lead` is the single machine-verifiable result path.
@@ -859,6 +859,14 @@ def handle_merchant_proposal_receipt(
 
 
 
+
+from claude.hooks.merchant_tool_result_contract import (
+    merchant_execute_from_tool_response,
+)
+from claude.hooks.merchant_execute_invocation import (
+    validated_merchant_execute_invocation,
+)
+
 def _post_tool_dependencies(
 ) -> PostToolDependencies:
     """Bind current hook symbols to the explicit PostTool contract."""
@@ -909,6 +917,12 @@ def _post_tool_dependencies(
         merchant_proposal_from_tool_response=(
             merchant_proposal_from_tool_response
         ),
+        merchant_execute_from_tool_response=(
+            merchant_execute_from_tool_response
+        ),
+        validated_merchant_execute_invocation=(
+            validated_merchant_execute_invocation
+        ),
         merchant_resolution_from_tool_response=(
             merchant_resolution_from_tool_response
         ),
@@ -948,11 +962,42 @@ def handle_post_tool_use(
 
 
 
+
+def _reconcile_direct_merchant_writes(
+    *,
+    owner_session_id: str,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> bool:
+    """Trusted database reconciliation, never agent-provided data."""
+    from claude.clients.merchant.repository import MerchantRepository
+    from claude.hooks.merchant_direct_completion import (
+        reconcile_all_direct_writes,
+    )
+
+    def repository_factory(database: str):
+        if database not in {"test", "runtime"}:
+            raise ValueError("Unapproved database target")
+        return MerchantRepository(role=database)
+
+    return reconcile_all_direct_writes(
+        owner_session_id=owner_session_id,
+        teammate_name=teammate_name,
+        run_id=run_id,
+        task_id=task_id,
+        repository_factory=repository_factory,
+    )
+
+
 def _teammate_idle_dependencies(
 ) -> TeammateIdleDependencies:
     """Bind current hook symbols to TeammateIdle dependencies."""
 
     return TeammateIdleDependencies(
+        reconcile_direct_writes=(
+            _reconcile_direct_merchant_writes
+        ),
         MERCHANT_APPLY_FAILED_OUTCOME=(
             MERCHANT_APPLY_FAILED_OUTCOME
         ),

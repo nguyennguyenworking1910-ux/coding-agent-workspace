@@ -49,6 +49,12 @@ except ImportError:
 
 
 
+
+ValidatedMerchantExecuteInvocationFn = Callable[
+    [dict[str, Any], dict[str, Any]],
+    tuple[str, ...] | None,
+]
+
 @dataclass(frozen=True)
 class PostToolDependencies:
     """Explicit dependencies required by PostToolUse orchestration."""
@@ -68,6 +74,8 @@ class PostToolDependencies:
     mark_report_received: MarkReportReceivedFn
     merchant_completeness_from_tool_response: ToolResponseCandidateFn
     merchant_proposal_from_tool_response: ToolResponseCandidateFn
+    merchant_execute_from_tool_response: ToolResponseCandidateFn
+    validated_merchant_execute_invocation: ValidatedMerchantExecuteInvocationFn
     merchant_resolution_from_tool_response: ToolResponseCandidateFn
     record_teammate_result: RecordTeammateResultFn
     send_message_body: SendMessageBodyFn
@@ -147,6 +155,14 @@ def handle_post_tool_use(
 
     merchant_proposal_from_tool_response = (
         dependencies.merchant_proposal_from_tool_response
+    )
+
+    merchant_execute_from_tool_response = (
+        dependencies.merchant_execute_from_tool_response
+    )
+
+    validated_merchant_execute_invocation = (
+        dependencies.validated_merchant_execute_invocation
     )
 
     merchant_resolution_from_tool_response = (
@@ -301,6 +317,16 @@ def handle_post_tool_use(
             payload,
             session_id,
             proposal,
+        )
+
+    # Direct Execute observation only.
+    # Do not stage trusted evidence or transition lifecycle here.
+    execute_result = merchant_execute_from_tool_response(payload)
+
+    if execute_result is not None:
+        validated_merchant_execute_invocation(
+            payload,
+            execute_result,
         )
 
     # ------------------------------------------------------------
