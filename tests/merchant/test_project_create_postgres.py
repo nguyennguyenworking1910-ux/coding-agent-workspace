@@ -10,6 +10,7 @@ from claude.agents.tools.merchant.workflow_templates import (
 from claude.clients.merchant.repository import MerchantRepository
 from claude.clients.merchant.workflow_repository import (
     MerchantWorkflowRepository,
+    ProjectCreationConflictError,
 )
 
 
@@ -152,9 +153,16 @@ def project_counts(repository, project_id):
                     (SELECT COUNT(*) FROM merchant_ops.project_steps
                      WHERE project_id = %s) AS steps,
                     (SELECT COUNT(*) FROM merchant_ops.project_events
-                     WHERE project_id = %s) AS events
+                     WHERE project_id = %s) AS events,
+                    (SELECT COUNT(*)
+                     FROM merchant_ops.project_step_dependencies
+                          AS dependency
+                     JOIN merchant_ops.project_steps AS step
+                       ON step.id = dependency.from_step_id
+                     WHERE step.project_id = %s) AS dependencies
                 """,
                 (
+                    uuid.UUID(project_id),
                     uuid.UUID(project_id),
                     uuid.UUID(project_id),
                     uuid.UUID(project_id),
@@ -239,8 +247,21 @@ def test_failed_project_creation_rolls_back_all_writes(
 ):
     workflow = MerchantWorkflowRepository(repository)
     project_id = str(uuid.uuid4())
+    seen = {}
 
     def fail_event_insert(cursor, plan):
+        # Dependencies were written earlier in this same transaction.
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM merchant_ops.project_step_dependencies AS dependency
+            JOIN merchant_ops.project_steps AS step
+              ON step.id = dependency.from_step_id
+            WHERE step.project_id = %s
+            """,
+            (uuid.UUID(project_id),),
+        )
+        seen["dependencies"] = cursor.fetchone()["n"]
         raise RuntimeError("Injected event write failure")
 
     # Fail after the project, steps and dependencies were written
@@ -262,8 +283,55 @@ def test_failed_project_creation_rolls_back_all_writes(
             project_id=project_id,
         )
 
+    assert seen["dependencies"] == 22
     assert project_counts(repository, project_id) == {
         "projects": 0,
         "steps": 0,
+        "dependencies": 0,
         "events": 0,
     }
+
+
+def test_duplicate_project_id_is_rejected_without_altering_original(
+    repository,
+    installed_template,
+    merchant,
+):
+    workflow = MerchantWorkflowRepository(repository)
+    project_id = str(uuid.uuid4())
+    original_title = f"pytest original {project_id}"
+
+    workflow.create_project(
+        merchant_id=merchant["merchant_id"],
+        template=installed_template,
+        requires_procurement=False,
+        project_id=project_id,
+        title=original_title,
+    )
+
+    before = project_counts(repository, project_id)
+
+    assert before == {
+        "projects": 1,
+        "steps": 22,
+        "dependencies": 22,
+        "events": 1,
+    }
+
+    with pytest.raises(
+        ProjectCreationConflictError,
+        match="already exists",
+    ):
+        workflow.create_project(
+            merchant_id=merchant["merchant_id"],
+            template=installed_template,
+            requires_procurement=False,
+            project_id=project_id,
+            title="pytest duplicate attempt",
+        )
+
+    assert project_counts(repository, project_id) == before
+
+    snapshot = repository.get_project_snapshot(project_id)
+
+    assert snapshot["project"]["title"] == original_title
