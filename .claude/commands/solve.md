@@ -6,6 +6,28 @@ allowed-tools: Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, SendM
 disallowed-tools: EnterWorktree, ExitWorktree
 ---
 
+## Direct Scope Merchant writes - preferred workflow
+
+The preferred Merchant write path is an explicitly confirmed exact
+scope:
+
+`/solve --confirm --merchant-scope ["project","update","<project-uuid>","--status","IN_PROGRESS","--expected-version","3"] Update project <project-uuid> to IN_PROGRESS`
+
+- Intent Gate validates the scope and persists it under the owner run.
+- `merchant_apply` is dispatched exclusively to `merchant-manager`.
+- Merchant Manager sends an exact handoff request to `team-lead`.
+- Trusted orchestration verifies the persisted scope and executes
+  the authorized CLI command once.
+- The agent must never invoke the runtime handoff directly.
+- Do not require a proposal or `--merchant-confirmation` for this
+  direct-scope path.
+- An unconfirmed or ambiguous write remains blocked. Never infer
+  runtime-write permission from natural language alone.
+
+The legacy proposal-first instructions below remain applicable only
+to legacy proposal-based sessions. They do not override this
+direct-scope contract.
+
 ## Trusted intent envelope
 
 !`${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe ${CLAUDE_PROJECT_DIR}/.claude/hooks/intent_envelope_bridge.py`
@@ -131,7 +153,7 @@ destructive action that would occur.
 A generic or earlier approval does not authorize a different action. External and destructive
 mutations receive one attempt only; an uncertain or failed result must be reported, not retried.
 
-For `merchant_apply`, the general `--confirm` flag is never sufficient. The intent hook must
+For legacy proposal-based `merchant_apply`, the general `--confirm` flag is never sufficient. For Direct Scope, the combination of `--confirm` and an exact validated `--merchant-scope` is required. The intent hook must
 validate the exact `--merchant-confirmation` token emitted by the prior proposal and inject a
 `merchant_confirmation` object containing the command, runtime target, expected version,
 payload hash, proposal hash, and confirmation hash. The token itself and raw proposal payload

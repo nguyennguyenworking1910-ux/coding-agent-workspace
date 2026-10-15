@@ -455,3 +455,53 @@ def test_real_merchant_apply_still_routes_to_merchant_manager():
 
     assert result.operations == ["merchant_apply"]
     assert result.selected_agents == ["merchant-manager"]
+
+
+READ_ONLY_NEGATIVE_APPLY_REQUESTS = (
+    "Read-only: list Merchant projects for merchant CGV. "
+    "Never apply a proposal.",
+    "Show the proposal status for merchant CGV. Apply nothing.",
+    "Check Merchant CGV status. Must not apply the proposal.",
+    "Show Merchant CGV proposal status. Do not run apply.",
+)
+
+
+def test_read_only_negative_apply_wording_is_not_merchant_apply():
+    for request in READ_ONLY_NEGATIVE_APPLY_REQUESTS:
+        assert (
+            IntentParser._detect_local_merchant_operation(
+                request.lower()
+            )
+            == Operation.MERCHANT_READ.value
+        ), request
+
+
+def test_read_only_negative_apply_request_skips_apply_confirmation():
+    result = _parse(
+        "Read-only: list Merchant projects for merchant CGV. "
+        "Never apply a proposal.",
+        _decision(
+            operations=[Operation.MERCHANT_READ],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.READ_ONLY,
+        ),
+    )
+
+    assert result.operations == ["merchant_read"]
+    assert result.selected_agents == ["merchant-manager"]
+    assert result.requires_confirmation is False
+
+
+def test_create_request_routes_to_proposal_without_apply():
+    result = _parse(
+        "Create a Merchant project for merchant CGV.",
+        _decision(
+            operations=[Operation.MERCHANT_PROPOSE],
+            domains=[Domain.MERCHANT],
+            risk_level=RiskLevel.READ_ONLY,
+        ),
+    )
+
+    assert result.operations == ["merchant_propose"]
+    assert result.selected_agents == ["merchant-manager"]
+    assert "merchant_apply" not in result.operations

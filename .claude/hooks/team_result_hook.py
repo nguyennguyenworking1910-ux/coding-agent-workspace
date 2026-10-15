@@ -1152,6 +1152,12 @@ def _dispatcher_dependencies(
         invoke_confirmed_merchant_session_apply=(
             invoke_confirmed_merchant_session_apply
         ),
+        invoke_authorized_scope_apply=(
+            __import__(
+                "claude.system.merchant_runtime_handoff",
+                fromlist=["invoke_authorized_scope_apply"],
+            ).invoke_authorized_scope_apply
+        ),
         io=(
             io
         ),

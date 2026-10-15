@@ -18,7 +18,7 @@ def test_unreserved_merchant_create_never_calls_handler():
     ):
         commands.execute(
             "merchant create",
-            "test",
+            "runtime",
             {"code": "BLOCK001", "name": "Blocked"},
         )
 

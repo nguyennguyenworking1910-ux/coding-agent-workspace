@@ -654,8 +654,13 @@ def dispatch_write_command(
             f"Merchant write command is not allowlisted: {command!r}"
         )
 
-    # Reject unauthorized direct create before payload parsing.
-    if args.mode == "EXECUTE" and command == "merchant create":
+    # Runtime direct create needs a trusted reservation; the test target
+    # is validated per connection by RepositoryConfig.
+    if (
+        args.mode == "EXECUTE"
+        and command == "merchant create"
+        and database == "runtime"
+    ):
         raise PermissionError(
             "Direct Merchant Create requires a trusted "
             "durable reservation; generic CLI execution "
@@ -1092,11 +1097,25 @@ def main(
             )
         elif command in WRITE_COMMANDS:
             # Fail closed before constructing write handlers.
-            if args.mode == "EXECUTE" and command == "merchant create":
+            if (
+                args.mode == "EXECUTE"
+                and command == "merchant create"
+                and database == "runtime"
+            ):
                 raise PermissionError(
                     "Direct Merchant Create requires a trusted "
                     "durable reservation; generic CLI execution "
                     "is not authorized"
+                )
+
+            if (
+                database == "runtime"
+                and args.mode != "PROPOSE"
+                and runtime_authorization is None
+            ):
+                raise PermissionError(
+                    "Runtime Merchant writes require the trusted "
+                    "runtime handoff"
                 )
 
             factory = (

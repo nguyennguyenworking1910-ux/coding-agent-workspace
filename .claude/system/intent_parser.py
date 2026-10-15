@@ -914,7 +914,9 @@ class IntentParser:
 
         patterns = (
             (
-                rf"\b(?:do\s+not|don'?t)\s+"
+                rf"\b(?:do\s+not|don'?t|never|must\s+not|"
+                rf"should\s+not|shall\s+not)\s+"
+                rf"(?:(?:run|perform|carry\s+out)\s+)?"
                 rf"{english_action}"
                 rf"(?:"
                 rf"\s*,?\s*(?:and|or)?\s*"
@@ -930,6 +932,9 @@ class IntentParser:
             (
                 r"\bno\s+"
                 r"(?:apply|execution|persistence)\b"
+            ),
+            (
+                r"\b(?:apply|execute|persist)\s+nothing\b"
             ),
             (
                 rf"\bkhong\s+"

@@ -81,6 +81,44 @@ CONTROLLED_COMMANDS = ("solve", "schedule-agent")
 
 CONFIRM_FLAG = "--confirm"
 MERCHANT_CONFIRM_FLAG = "--merchant-confirmation"
+MERCHANT_SCOPE_FLAG = "--merchant-scope"
+
+
+def split_merchant_scope(request: str) -> tuple[list[str], str]:
+    """Extract one JSON argv array from a user-authored request."""
+    prefix = MERCHANT_SCOPE_FLAG
+
+    if not (
+        request.startswith(prefix + " ")
+        or request.startswith(prefix + "\\t")
+    ):
+        raise ValueError("Missing --merchant-scope argument")
+
+    body = request[len(prefix):].lstrip()
+
+    try:
+        argv, end = json.JSONDecoder().raw_decode(body)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Invalid Merchant scope JSON") from exc
+
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or not all(isinstance(token, str) and token for token in argv)
+    ):
+        raise ValueError(
+            "Merchant scope must be a non-empty JSON array of strings"
+        )
+
+    remaining = body[end:].strip()
+
+    if not remaining:
+        raise ValueError("Merchant scope requires a task description")
+
+    if remaining.startswith(MERCHANT_SCOPE_FLAG):
+        raise ValueError("Duplicate Merchant scope")
+
+    return argv, remaining
 
 # A pre-parsed envelope lets a caller (a test harness, a replay, a wrapper that
 # already paid for classification) skip the API call. It is only honoured when it
@@ -268,7 +306,10 @@ def build_team_state_snapshot(
     if team_state is None:
         # A new local session has no state file yet.
         # An unreadable existing file must still fail closed.
-        from team_lifecycle import team_state_path
+        if __package__ in (None, ""):
+            from team_lifecycle import team_state_path
+        else:
+            from .team_lifecycle import team_state_path
 
         if team_state_path(session_id).exists():
             return None
@@ -417,6 +458,49 @@ def run(
             "Remove the sensitive value and resubmit. Nothing was dispatched."
         )
 
+    merchant_scope = None
+
+    if (
+        request == MERCHANT_SCOPE_FLAG
+        or request.startswith(MERCHANT_SCOPE_FLAG + " ")
+        or request.startswith(MERCHANT_SCOPE_FLAG + "\\t")
+    ):
+        if (
+            command != "solve"
+            or confirmed is not True
+            or merchant_confirmation_token is not None
+        ):
+            return block(
+                "Direct Merchant scope requires /solve --confirm "
+                "without proposal confirmation. Nothing was dispatched."
+            )
+
+        try:
+            from claude.system.merchant_runtime_handoff import (
+                validate_direct_scope,
+            )
+
+            scope_argv, request = split_merchant_scope(request)
+            validated_scope = validate_direct_scope(scope_argv)
+
+            merchant_scope = {
+                "argv": list(validated_scope["argv"]),
+                "command": validated_scope["command"],
+                "database_target": validated_scope["database_target"],
+                "scope_hash": validated_scope["scope_hash"],
+            }
+        except Exception:
+            return block(
+                "Direct Merchant scope is invalid or unauthorized. "
+                "Nothing was dispatched."
+            )
+
+        if redact_secrets(request) != request:
+            return block(
+                "Merchant scope description contains sensitive information. "
+                "Nothing was dispatched."
+            )
+
     if hook_event_name == "UserPromptSubmit":
         persisted_envelope = load_intent_envelope(
             payload.get("session_id")
@@ -424,6 +508,59 @@ def run(
         persisted_state = load_state(
             payload.get("session_id")
         )
+
+        # A matching description alone does not establish identical
+        # authorization. Expansion and Submit must bind the same scope.
+        if (
+            isinstance(persisted_envelope, dict)
+            and isinstance(persisted_state, dict)
+            and isinstance(persisted_envelope.get("raw_request"), str)
+            and isinstance(persisted_state.get("request"), str)
+            and persisted_envelope["raw_request"].strip() == request.strip()
+            and persisted_state["request"].strip() == request.strip()
+            and str(persisted_state.get("run_id") or "").strip()
+            and (
+                merchant_scope is not None
+                or persisted_state.get("merchant_scope") is not None
+            )
+        ):
+            persisted_scope = persisted_state.get("merchant_scope")
+            envelope_scope = persisted_envelope.get("merchant_scope")
+
+            if (
+                confirmed is not True
+                or persisted_state.get("confirmed") is not True
+                or not isinstance(merchant_scope, dict)
+                or not isinstance(persisted_scope, dict)
+                or not isinstance(envelope_scope, dict)
+            ):
+                return block(
+                    "Direct Merchant authorization differs between "
+                    "Expansion and Submit. Nothing was dispatched."
+                )
+
+            scope_fields = (
+                "argv",
+                "command",
+                "database_target",
+                "scope_hash",
+            )
+
+            if (
+                any(
+                    merchant_scope.get(field) != persisted_scope.get(field)
+                    or merchant_scope.get(field) != envelope_scope.get(field)
+                    for field in scope_fields
+                )
+                or persisted_scope.get("run_id")
+                != persisted_state.get("run_id")
+                or envelope_scope.get("run_id")
+                != persisted_state.get("run_id")
+            ):
+                return block(
+                    "Direct Merchant scope changed between Expansion "
+                    "and Submit. Nothing was dispatched."
+                )
 
         if (
             isinstance(
@@ -450,6 +587,32 @@ def run(
                 persisted_state.get("run_id")
                 or ""
             ).strip()
+            and (
+                (
+                    merchant_scope is None
+                    and persisted_state.get("merchant_scope") is None
+                    and persisted_envelope.get("merchant_scope") is None
+                )
+                or (
+                    confirmed is True
+                    and persisted_state.get("confirmed") is True
+                    and isinstance(merchant_scope, dict)
+                    and isinstance(persisted_state.get("merchant_scope"), dict)
+                    and isinstance(persisted_envelope.get("merchant_scope"), dict)
+                    and all(
+                        merchant_scope.get(field)
+                        == persisted_state["merchant_scope"].get(field)
+                        == persisted_envelope["merchant_scope"].get(field)
+                        for field in (
+                            "argv", "command", "database_target", "scope_hash"
+                        )
+                    )
+                    and persisted_state["merchant_scope"].get("run_id")
+                    == persisted_state.get("run_id")
+                    and persisted_envelope["merchant_scope"].get("run_id")
+                    == persisted_state.get("run_id")
+                )
+            )
         ):
             # UserPromptExpansion already classified this exact
             # controlled request and the /solve bridge renders
@@ -495,6 +658,18 @@ def run(
     ]
     merchant_apply = "merchant_apply" in operations
     merchant_confirmation_mode = MERCHANT_CONFIRMATION_MODE_MANUAL
+
+    if merchant_scope is not None:
+        if (
+            operations != {"merchant_apply"}
+            or selected_for_confirmation != ["merchant-manager"]
+            or envelope_payload.get("risk_level")
+            not in {"external_write", "destructive"}
+        ):
+            return block(
+                "Direct Merchant scope conflicts with classified intent. "
+                "Nothing was dispatched."
+            )
 
     if merchant_confirmation_token is not None:
         if not merchant_confirmation_token:
@@ -547,7 +722,7 @@ def run(
         envelope_payload["merchant_confirmation_mode"] = (
             MERCHANT_CONFIRMATION_MODE_MANUAL
         )
-    elif merchant_apply:
+    elif merchant_apply and merchant_scope is None:
         if confirmed:
             return block(
                 f"{CONFIRM_FLAG} is not sufficient for Merchant apply. "
@@ -605,6 +780,10 @@ def run(
 
     run_id = str(uuid.uuid4())
 
+    if merchant_scope is not None:
+        merchant_scope["run_id"] = run_id
+        envelope_payload["merchant_scope"] = dict(merchant_scope)
+
     save_state(
         payload.get("session_id"),
         new_state(
@@ -625,6 +804,7 @@ def run(
             ),
             merchant_confirmation_mode=merchant_confirmation_mode,
             run_id=run_id,
+            merchant_scope=merchant_scope,
         ),
     )
 

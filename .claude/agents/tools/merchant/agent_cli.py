@@ -97,13 +97,13 @@ def prepare_agent_cli_argv(
     )
 
     if command in WRITE_COMMANDS:
-        if getattr(args, "mode", None) != "EXECUTE":
-            raise MerchantAgentCliError(
-                "Merchant writes use direct execution; "
-                "ordinary agents may not apply changes; "
-                "legacy proposal/apply modes are unsupported "
-                "through the operational adapter"
-            )
+        # Ordinary agents never write, in any mode. Runtime writes
+        # reach the database only through the trusted handoff.
+        raise MerchantAgentCliError(
+            "Merchant writes are not available through the ordinary "
+            "agent CLI; ordinary agents may not apply or execute changes; "
+            "runtime writes require the trusted runtime handoff"
+        )
     elif command not in READ_COMMANDS:  # pragma: no cover
         raise MerchantAgentCliError(
             "Merchant operation is not allowlisted"

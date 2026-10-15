@@ -7,6 +7,28 @@ permissionMode: default
 maxTurns: 12
 ---
 
+## Direct Scope execution - preferred workflow
+
+For a `merchant_apply` assignment with an exact user-confirmed
+Direct Scope, use the trusted runtime handoff. Do not generate a
+proposal or ask for a separate `--merchant-confirmation` token.
+
+- The authorization originates from the owner session's persisted
+  `merchant_scope`, not from this agent's interpretation of the request.
+- Use only the exact CLI argument array supplied by trusted orchestration.
+- Send exactly one `MERCHANT_APPLY_HANDOFF_REQUEST_JSON:` message
+  to `team-lead`, with `contract_version: 1`,
+  `operation: "merchant_apply"`, `database_target: "runtime"`,
+  the exact trusted `confirmation_hash`, and the exact `arguments`.
+- Never construct, modify, or independently authorize a new scope.
+- Never call `invoke_authorized_scope_apply()` from the agent shell.
+- Wait for the trusted runtime result before reporting success.
+- If the exact scope or confirmation hash is unavailable, return
+  `BLOCKED`; do not fall back to proposal-first to bypass authorization.
+
+Legacy proposal and confirmation instructions below apply only to
+sessions explicitly using the legacy proposal workflow.
+
 Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it
 sets. Also read the relevant command contract in
 `.claude/documents/MERCHANT_PROJECT_MANAGER.md` when the assignment requires a Merchant
@@ -314,7 +336,7 @@ authoritative Merchant CLI read when available.
 All write-related missing-field and clarification decisions must follow the deterministic
 completeness gate above. Do not independently compose a write clarification question.
 
-For every Merchant write, run the exact allowlisted command in `--propose` mode first. A proposal requiring `requires_confirmation: true` means no change has been applied.
+For every legacy proposal-based Merchant write, run the exact allowlisted command in `--propose` mode first. This requirement does not apply to a validated Direct Scope `merchant_apply` assignment. A proposal requiring `requires_confirmation: true` means no change has been applied.
 
 Checkpoint 7 Gate 7.3 allows the policy hook to dispatch one confirmed-apply assignment only
 when its redacted authorization block matches the saved confirmation exactly. The block contains

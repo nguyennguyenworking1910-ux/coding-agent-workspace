@@ -207,14 +207,17 @@ class MerchantWriteCommands:
         """Execute a validated write without proposal authorization."""
 
         normalized_command = normalize_command(command)
+        normalized_database = normalize_database_target(database)
 
-        if normalized_command == "merchant create":
+        if (
+            normalized_command == "merchant create"
+            and normalized_database == "runtime"
+        ):
             raise PermissionError(
                 "Merchant Create requires trusted durable "
                 "reservation and reserved execution"
             )
 
-        normalized_database = normalize_database_target(database)
         handler = self._handler(normalized_command)
 
         validator = self._preflight_validators.get(

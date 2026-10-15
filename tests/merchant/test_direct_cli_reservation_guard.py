@@ -23,7 +23,7 @@ def test_generic_cli_cannot_execute_merchant_create():
         dispatch_write_command(
             args,
             commands,
-            database="test",
+            database="runtime",
         )
 
     commands.execute.assert_not_called()

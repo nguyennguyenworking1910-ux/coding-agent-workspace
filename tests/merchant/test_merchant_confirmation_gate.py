@@ -123,7 +123,7 @@ def test_parse_prompt_removes_confirmation_token_before_classification():
 def test_solve_documents_exact_confirmation_without_runtime_authority():
     content = SOLVE_PATH.read_text(encoding="utf-8")
 
-    assert "For `merchant_apply`, the general `--confirm` flag is never" in (
+    assert "For legacy proposal-based `merchant_apply`, the general `--confirm` flag is never" in (
         content
     )
     assert "exact `--merchant-confirmation` token" in content

@@ -516,12 +516,12 @@ def render_json(value: Any) -> str:
     )
 
 
-def proposal_hash(
+def command_hash(
     command: Any,
     database: Any,
     payload: Mapping[str, Any],
 ) -> str:
-    """Bind a write command, target, and exact payload."""
+    """Bind a validated write command, target, and exact payload."""
 
     normalized_command = normalize_command(command)
 
@@ -545,6 +545,16 @@ def proposal_hash(
     ).encode("utf-8")
 
     return hashlib.sha256(canonical).hexdigest()
+
+
+def proposal_hash(
+    command: Any,
+    database: Any,
+    payload: Mapping[str, Any],
+) -> str:
+    """Legacy name; retained only during direct-execution migration."""
+    return command_hash(command, database, payload)
+
 
 
 def build_proposal(

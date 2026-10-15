@@ -127,29 +127,25 @@ def test_agent_read_invocation_uses_runtime_repository(capsys):
     assert result == [{"code": "SAFE", "name": "Safe Merchant"}]
 
 
-def test_agent_write_invocation_dispatches_direct_execute(capsys):
+def test_agent_write_invocation_is_refused_before_handler(capsys):
     factory_calls = []
 
     def forbidden_factory(database):
         factory_calls.append(database)
         raise AssertionError("Write factory must not be called")
 
-    from claude.agents.tools.merchant.agent_cli import (
-        invoke_agent_cli,
-    )
-
-    code = invoke_agent_cli(
-        [
-                        "merchant", "create",
-            "--code", "SECURITY_TEST",
-            "--name", "Unauthorized Merchant",
-        ],
-        write_command_factory=forbidden_factory,
-    )
+    with pytest.raises(MerchantAgentCliError):
+        invoke_agent_cli(
+            [
+                "merchant", "create",
+                "--code", "SECURITY_TEST",
+                "--name", "Unauthorized Merchant",
+            ],
+            write_command_factory=forbidden_factory,
+        )
 
     captured = capsys.readouterr()
 
-    assert code != 0
     assert factory_calls == []
     assert captured.out.strip() == ""
 
@@ -201,7 +197,7 @@ def test_agent_rejects_legacy_apply_before_dispatch():
 
     with pytest.raises(
         MerchantAgentCliError,
-        match="legacy proposal/apply modes are unsupported",
+        match="not available through the ordinary agent CLI",
     ):
         invoke_agent_cli(
             [

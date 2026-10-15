@@ -142,6 +142,7 @@ def new_state(
     merchant_confirmation: dict[str, Any] | None = None,
     merchant_confirmation_mode: str = MERCHANT_CONFIRMATION_MODE_MANUAL,
     run_id: str = "",
+    merchant_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
 
@@ -174,6 +175,10 @@ def new_state(
         "agent_rounds": 0,
         "result_ledger": {},
     }
+
+    if merchant_scope is not None:
+        # Trusted user-authorized scope; written only by the intent gate.
+        state["merchant_scope"] = dict(merchant_scope)
 
     if merchant_confirmation is not None:
         allowed_fields = (

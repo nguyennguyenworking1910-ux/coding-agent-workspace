@@ -3138,6 +3138,42 @@ def _merchant_propose_assignment_error(
     return None
 
 
+
+def _validated_merchant_direct_dispatch_scope(state):
+    """Validate direct scope before Merchant dispatch acceptance."""
+    from claude.system.merchant_runtime_handoff import (
+        validate_direct_scope,
+    )
+
+    scope = state.get("merchant_scope")
+
+    if not isinstance(scope, dict):
+        return None
+
+    if state.get("merchant_confirmation") is not None:
+        raise ValueError("Direct scope cannot mix with proposal confirmation")
+
+    run_id = state.get("run_id")
+    if (
+        not isinstance(run_id, str)
+        or not run_id
+        or scope.get("run_id") != run_id
+    ):
+        raise ValueError("Direct scope run binding mismatch")
+
+    tokens = scope.get("argv")
+    if not isinstance(tokens, list):
+        raise ValueError("Malformed direct scope arguments")
+
+    validated = validate_direct_scope(tokens)
+
+    for field in ("scope_hash", "command", "database_target"):
+        if scope.get(field) != validated[field]:
+            raise ValueError(f"Direct scope {field} mismatch")
+
+    return validated
+
+
 def _record_merchant_apply_dispatch(
     state: dict[str, Any],
     session_id: str | None,
@@ -3152,6 +3188,26 @@ def _record_merchant_apply_dispatch(
     }
 
     if MERCHANT_APPLY_OPERATION not in operations:
+        return None
+
+    if state.get("merchant_scope") is not None:
+        try:
+            direct_scope = _validated_merchant_direct_dispatch_scope(state)
+        except (ValueError, TypeError, RuntimeError) as exc:
+            return deny(
+                f"Blocked: invalid trusted Merchant scope ({exc})."
+            )
+
+        if direct_scope is None:
+            return deny("Blocked: missing trusted Merchant scope")
+
+        state["merchant_dispatch_spent"] = True
+        state["merchant_dispatch"] = {
+            "operation": MERCHANT_APPLY_OPERATION,
+            "subagent_type": subagent_type,
+            "teammate_name": teammate_name,
+            "confirmation_hash": direct_scope["confirmation_hash"],
+        }
         return None
 
     confirmation = state.get(
@@ -3748,6 +3804,25 @@ def _check_merchant_dispatch(
             "dispatch attempt. Generate and confirm a fresh proposal."
         )
 
+    if state.get("merchant_scope") is not None:
+        if confirmation is not None or has_dispatch_marker:
+            return deny(
+                "Blocked: direct Merchant scope cannot carry an "
+                "Agent-authored proposal confirmation or dispatch block."
+            )
+
+        try:
+            direct_scope = _validated_merchant_direct_dispatch_scope(state)
+        except (ValueError, TypeError, RuntimeError) as exc:
+            return deny(
+                f"Blocked: invalid direct Merchant scope ({exc})."
+            )
+
+        if direct_scope is None:
+            return deny("Blocked: missing direct Merchant scope")
+
+        return None
+
     confirmation_error = _merchant_confirmation_error(
         confirmation
     )
@@ -4015,6 +4090,7 @@ def merchant_runtime_bypass_decision(
         "merchant_runtime_handoff.py",
         "claude.system.merchant_runtime_handoff",
         "invoke_confirmed_merchant_session_apply",
+        "invoke_authorized_scope_apply",
         "invoke_confirmed_merchant_apply",
         "issue_runtime_apply_authorization",
     )

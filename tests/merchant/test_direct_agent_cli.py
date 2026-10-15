@@ -12,41 +12,34 @@ from claude.agents.tools.merchant.write_commands import (
 )
 
 
-def test_agent_cli_allows_direct_write_without_mode():
-    args = prepare_agent_cli_argv([
-        "merchant", "create",
-        "--code", "CP3D_TEST",
-        "--name", "Direct Merchant",
-    ])
-
-    assert args[:2] == ("--database", "runtime")
-    assert "--propose" not in args
-    assert "--apply" not in args
+def test_agent_cli_rejects_direct_write_without_mode():
+    with pytest.raises(MerchantAgentCliError):
+        prepare_agent_cli_argv([
+            "merchant", "create",
+            "--code", "CP3D_TEST",
+            "--name", "Direct Merchant",
+        ])
 
 
-def test_agent_cli_invokes_direct_handler(capsys):
+def test_agent_cli_rejects_direct_write_before_handler(capsys):
     factory_calls = []
 
     def forbidden_factory(database):
         factory_calls.append(database)
         raise AssertionError("Write factory must not be called")
 
-    from claude.agents.tools.merchant.agent_cli import (
-        invoke_agent_cli,
-    )
-
-    code = invoke_agent_cli(
-        [
-                        "merchant", "create",
-            "--code", "SECURITY_TEST",
-            "--name", "Unauthorized Merchant",
-        ],
-        write_command_factory=forbidden_factory,
-    )
+    with pytest.raises(MerchantAgentCliError):
+        invoke_agent_cli(
+            [
+                "merchant", "create",
+                "--code", "SECURITY_TEST",
+                "--name", "Unauthorized Merchant",
+            ],
+            write_command_factory=forbidden_factory,
+        )
 
     captured = capsys.readouterr()
 
-    assert code != 0
     assert factory_calls == []
     assert captured.out.strip() == ""
 

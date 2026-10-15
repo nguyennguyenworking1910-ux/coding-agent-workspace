@@ -20,7 +20,7 @@ def test_unreserved_create_cannot_call_handler():
     with pytest.raises(PermissionError, match="durable reservation"):
         commands.execute(
             "merchant create",
-            "test",
+            "runtime",
             {"code": "TEST001", "name": "Test Merchant"},
         )
 
@@ -38,7 +38,7 @@ def test_repeated_unreserved_creates_are_denied():
 
     for _ in range(2):
         with pytest.raises(PermissionError, match="durable reservation"):
-            commands.execute("merchant create", "test", payload)
+            commands.execute("merchant create", "runtime", payload)
 
     assert received == []
     assert "merchant_id" not in payload

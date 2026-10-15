@@ -427,6 +427,106 @@ def stage_runtime_handoff_attempt(
             "Gate 7.3 dispatch has not been accepted",
         )
 
+    # Checkpoint 3D-D.2: direct scope originates from the trusted
+    # owner state, not the teammate-authored handoff message.
+    direct_scope = state.get("merchant_scope")
+
+    if direct_scope is not None:
+        if not isinstance(direct_scope, dict):
+            return None, "trusted direct scope is malformed"
+
+        if state.get("merchant_confirmation") is not None:
+            return None, "direct and legacy authorization cannot coexist"
+
+        if state.get("merchant_runtime_authorization_issued") is True:
+            return None, "runtime authorization was already issued"
+
+        if state.get(HANDOFF_STATE_KEY) is not None:
+            return None, "runtime handoff state already exists"
+
+        from claude.system.merchant_runtime_handoff import (
+            validate_direct_scope,
+        )
+
+        try:
+            trusted_scope = validate_direct_scope(
+                direct_scope.get("argv")
+            )
+        except (ValueError, TypeError, RuntimeError):
+            return None, "trusted direct scope validation failed"
+
+        if not isinstance(trusted_scope, dict):
+            return None, "trusted direct scope validation failed"
+
+        if (
+            direct_scope.get("run_id") != run_id
+            or direct_scope.get("scope_hash")
+            != trusted_scope.get("scope_hash")
+            or direct_scope.get("command")
+            != trusted_scope.get("command")
+            or direct_scope.get("database_target") != "runtime"
+            or trusted_scope.get("database_target") != "runtime"
+        ):
+            return None, "direct scope does not match trusted run"
+
+        raw_arguments = candidate.get("arguments")
+
+        if (
+            not isinstance(raw_arguments, tuple)
+            or raw_arguments
+            != tuple(trusted_scope.get("argv") or ())
+        ):
+            return None, "handoff arguments do not match direct scope"
+
+        confirmation_hash = trusted_scope.get(
+            "confirmation_hash"
+        )
+
+        if (
+            candidate.get("confirmation_hash")
+            != confirmation_hash
+        ):
+            return None, "handoff confirmation hash mismatch"
+
+        dispatch = state.get("merchant_dispatch")
+
+        if (
+            not isinstance(dispatch, Mapping)
+            or dispatch.get("operation") != MERCHANT_APPLY_OPERATION
+            or dispatch.get("subagent_type") != MERCHANT_MANAGER_AGENT
+            or dispatch.get("teammate_name") != MERCHANT_MANAGER_AGENT
+            or dispatch.get("confirmation_hash") != confirmation_hash
+        ):
+            return None, "trusted direct dispatch receipt mismatch"
+
+        digest = arguments_hash(raw_arguments)
+
+        state[HANDOFF_STATE_KEY] = {
+            "contract_version": HANDOFF_CONTRACT_VERSION,
+            "status": HANDOFF_PENDING,
+            "owner_session_id": owner_session_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "teammate_name": teammate_name,
+            "confirmation_hash": confirmation_hash,
+            "arguments_hash": digest,
+        }
+
+        return (
+            PreparedRuntimeHandoff(
+                owner_session_id=owner_session_id,
+                teammate_name=teammate_name,
+                run_id=run_id,
+                task_id=task_id,
+                confirmation_hash=confirmation_hash,
+                command=trusted_scope["command"],
+                proposal_hash=trusted_scope["proposal_hash"],
+                arguments=raw_arguments,
+                arguments_hash=digest,
+            ),
+            "",
+        )
+
     confirmation = state.get(
         "merchant_confirmation"
     )

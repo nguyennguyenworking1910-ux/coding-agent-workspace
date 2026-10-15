@@ -1,83 +1,112 @@
 ﻿import pytest
 
 from claude.agents.tools.merchant import agent_cli
+from claude.agents.tools.merchant import cli
 
 
-def test_direct_write_dispatches_once(monkeypatch):
-    calls = []
+MERCHANT_ID = "00000000-0000-0000-0000-000000000001"
+PROJECT_ID = "00000000-0000-0000-0000-000000000002"
 
-    def fake_cli(argv, **kwargs):
-        calls.append((tuple(argv), kwargs))
-        return 0
-
-    monkeypatch.setattr(
-        agent_cli,
-        "merchant_cli_main",
-        fake_cli,
-    )
-
-    code = agent_cli.invoke_agent_cli((
-        "merchant",
-        "create",
-        "--code",
-        "TEST",
-        "--name",
-        "Test",
-    ))
-
-    assert code == 0
-    assert len(calls) == 1
-
-    argv, kwargs = calls[0]
-
-    assert argv[:2] == (
-        "--database",
-        "runtime",
-    )
-
-    assert kwargs["runtime_authorization"] is None
-
-    parser = agent_cli.build_argument_parser()
-    args = parser.parse_args(argv)
-
-    assert args.mode == "EXECUTE"
-    assert args.resource == "merchant"
-    assert args.action == "create"
-
-
-@pytest.mark.parametrize("arguments", [
+WRITE_ARGUMENTS = (
+    ("merchant", "create", "--code", "TEST", "--name", "Test"),
+    ("merchant", "create", "--execute", "--code", "TEST", "--name", "Test"),
     (
-        "merchant", "create", "--apply",
-        "--code", "TEST", "--name", "Test",
+        "merchant", "activate",
+        "--merchant-id", MERCHANT_ID,
+        "--expected-version", "1",
+        "--reason", "test",
+        "--triggered-by", PROJECT_ID,
     ),
     (
-        "merchant", "create", "--propose",
-        "--code", "TEST", "--name", "Test",
+        "project", "create",
+        "--merchant-id", MERCHANT_ID,
+        "--type", "OPENING_NEW_CINEMA",
+        "--variant", "OPENING_NEW_CINEMA_STANDARD",
     ),
     (
-        "merchant", "create",
-        "--database=test",
-        "--code", "TEST", "--name", "Test",
+        "project", "update", PROJECT_ID,
+        "--status", "PLANNED",
+        "--expected-version", "1",
     ),
-])
-def test_legacy_or_target_override_never_dispatches(
+)
+
+
+@pytest.mark.parametrize("arguments", WRITE_ARGUMENTS)
+def test_ordinary_adapter_rejects_every_write_without_dispatch(
     monkeypatch, arguments
 ):
     calls = []
 
-    def fake_cli(*args, **kwargs):
-        calls.append((args, kwargs))
-        return 0
+    monkeypatch.setattr(
+        agent_cli,
+        "merchant_cli_main",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or 0,
+    )
+
+    with pytest.raises(agent_cli.MerchantAgentCliError):
+        agent_cli.invoke_agent_cli(arguments)
+
+    assert calls == []
+
+
+def test_ordinary_adapter_still_dispatches_reads(monkeypatch):
+    calls = []
 
     monkeypatch.setattr(
         agent_cli,
         "merchant_cli_main",
-        fake_cli,
+        lambda argv, **kwargs: calls.append((tuple(argv), kwargs)) or 0,
     )
 
-    with pytest.raises(
-        agent_cli.MerchantAgentCliError
-    ):
-        agent_cli.invoke_agent_cli(arguments)
+    code = agent_cli.invoke_agent_cli(("merchant", "list"))
 
-    assert calls == []
+    assert code == 0
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert argv[:2] == ("--database", "runtime")
+    assert kwargs["runtime_authorization"] is None
+
+
+@pytest.mark.parametrize("arguments", WRITE_ARGUMENTS)
+def test_cli_main_refuses_unauthorized_runtime_write(arguments):
+    factory_calls = []
+
+    def factory(database):
+        factory_calls.append(database)
+        raise AssertionError("write handlers must not be built")
+
+    code = cli.main(
+        ("--database", "runtime", *arguments),
+        write_command_factory=factory,
+        runtime_authorization=None,
+    )
+
+    assert code == 1
+    assert factory_calls == []
+
+
+def test_cli_main_runtime_proposal_is_not_blocked_by_write_guard():
+    factory_calls = []
+
+    def factory(database):
+        factory_calls.append(database)
+        raise RuntimeError("stop after guard")
+
+    cli.main(
+        (
+            "--database",
+            "runtime",
+            "project",
+            "update",
+            PROJECT_ID,
+            "--status",
+            "PLANNED",
+            "--expected-version",
+            "1",
+            "--propose",
+        ),
+        write_command_factory=factory,
+        runtime_authorization=None,
+    )
+
+    assert factory_calls == ["runtime"]

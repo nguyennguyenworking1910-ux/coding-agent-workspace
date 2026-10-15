@@ -407,3 +407,89 @@ def test_session_handoff_exposes_no_state_or_authority_override():
     assert "if __name__" not in source
     assert "os.environ" not in source
     assert "os.getenv" not in source
+
+
+def test_dispatch_binds_exact_proposal_not_target(capsys):
+    """Dispatch accepts the exact confirmed proposal; the handoff checks target.
+
+    The confirmation carries hashes only, so the policy gate cannot see the
+    entity. The handoff receives the concrete arguments and enforces the
+    user-named target end-to-end, before any repository call.
+    """
+    proposal, commands, handler = _proposal_and_commands()
+
+    different_project_id = (
+        "00000000-0000-0000-0000-000000000099"
+    )
+
+    assert different_project_id != PROJECT_ID
+
+    runtime_state.save_state(
+        SESSION_ID,
+        _initial_state(
+            proposal,
+            request=(
+                "Update project "
+                f"{different_project_id} "
+                "to IN_PROGRESS"
+            ),
+        ),
+    )
+
+    with runtime_state.locked_state(SESSION_ID) as persisted:
+        decision = policy_gate.apply_call(
+            persisted,
+            "Agent",
+            {
+                "subagent_type": "merchant-manager",
+                "name": "merchant-manager",
+                "prompt": _dispatch_prompt(proposal),
+            },
+        )
+
+    assert decision is None
+
+    with pytest.raises(MerchantRuntimeHandoffError):
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
+        )
+
+    assert handler.calls == []
+    assert capsys.readouterr().out == ""
+
+
+def test_user_named_target_matching_apply_still_succeeds(capsys):
+    """Positive control: a request naming the bound project still applies."""
+    proposal, commands, handler = _proposal_and_commands()
+
+    runtime_state.save_state(
+        SESSION_ID,
+        _initial_state(
+            proposal,
+            request=f"Update project {PROJECT_ID} to IN_PROGRESS",
+        ),
+    )
+
+    with runtime_state.locked_state(SESSION_ID) as persisted:
+        decision = policy_gate.apply_call(
+            persisted,
+            "Agent",
+            {
+                "subagent_type": "merchant-manager",
+                "name": "merchant-manager",
+                "prompt": _dispatch_prompt(proposal),
+            },
+        )
+
+    assert decision is None
+
+    exit_code = invoke_confirmed_merchant_session_apply(
+        SESSION_ID,
+        _apply_arguments(proposal),
+        write_command_factory=lambda database: commands,
+    )
+
+    assert exit_code == 0
+    assert handler.calls == [PAYLOAD]

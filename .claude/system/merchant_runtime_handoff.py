@@ -11,7 +11,10 @@ environment variable, or JSON.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
+import json
+import re
 import threading
 from collections.abc import Mapping, MutableMapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
@@ -24,11 +27,13 @@ from claude.agents.tools.merchant.agent_cli import (
 from claude.agents.tools.merchant.cli import (
     WriteCommandFactory,
     build_argument_parser,
+    build_write_payload,
     main as merchant_cli_main,
 )
 from claude.agents.tools.merchant.cli_contract import (
     WRITE_COMMANDS,
     RuntimeWriteDeniedError,
+    build_confirmation_envelope,
     issue_runtime_apply_authorization,
     normalize_command,
 )
@@ -155,6 +160,10 @@ def invoke_confirmed_merchant_session_apply(
             confirmation, dispatch_receipt = (
                 _reserve_authorization(state)
             )
+
+            # The reservation is spent even on mismatch, so a rejected
+            # target cannot be retried against the same authorization.
+            _require_user_named_targets_bound(state, arguments)
     except Exception as exc:
         raise MerchantRuntimeHandoffStageError(
             "RESERVE_AUTHORIZATION",
@@ -187,6 +196,297 @@ def invoke_confirmed_merchant_session_apply(
     try:
         return _invoke_authorized_apply(
             prepared,
+            authorization,
+            write_command_factory=write_command_factory,
+        )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError("CLI_INVOKE", exc) from exc
+
+
+_UUID_TOKEN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _require_user_named_targets_bound(
+    state: Mapping[str, Any],
+    arguments: Sequence[str],
+) -> None:
+    """Fail closed when the user named an entity the apply does not target.
+
+    Every UUID the user wrote in the request must appear as an exact
+    argument of the apply. This is a rejection rule, not target inference:
+    a request that names no UUID relies on the exact confirmed proposal.
+    """
+
+    named = {
+        match.lower()
+        for match in _UUID_TOKEN.findall(str(state.get("request") or ""))
+    }
+    bound = {
+        str(token).lower()
+        for token in arguments
+        if _UUID_TOKEN.fullmatch(str(token))
+    }
+
+    if not named <= bound:
+        raise MerchantRuntimeHandoffError(
+            "Runtime apply target does not match the user's request"
+        )
+
+
+MERCHANT_SCOPE_STATE_KEY = "merchant_scope"
+DIRECT_SCOPE_FORBIDDEN_TOKENS = frozenset(
+    {"--apply", "--propose", "--execute", "--proposal-hash"}
+)
+
+
+def validate_direct_scope(argv: Sequence[str]) -> dict[str, Any]:
+    """Validate one exact user-typed Merchant write and derive its scope.
+
+    The scope is the exact argv the user authorized. It must name one
+    allowlisted write on the runtime target, with no mode, proposal hash or
+    database override, and every entity identifier must be an exact UUID.
+    Names are rejected so an ambiguous target cannot become authority.
+    """
+
+    if isinstance(argv, (str, bytes, bytearray)) or not isinstance(
+        argv, Sequence
+    ):
+        raise MerchantRuntimeHandoffError(
+            "Direct Merchant scope must be a list of tokens"
+        )
+
+    tokens = list(argv)
+
+    if not tokens or not all(
+        isinstance(token, str) and token for token in tokens
+    ):
+        raise MerchantRuntimeHandoffError(
+            "Direct Merchant scope must be non-empty string tokens"
+        )
+
+    for token in tokens:
+        option = token.split("=", 1)[0]
+
+        if (
+            option in DIRECT_SCOPE_FORBIDDEN_TOKENS
+            or option in CREDENTIAL_OR_TARGET_OPTIONS
+        ):
+            raise MerchantRuntimeHandoffError(
+                "Direct Merchant scope must not name a mode, proposal "
+                "hash or database target"
+            )
+
+    try:
+        args = build_argument_parser().parse_args(
+            ["--database", RUNTIME_DATABASE_TARGET, *tokens]
+        )
+        command = normalize_command(
+            f"{args.resource} {args.action}"
+        )
+
+        if command not in WRITE_COMMANDS:
+            raise MerchantRuntimeHandoffError(
+                "Direct Merchant scope must name one allowlisted write"
+            )
+
+        payload = build_write_payload(args, command)
+    except (SystemExit, ValueError, TypeError) as exc:
+        raise MerchantRuntimeHandoffError(
+            "Direct Merchant scope does not match the Merchant CLI contract"
+        ) from exc
+
+    for field, value in payload.items():
+        if (
+            field.endswith("_id")
+            and value is not None
+            and _UUID_TOKEN.fullmatch(str(value)) is None
+        ):
+            raise MerchantRuntimeHandoffError(
+                "Direct Merchant scope targets must be exact UUIDs, "
+                "not names or ambiguous references"
+            )
+
+    envelope = build_confirmation_envelope(
+        command,
+        RUNTIME_DATABASE_TARGET,
+        payload,
+    )
+
+    return {
+        "argv": tokens,
+        "command": command,
+        "database_target": RUNTIME_DATABASE_TARGET,
+        "scope_hash": _direct_scope_hash(tokens),
+        "confirmation": envelope.to_dict(),
+        "confirmation_hash": envelope.confirmation_hash,
+        "proposal_hash": envelope.proposal_hash,
+    }
+
+
+def _direct_scope_hash(tokens: Sequence[str]) -> str:
+    canonical = json.dumps(
+        list(tokens),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _validated_direct_state(
+    state: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    scope = state.get(MERCHANT_SCOPE_STATE_KEY)
+
+    if not isinstance(scope, Mapping):
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state has no user-authorized scope"
+        )
+
+    if state.get("merchant_confirmation") is not None:
+        raise MerchantRuntimeHandoffError(
+            "Direct scope must not be mixed with a proposal confirmation"
+        )
+
+    if state.get("confirmed") is not True:
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state is not exactly confirmed"
+        )
+
+    if state.get("operations") != [MERCHANT_APPLY_OPERATION]:
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state is not an exact merchant_apply operation"
+        )
+
+    if state.get("selected_agents") != [MERCHANT_MANAGER_AGENT]:
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state lacks exclusive merchant-manager authority"
+        )
+
+    if state.get("risk_level") not in AUTHORIZED_RISKS:
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state lacks mutating risk authority"
+        )
+
+    if state.get("merchant_dispatch_spent") is not True:
+        raise MerchantRuntimeHandoffError(
+            "Merchant dispatch was not accepted by the policy gate"
+        )
+
+    dispatch = state.get("merchant_dispatch")
+
+    if not isinstance(dispatch, Mapping):
+        raise MerchantRuntimeHandoffError(
+            "Trusted run state has no Merchant dispatch receipt"
+        )
+
+    run_id = scope.get("run_id")
+
+    if not isinstance(run_id, str) or not run_id or run_id != state.get(
+        "run_id"
+    ):
+        raise MerchantRuntimeHandoffError(
+            "User-authorized scope belongs to another run"
+        )
+
+    tokens = scope.get("argv")
+
+    if not isinstance(tokens, list):
+        raise MerchantRuntimeHandoffError(
+            "User-authorized scope is malformed"
+        )
+
+    recomputed = validate_direct_scope(tokens)
+
+    if scope.get("scope_hash") != recomputed["scope_hash"]:
+        raise MerchantRuntimeHandoffError(
+            "User-authorized scope failed its integrity check"
+        )
+
+    if dispatch.get("confirmation_hash") != recomputed["confirmation_hash"]:
+        raise MerchantRuntimeHandoffError(
+            "Policy dispatch does not match the user-authorized scope"
+        )
+
+    return recomputed, dict(dispatch)
+
+
+def _reserve_direct_authorization(
+    state: MutableMapping[str, Any],
+) -> None:
+    # Shares the proposal path's one-use marker, so a direct scope and a
+    # proposal confirmation can never both authorize the same dispatch.
+    with _HANDOFF_LOCK:
+        if "merchant_runtime_authorization_issued" in state:
+            raise MerchantRuntimeHandoffError(
+                "Merchant runtime authorization was already issued for this dispatch"
+            )
+
+        state["merchant_runtime_authorization_issued"] = True
+
+
+def invoke_authorized_scope_apply(
+    session_id: str,
+    arguments: Sequence[str],
+    *,
+    write_command_factory: WriteCommandFactory | None = None,
+) -> int:
+    """Apply one trusted user-authorized write exactly once.
+
+    No proposal, confirmation token or Agent-authored block is consulted.
+    The presented argv must equal the user-authorized argv token for token.
+    """
+
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise MerchantRuntimeHandoffStageError("SESSION_ID")
+
+    if isinstance(arguments, (str, bytes, bytearray)):
+        raise MerchantRuntimeHandoffError(
+            "Merchant runtime arguments must be a sequence of tokens"
+        )
+
+    presented = tuple(arguments)
+
+    try:
+        with locked_state(session_id) as persisted_state:
+            if persisted_state is None:
+                raise MerchantRuntimeHandoffError(
+                    "No trusted Merchant run state exists for this session"
+                )
+
+            scope, dispatch_receipt = _validated_direct_state(
+                persisted_state
+            )
+
+            # Spent before the comparison: a mismatch cannot be retried.
+            _reserve_direct_authorization(persisted_state)
+
+            if presented != tuple(scope["argv"]):
+                raise MerchantRuntimeHandoffError(
+                    "Runtime apply does not match the user-authorized scope"
+                )
+
+            authorization = issue_runtime_apply_authorization(
+                scope["confirmation"],
+                dispatch_receipt,
+            )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "RESERVE_AUTHORIZATION",
+            exc,
+        ) from exc
+
+    try:
+        return _invoke_authorized_apply(
+            (
+                *scope["argv"],
+                "--apply",
+                "--proposal-hash",
+                scope["proposal_hash"],
+            ),
             authorization,
             write_command_factory=write_command_factory,
         )

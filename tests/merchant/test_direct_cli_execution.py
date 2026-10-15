@@ -11,12 +11,22 @@ from claude.agents.tools.merchant.write_commands import (
 )
 
 
-def test_cli_main_rejects_implicit_unreserved_create(capsys):
+class RecordingCreate:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, command, database, payload):
+        self.calls.append((command, database, payload))
+        return {"success": True, "database": database}
+
+
+def test_cli_main_allows_direct_create_on_test_target(capsys):
+    writes = RecordingCreate()
     factory_calls = []
 
     def factory(database):
         factory_calls.append(database)
-        raise AssertionError("Factory must not be called")
+        return writes
 
     exit_code = main(
         [
@@ -28,13 +38,14 @@ def test_cli_main_rejects_implicit_unreserved_create(capsys):
         write_command_factory=factory,
     )
 
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert factory_calls == []
-    assert json.loads(captured.err)["success"] is False
+    assert exit_code == 0
+    assert factory_calls == ["test"]
+    assert [call[:2] for call in writes.calls] == [
+        ("merchant create", "test"),
+    ]
 
 
-def test_cli_main_rejects_explicit_unreserved_create(capsys):
+def test_cli_main_rejects_explicit_runtime_create(capsys):
     factory_calls = []
 
     def factory(database):
@@ -43,7 +54,7 @@ def test_cli_main_rejects_explicit_unreserved_create(capsys):
 
     exit_code = main(
         [
-            "--database", "test",
+            "--database", "runtime",
             "merchant", "create",
             "--execute",
             "--code", "CP3C002",
