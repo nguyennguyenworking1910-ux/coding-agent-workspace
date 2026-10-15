@@ -1264,15 +1264,23 @@ class IntentParser:
             & operation_set
         )
 
-        merchant_requested = (
-            bool(
-                MERCHANT_OPERATIONS
-                & operation_set
+        # Repository development takes precedence over Merchant
+        # domain wording. Merchant apply remains a separate,
+        # explicitly authorized operational workflow.
+        if (
+            software_development_requested
+            and Operation.MERCHANT_APPLY.value in operation_set
+        ):
+            raise IntentParserConfigError(
+                "Mixed Merchant apply and development intents "
+                "must be submitted separately"
             )
-            or (
-                Domain.MERCHANT.value
-                in domains
-                and not software_development_requested
+
+        merchant_requested = (
+            not software_development_requested
+            and (
+                bool(MERCHANT_OPERATIONS & operation_set)
+                or Domain.MERCHANT.value in domains
             )
         )
 
@@ -1285,8 +1293,28 @@ class IntentParser:
 
             return ["merchant-manager"]
 
+        # Code-development tasks use development agents, even
+        # when the classifier also mentions Merchant operations.
+        development_operations = {
+            Operation.FIX.value,
+            Operation.BUILD.value,
+            Operation.REFACTOR.value,
+            Operation.REVIEW.value,
+            Operation.TEST.value,
+        }
+
+        routing_operations = (
+            [
+                operation
+                for operation in operations
+                if operation in development_operations
+            ]
+            if software_development_requested
+            else operations
+        )
+
         ranked_operations = sorted(
-            operations,
+            routing_operations,
             key=lambda operation: (
                 OPERATION_PRIORITY.get(
                     operation,

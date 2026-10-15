@@ -738,3 +738,48 @@ class IntentParserTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_development_operations_override_merchant_routing():
+    """Development work must not become Merchant operations."""
+    from claude.system.intent_parser import (
+        IntentParser,
+        IntentParserConfigError,
+    )
+
+    parser = object.__new__(IntentParser)
+    parser.enabled_agents = {
+        "coder",
+        "bug-fixer",
+        "reviewer",
+        "merchant-manager",
+    }
+
+    cases = [
+        (["build", "merchant_propose"], ["coder"]),
+        (["fix", "merchant_read"], ["bug-fixer"]),
+        (["test", "merchant_propose"], ["reviewer"]),
+        (["merchant_propose"], ["merchant-manager"]),
+        (["merchant_read"], ["merchant-manager"]),
+        (["merchant_apply"], ["merchant-manager"]),
+    ]
+
+    for operations, expected in cases:
+        actual = parser._candidate_agents(
+            operations,
+            ["merchant"],
+        )
+        assert actual == expected, (
+            f"{operations}: expected {expected}, got {actual}"
+        )
+
+    import pytest
+
+    with pytest.raises(
+        IntentParserConfigError,
+        match="Mixed Merchant apply and development intents",
+    ):
+        parser._candidate_agents(
+            ["build", "merchant_apply"],
+            ["merchant"],
+        )
