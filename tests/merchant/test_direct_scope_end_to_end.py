@@ -386,4 +386,3 @@ def test_direct_scope_runtime_rejects_unconfirmed_state():
         )
 
     assert called == []
-
