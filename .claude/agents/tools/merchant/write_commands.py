@@ -203,8 +203,10 @@ class MerchantWriteCommands:
         command: str,
         database: str,
         payload: Mapping[str, Any],
+        *,
+        runtime_authorization: Any = None,
     ) -> dict[str, Any]:
-        """Execute a validated write without proposal authorization."""
+        """Execute a write; runtime requires exact one-use authority."""
 
         normalized_command = normalize_command(command)
         normalized_database = normalize_database_target(database)
@@ -234,6 +236,24 @@ class MerchantWriteCommands:
             payload,
             preflight_result=preflight_result,
         )
+
+        # Runtime authorization is verified before repository mutation.
+        if normalized_database == "runtime":
+            from .cli_contract import (
+                RuntimeApplyAuthorization,
+                RuntimeWriteDeniedError,
+            )
+
+            if type(runtime_authorization) is not RuntimeApplyAuthorization:
+                raise RuntimeWriteDeniedError(
+                    "Runtime EXECUTE requires exact trusted authorization"
+                )
+
+            runtime_authorization.consume_direct(
+                command=normalized_command,
+                database=normalized_database,
+                payload=prepared_payload,
+            )
 
         # A direct create must generate a fresh identity.
         # Legacy proposal IDs are deterministic from the payload.

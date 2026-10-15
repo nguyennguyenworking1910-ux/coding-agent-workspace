@@ -1,4 +1,4 @@
-﻿"""Trusted in-process bridge for one confirmed Merchant runtime apply.
+"""Trusted in-process bridge for one confirmed Merchant runtime apply.
 
 This module intentionally has no command-line entry point. The ordinary
 Merchant Manager adapter remains read/propose-only. Controlled orchestration
@@ -483,9 +483,7 @@ def invoke_authorized_scope_apply(
         return _invoke_authorized_apply(
             (
                 *scope["argv"],
-                "--apply",
-                "--proposal-hash",
-                scope["proposal_hash"],
+                "--execute",
             ),
             authorization,
             write_command_factory=write_command_factory,

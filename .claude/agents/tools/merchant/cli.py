@@ -675,6 +675,14 @@ def dispatch_write_command(
                 "--proposal-hash is not valid with --execute"
             )
 
+        if database == "runtime":
+            return commands.execute(
+                command,
+                database,
+                payload,
+                runtime_authorization=runtime_authorization,
+            )
+
         return commands.execute(
             command,
             database,
@@ -1096,6 +1104,18 @@ def main(
                 commands,
             )
         elif command in WRITE_COMMANDS:
+            # Reject forged runtime capabilities before handler creation.
+            if database == "runtime" and args.mode == "EXECUTE":
+                from .cli_contract import (
+                    RuntimeApplyAuthorization,
+                    RuntimeWriteDeniedError,
+                )
+
+                if type(runtime_authorization) is not RuntimeApplyAuthorization:
+                    raise RuntimeWriteDeniedError(
+                        "Runtime EXECUTE requires exact trusted authorization"
+                    )
+
             # Fail closed before constructing write handlers.
             if (
                 args.mode == "EXECUTE"

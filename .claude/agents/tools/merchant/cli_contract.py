@@ -195,6 +195,21 @@ class RuntimeApplyAuthorization:
     def __reduce_ex__(self, _protocol: int) -> Any:
         raise TypeError("Runtime authorization cannot be serialized")
 
+    def consume_direct(
+        self,
+        *,
+        command: Any,
+        database: Any,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """Consume the existing sealed binding for direct execution."""
+        self._consume(
+            command=command,
+            database=database,
+            payload=payload,
+            proposal_hash=self._confirmation["proposal_hash"],
+        )
+
     def _consume(
         self,
         *,
