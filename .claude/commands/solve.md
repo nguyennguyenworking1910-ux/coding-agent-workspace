@@ -76,7 +76,12 @@ envelope passes every check below.
 3. **Current, matching, and unspent**
 
    - Honour any issue and expiry timestamps carried by the envelope.
-   - `raw_request` must match the current request in `$ARGUMENTS`.
+   - Treat a leading `--confirm` followed by whitespace as a command option, not request content.
+   - Compare `raw_request` with the request text after removing only that leading option and trimming surrounding whitespace.
+   - Otherwise, compare against `$ARGUMENTS` after trimming surrounding whitespace.
+   - Require `confirmed: true` in the persisted envelope when `--confirm` is supplied.
+   - Keep exact request matching, expiry, session, and unspent-envelope checks.
+   - Never use `--confirm` instead of the separate Merchant apply confirmation token.
    - An envelope for different work is stale, even if the work is related.
    - An envelope authorizes one dispatch only. Never reuse a spent envelope.
 

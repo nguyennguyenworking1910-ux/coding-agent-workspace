@@ -266,7 +266,17 @@ def build_team_state_snapshot(
         return None
 
     if team_state is None:
-        return None
+        # A new local session has no state file yet.
+        # An unreadable existing file must still fail closed.
+        from team_lifecycle import team_state_path
+
+        if team_state_path(session_id).exists():
+            return None
+
+        return {
+            agent_id: {"exists": False}
+            for agent_id in selected_agents
+        }
 
     teammates = team_state.get("teammates", {})
     snapshot = {}

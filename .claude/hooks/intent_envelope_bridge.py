@@ -240,6 +240,31 @@ def render_intent_envelope(
         indent=2,
     )
 
+    # Reuse the existing snapshot builder.
+    # Do not infer that a teammate is absent when state is unreadable.
+    try:
+        from intent_gate import build_team_state_snapshot
+
+        snapshot = build_team_state_snapshot(
+            session_id,
+            envelope["selected_agents"],
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "Cannot load trusted team-state snapshot"
+        ) from error
+
+    if snapshot is None:
+        raise RuntimeError(
+            "Team state unavailable; refusing blind dispatch"
+        )
+
+    snapshot_json = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        indent=2,
+    )
+
     return (
         "INTENT_ENVELOPE_JSON\n"
         "```json\n"
@@ -247,7 +272,12 @@ def render_intent_envelope(
         "```\n"
         "This envelope was persisted by the "
         "trusted intent hook for this exact "
-        "Claude Code session."
+        "Claude Code session.\n\n"
+        "TEAM_STATE_SNAPSHOT_JSON\n"
+        "```json\n"
+        f"{snapshot_json}\n"
+        "```\n"
+        "Canonical teammate state for selected agents."
     )
 
 
