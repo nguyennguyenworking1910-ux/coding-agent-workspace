@@ -1,4 +1,4 @@
-﻿"""Pure trusted-consumption gate for Document Revision resolution receipts."""
+"""Pure trusted-consumption gate for Document Revision resolution receipts."""
 
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ def bind_document_revision_resolution_receipt(
                 return _rejected(query=query)
         project_id = None
 
-    if not validate_receipt_dict(receipt, query):
+    if not validate_receipt_dict(receipt):
         return _rejected(query=query)
 
     # -------------------------------------------------

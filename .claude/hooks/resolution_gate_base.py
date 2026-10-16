@@ -32,7 +32,7 @@ def clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def validate_pane_id(pane_session_id: Any, receipt_pane_id: Any, query: str) -> bool:
+def validate_pane_id(pane_session_id: Any, receipt_pane_id: Any) -> bool:
     """Verify receipt pane_session_id matches expected pane."""
     pane_id = clean_text(pane_session_id)
     if not pane_id or clean_text(receipt_pane_id) != pane_id:
@@ -40,7 +40,7 @@ def validate_pane_id(pane_session_id: Any, receipt_pane_id: Any, query: str) -> 
     return True
 
 
-def validate_receipt_dict(receipt: Any, query: str) -> bool:
+def validate_receipt_dict(receipt: Any) -> bool:
     """Verify receipt is a dict."""
     return isinstance(receipt, dict)
 

@@ -1,4 +1,4 @@
-﻿"""Pure trusted-consumption gate for Project resolution receipts."""
+"""Pure trusted-consumption gate for Project resolution receipts."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def bind_project_resolution_receipt(
     if not merchant_id:
         return _rejected(query=query)
 
-    if not validate_receipt_dict(receipt, query):
+    if not validate_receipt_dict(receipt):
         return _rejected(query=query)
 
     if not project_resolution_receipt_matches(

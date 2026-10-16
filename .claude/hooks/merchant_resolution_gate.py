@@ -1,4 +1,4 @@
-﻿"""Pure trusted-consumption gate for Merchant resolution receipts."""
+"""Pure trusted-consumption gate for Merchant resolution receipts."""
 
 from __future__ import annotations
 
@@ -89,10 +89,10 @@ def bind_merchant_resolution_receipt(
     if query is None:
         return _rejected()
 
-    if not validate_receipt_dict(receipt, query):
+    if not validate_receipt_dict(receipt):
         return _rejected(query=query)
 
-    if not validate_pane_id(pane_session_id, receipt.get("pane_session_id"), query):
+    if not validate_pane_id(pane_session_id, receipt.get("pane_session_id")):
         return _rejected(query=query)
 
     if not pending_merchant_resolution_matches(
