@@ -144,6 +144,51 @@ def test_user_confirmed_scope_reaches_handler_once(capsys):
     assert len(calls) == 1
 
 
+def test_direct_scope_executes_without_legacy_confirmation(
+    monkeypatch, capsys
+):
+    def forbidden_legacy(*args, **kwargs):
+        raise AssertionError(
+            "Direct Scope must not use legacy confirmation"
+        )
+
+    monkeypatch.setattr(
+        intent_gate,
+        "authorize_local_auto_apply",
+        forbidden_legacy,
+    )
+    monkeypatch.setattr(
+        intent_gate,
+        "load_merchant_confirmation",
+        forbidden_legacy,
+    )
+
+    result, _ = submit()
+    assert "hookSpecificOutput" in result
+    assert dispatch() is None
+
+    calls = []
+    commands = MerchantWriteCommands({
+        "project update": lambda payload: (
+            calls.append(payload) or {"status": "committed"}
+        )
+    })
+
+    exit_code = invoke_authorized_scope_apply(
+        SESSION_ID,
+        ARGV,
+        write_command_factory=lambda database: commands,
+    )
+
+    assert exit_code == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["success"] is True
+    assert output["mode"] == "EXECUTE"
+    assert output["database"] == "runtime"
+    assert len(calls) == 1
+
+
 def test_unconfirmed_scope_does_not_create_write_session():
     result, parser = submit(confirmed=False)
 
