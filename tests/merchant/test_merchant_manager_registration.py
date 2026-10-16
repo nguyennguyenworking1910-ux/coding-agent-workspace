@@ -91,7 +91,7 @@ def test_registry_targets_only_the_runtime_cli_entry_point():
         ".claude/system/merchant_runtime_handoff.py"
     )
     assert access["runtime_handoff_method"] == (
-        "invoke_confirmed_merchant_session_apply"
+        "invoke_authorized_scope_apply"
     )
 
 
@@ -164,7 +164,7 @@ def test_registry_freezes_the_write_operation_allowlist():
 def test_registry_separates_ordinary_cli_from_trusted_handoff():
     access = _merchant_entry()["merchant_access"]
 
-    assert access["checkpoint_6_write_mode"] == "propose_only"
+    assert access["checkpoint_6_write_mode"] == "direct_scope_execute"
     assert access["runtime_apply"] == (
         "trusted_in_process_handoff_only"
     )
@@ -172,7 +172,7 @@ def test_registry_separates_ordinary_cli_from_trusted_handoff():
         ".claude/system/merchant_runtime_handoff.py"
     )
     assert access["runtime_handoff_method"] == (
-        "invoke_confirmed_merchant_session_apply"
+        "invoke_authorized_scope_apply"
     )
     assert "without reading or passing database credentials" in (
         access["note"]

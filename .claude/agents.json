@@ -133,7 +133,7 @@
           "complex_task": 4.0
         }
       },
-      "description": "Reads Merchant project state, prepares confirmation-ready updates, and participates in exact confirmed applies through the orchestration-only in-process handoff",
+      "description": "Manages Merchant data through existing CLI and repository commands; supports trusted Direct Scope execution and legacy proposal compatibility",
       "enabled": true,
       "type": "merchant_manager",
       "definition": ".claude/agents/merchant-manager.md",
@@ -164,10 +164,10 @@
           "procurement update",
           "integration identifier-set"
         ],
-        "checkpoint_6_write_mode": "propose_only",
+        "checkpoint_6_write_mode": "direct_scope_execute",
         "runtime_apply": "trusted_in_process_handoff_only",
         "runtime_handoff": ".claude/system/merchant_runtime_handoff.py",
-        "runtime_handoff_method": "invoke_confirmed_merchant_session_apply",
+        "runtime_handoff_method": "invoke_authorized_scope_apply",
         "note": "The teammate invokes the checked-in agent CLI through Bash without reading or passing database credentials; that ordinary CLI remains read/propose-only. Controlled orchestration may reserve one accepted persisted session and perform one exact confirmed apply only through the opaque in-process handoff. PostgreSQL is authoritative for current state."
       }
     },
