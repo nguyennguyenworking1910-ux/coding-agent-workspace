@@ -406,12 +406,22 @@ def test_stale_tmux_receipt_cannot_complete_new_run(
         is not None
     )
 
-    # Simulate a stale receipt surviving across a lifecycle
-    # boundary so we can prove it cannot authorize run-new.
-    assert mark_teammate_idle_reusable(
-        lead_session_id,
-        teammate_name,
-    )
+    # Simulate a completed old lifecycle using isolated test state.
+    # Do not bypass production release validation.
+    from team_lifecycle import locked_team_state
+
+    with locked_team_state(lead_session_id) as state:
+        assert state is not None
+        record = state["teammates"][teammate_name]
+        assert record["current_run_id"] == "run-old"
+        assert record["current_task_id"] == "task-old"
+
+        record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+        record["last_completed_task_id"] = "task-old"
+        record["current_task_id"] = None
+        record["current_run_id"] = None
+        record["authorized_operations"] = []
+        record["authorized_selected_agents"] = []
 
     decision, reused_name = allocate_teammate(
         lead_session_id,

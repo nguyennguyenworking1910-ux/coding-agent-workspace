@@ -203,13 +203,25 @@ def test_stop_clears_run_state_after_teammate_released(
     _create_run()
     _create_running_teammate()
 
-    assert (
-        mark_teammate_idle_reusable(
-            SESSION_ID,
-            "merchant-manager",
-        )
-        is True
+    # Arrange an already-released teammate in isolated test state.
+    # Production release must use authenticated lifecycle validation.
+    from claude.hooks.team_lifecycle import (
+        TeammateLifecycleStatus,
+        locked_team_state,
     )
+
+    with locked_team_state(SESSION_ID) as state:
+        assert state is not None
+        record = state["teammates"]["merchant-manager"]
+        assert record["current_run_id"] == RUN_ID
+        assert record["current_task_id"] == TASK_ID
+
+        record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+        record["last_completed_task_id"] = TASK_ID
+        record["current_task_id"] = None
+        record["current_run_id"] = None
+        record["authorized_operations"] = []
+        record["authorized_selected_agents"] = []
 
     _run_cleanup(
         monkeypatch,

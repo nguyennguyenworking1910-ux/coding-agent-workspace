@@ -1350,3 +1350,89 @@ def test_failed_recovery_rejects_without_sendmessage_terminal_report(
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_release_requires_authenticated_terminal_report(tmp_path, monkeypatch):
+    from claude.hooks import team_lifecycle as lifecycle
+
+    monkeypatch.setenv(
+        lifecycle.TEAM_STATE_DIR_ENV_VAR,
+        str(tmp_path),
+    )
+
+    session = "security-release-test"
+    name, _ = lifecycle.get_or_create_teammate(
+        session, "reviewer", "reviewer"
+    )
+
+    lifecycle.mark_teammate_running(
+        session, name, "run-security", "task-security"
+    )
+
+    released, reason = lifecycle.release_reported_teammate_to_idle(
+        session, name
+    )
+
+    assert released is False
+    assert reason
+    assert lifecycle.get_teammate_status(
+        session, name
+    ) != lifecycle.TeammateLifecycleStatus.IDLE_REUSABLE.value
+
+def test_legacy_idle_shortcut_rejects_running_without_report(
+    tmp_path, monkeypatch
+):
+    from claude.hooks import team_lifecycle as lifecycle
+
+    monkeypatch.setenv(
+        lifecycle.TEAM_STATE_DIR_ENV_VAR,
+        str(tmp_path),
+    )
+
+    session = "legacy-shortcut-security-test"
+    name, _ = lifecycle.get_or_create_teammate(
+        session, "reviewer", "reviewer"
+    )
+
+    lifecycle.mark_teammate_running(
+        session, name, "run-security", "task-security"
+    )
+
+    result = lifecycle.mark_teammate_idle_reusable(
+        session, name
+    )
+
+    assert result is False
+    assert lifecycle.get_teammate_status(
+        session, name
+    ) == lifecycle.TeammateLifecycleStatus.RUNNING.value
+
+def test_legacy_idle_shortcut_rejects_unverified_acknowledgement(
+    tmp_path, monkeypatch
+):
+    from claude.hooks import team_lifecycle as lifecycle
+
+    monkeypatch.setenv(
+        lifecycle.TEAM_STATE_DIR_ENV_VAR,
+        str(tmp_path),
+    )
+
+    session = "unverified-acknowledgement-test"
+    name, _ = lifecycle.get_or_create_teammate(
+        session, "reviewer", "reviewer"
+    )
+
+    assert lifecycle.mark_teammate_running(
+        session, name, "run-security", "task-security"
+    )
+
+    # Legacy API can acknowledge without authenticating a report.
+    assert lifecycle.mark_teammate_acknowledged(session, name)
+
+    released = lifecycle.mark_teammate_idle_reusable(
+        session, name
+    )
+
+    assert released is False
+    assert lifecycle.get_teammate_status(
+        session, name
+    ) != lifecycle.TeammateLifecycleStatus.IDLE_REUSABLE.value

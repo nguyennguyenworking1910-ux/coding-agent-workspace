@@ -1490,32 +1490,61 @@ def mark_teammate_idle_reusable(
     session_id: Any,
     teammate_name: str,
 ) -> bool:
-    """Mark a teammate as idle and available for reuse."""
+    """Release an unused allocation or an authenticated reported task.
+
+    Active, failed, and unauthenticated tasks must never be released
+    through this legacy compatibility API.
+    """
+    # Use the authoritative release API for completed tasks.
+    # It owns locking, canonical identity, report validation,
+    # run/task binding, unresolved-write checks, and persistence.
     with locked_team_state(session_id) as state:
         if state is None:
             return False
 
-        teammates = state.get("teammates", {})
-        record = teammates.get(teammate_name)
-
-        if record is None:
+        record = state.get("teammates", {}).get(teammate_name)
+        if not isinstance(record, dict):
             return False
 
-        current_task_id = str(record.get("current_task_id") or "").strip()
+        if record.get("canonical_name") != teammate_name:
+            return False
 
         if has_unresolved_direct_writes(record):
+            return False
+
+        status = record.get("status")
+
+        if status == TeammateLifecycleStatus.CREATED.value:
+            if (
+                record.get("current_run_id") is not None
+                or record.get("current_task_id") is not None
+                or record.get("authorized_operations")
+                or record.get("authorized_selected_agents")
+                or record.get("result_received")
+                or record.get("report_source")
+            ):
                 return False
 
-        record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+            record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
+            record["authorized_operations"] = []
+            record["authorized_selected_agents"] = []
+            _touch_transition(record)
+            return True
 
-        if current_task_id:
-            record["last_completed_task_id"] = current_task_id
+        if status not in {
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+        }:
+            return False
 
-        record["current_task_id"] = None
-        record["current_run_id"] = None
-        record["authorized_operations"] = []
-        record["authorized_selected_agents"] = []
-        return True
+    # Do not call another locking API inside locked_team_state.
+    released, _reason = release_reported_teammate_to_idle(
+        session_id,
+        teammate_name,
+    )
+    return released
+
 
 def claim_terminal_recovery(
     session_id: Any,
