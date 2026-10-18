@@ -96,7 +96,6 @@ class AgentConfig:
         Returns:
             Formatted configuration summary
         """
-        features = self.get_features()
         summary = "Agent Configuration:\n"
         summary += "=" * 50 + "\n"
 
