@@ -59,12 +59,10 @@ if __package__ in (None, ""):
     )
 
     from runtime_state import (
-        load_state,
         locked_state,
     )
     from team_result_payload import (
         coalesced_text as _coalesced_text,
-        embedded_json_objects,
         send_message_body,
         trusted_post_tool_sender,
     )
@@ -73,18 +71,11 @@ if __package__ in (None, ""):
         record_teammate_result,
     )
     from team_result_context import (
-        INVALID_TERMINAL_RESULT_FEEDBACK,
         MISSING_RESULT_FEEDBACK,
         PENDING_RESULT_FEEDBACK,
         active_task_id,
         bounded_terminal_result_failure,
         emit_post_tool_context,
-    )
-    from resolution_staging_context import (
-        resolution_stage_context,
-    )
-    from resolution_cli_invocation import (
-        parse_resolution_cli_invocation,
     )
     from team_result_dispatcher import (
         DispatcherDependencies,
@@ -131,10 +122,7 @@ if __package__ in (None, ""):
         MERCHANT_APPLY_FAILED_OUTCOME,
         MERCHANT_APPLY_SUCCESS_OUTCOME,
         MERCHANT_PROPOSAL_READY_OUTCOME,
-        MERCHANT_PROPOSAL_RESULT_MARKER,
         MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
-        TEAM_RESULT_CONTRACT_VERSION,
-        TEAM_RESULT_MARKER,
         task_result_candidate_from_message,
     )
     from merchant_result_contract import (
@@ -146,12 +134,10 @@ if __package__ in (None, ""):
         merchant_proposal_from_tool_response,
     )
     from team_lifecycle import (
-        claim_terminal_recovery,
         find_unique_active_teammate_owner,
         load_team_state,
         mark_bound_report_received,
         mark_report_received,
-        mark_teammate_failed,
         release_reported_teammate_to_idle,
         bind_reported_teammate_pane_session,
         trusted_teammate_pane_session_matches,
@@ -160,7 +146,6 @@ if __package__ in (None, ""):
         MERCHANT_MANAGER_AGENT,
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
-        validate_proposal_result,
         proposal_requires_local_auto_receipt,
     )
     from tmux_result_receipt import (
@@ -179,7 +164,6 @@ if __package__ in (None, ""):
         load_pending_merchant_completeness,
         pending_merchant_completeness_matches,
         stage_pending_merchant_completeness,
-        validate_completeness_result,
     )
     from merchant_completeness_gate import (
         validate_completeness_receipt_for_outcome,
@@ -203,18 +187,12 @@ if __package__ in (None, ""):
     from tmux_step_resolution import (
         stage_pending_step_resolution,
         clear_pending_step_resolution,
-        load_pending_step_resolution,
-    )
-    from step_resolution_gate import (
-        BOUND as STEP_BOUND,
-        bind_step_resolution_receipt,
     )
     from tmux_document_revision_resolution import (
         stage_pending_document_revision_resolution,
         clear_pending_document_revision_resolution,
     )
     from merchant_runtime_handoff_gate import (
-        MERCHANT_APPLY_HANDOFF_MARKER,
         PreparedRuntimeHandoff,
         contains_handoff_marker,
         handoff_candidate_from_message,
@@ -228,12 +206,10 @@ if __package__ in (None, ""):
 
 else:
     from .runtime_state import (
-        load_state,
         locked_state,
     )
     from .team_result_payload import (
         coalesced_text as _coalesced_text,
-        embedded_json_objects,
         send_message_body,
         trusted_post_tool_sender,
     )
@@ -242,18 +218,11 @@ else:
         record_teammate_result,
     )
     from .team_result_context import (
-        INVALID_TERMINAL_RESULT_FEEDBACK,
         MISSING_RESULT_FEEDBACK,
         PENDING_RESULT_FEEDBACK,
         active_task_id,
         bounded_terminal_result_failure,
         emit_post_tool_context,
-    )
-    from .resolution_staging_context import (
-        resolution_stage_context,
-    )
-    from .resolution_cli_invocation import (
-        parse_resolution_cli_invocation,
     )
     from .team_result_dispatcher import (
         DispatcherDependencies,
@@ -300,10 +269,7 @@ else:
         MERCHANT_APPLY_FAILED_OUTCOME,
         MERCHANT_APPLY_SUCCESS_OUTCOME,
         MERCHANT_PROPOSAL_READY_OUTCOME,
-        MERCHANT_PROPOSAL_RESULT_MARKER,
         MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
-        TEAM_RESULT_CONTRACT_VERSION,
-        TEAM_RESULT_MARKER,
         task_result_candidate_from_message,
     )
     from .merchant_result_contract import (
@@ -315,12 +281,10 @@ else:
         merchant_proposal_from_tool_response,
     )
     from .team_lifecycle import (
-        claim_terminal_recovery,
         find_unique_active_teammate_owner,
         load_team_state,
         mark_bound_report_received,
         mark_report_received,
-        mark_teammate_failed,
         release_reported_teammate_to_idle,
         bind_reported_teammate_pane_session,
         trusted_teammate_pane_session_matches,
@@ -329,7 +293,6 @@ else:
         MERCHANT_MANAGER_AGENT,
         MERCHANT_PROPOSE_OPERATION,
         capture_proposal_receipt,
-        validate_proposal_result,
         proposal_requires_local_auto_receipt,
     )
     from .tmux_result_receipt import (
@@ -348,7 +311,6 @@ else:
         load_pending_merchant_completeness,
         pending_merchant_completeness_matches,
         stage_pending_merchant_completeness,
-        validate_completeness_result,
     )
     from .merchant_completeness_gate import (
         validate_completeness_receipt_for_outcome,
@@ -373,16 +335,11 @@ else:
         clear_pending_step_resolution,
         stage_pending_step_resolution,
     )
-    from .step_resolution_gate import (
-        BOUND as STEP_BOUND,
-        bind_step_resolution_receipt,
-    )
     from .tmux_document_revision_resolution import (
         stage_pending_document_revision_resolution,
         clear_pending_document_revision_resolution,
     )
     from .merchant_runtime_handoff_gate import (
-        MERCHANT_APPLY_HANDOFF_MARKER,
         PreparedRuntimeHandoff,
         contains_handoff_marker,
         handoff_candidate_from_message,
