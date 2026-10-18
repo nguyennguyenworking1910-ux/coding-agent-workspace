@@ -8,7 +8,7 @@ compatibility layer.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 try:
     from team_result_dependency_protocols import (

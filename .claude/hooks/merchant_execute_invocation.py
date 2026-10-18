@@ -7,7 +7,7 @@ PostToolUse events or establish database commit evidence.
 from __future__ import annotations
 
 import shlex
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import PureWindowsPath
 from typing import Any
 
 from claude.agents.tools.merchant.cli import build_argument_parser

@@ -9,10 +9,9 @@ and dependency-injection seams remain available through thin adapters.
 
 from __future__ import annotations
 
-import shlex
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 try:
     from team_result_dependency_protocols import (

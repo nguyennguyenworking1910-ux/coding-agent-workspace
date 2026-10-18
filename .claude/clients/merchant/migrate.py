@@ -32,7 +32,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 try:
     import psycopg
