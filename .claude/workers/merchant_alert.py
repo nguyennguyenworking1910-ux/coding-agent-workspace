@@ -22,7 +22,7 @@ import sys
 import types
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -41,7 +41,7 @@ try:
     )
     from claude.workers.merchant_alert_adapters import (
         DeliveryAdapter,
-        InternalDeliveryAdapter,
+        InternalDeliveryAdapter as InternalDeliveryAdapter,
         build_delivery_adapter,
     )
     from claude.workers.merchant_alert_contract import (
@@ -79,7 +79,7 @@ except ModuleNotFoundError as exc:
     )
     from claude.workers.merchant_alert_adapters import (  # type: ignore
         DeliveryAdapter,
-        InternalDeliveryAdapter,
+        InternalDeliveryAdapter as InternalDeliveryAdapter,
         build_delivery_adapter,
     )
     from claude.workers.merchant_alert_contract import (  # type: ignore

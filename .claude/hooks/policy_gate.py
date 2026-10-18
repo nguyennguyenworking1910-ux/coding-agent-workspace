@@ -46,10 +46,10 @@ if __package__ in (None, ""):
     )
 
     from team_lifecycle import (  # noqa: E402
+        check_role_in_selected_agents as check_role_in_selected_agents,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
         allocate_teammate,
-        check_role_in_selected_agents,
         find_unique_active_teammate_owner,
         mark_teammate_running,
         reserve_reusable_teammate,
@@ -105,10 +105,10 @@ else:
     )
 
     from .team_lifecycle import (
+        check_role_in_selected_agents as check_role_in_selected_agents,
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
         allocate_teammate,
-        check_role_in_selected_agents,
         find_unique_active_teammate_owner,
         mark_teammate_running,
         reserve_reusable_teammate,

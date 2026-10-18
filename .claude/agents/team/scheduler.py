@@ -5,13 +5,11 @@
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
-import json
 
 from ..base_agent import BaseAgent, AgentConfig
 from ...system.schemas import TaskResult
 from ..tools.scheduler import SCHEDULER_TOOLS, get_calendar_client
-from ..system_init import get_architecture_check, architecture_acknowledgment
+from ..system_init import get_architecture_check as get_architecture_check, architecture_acknowledgment as architecture_acknowledgment
 
 
 @dataclass

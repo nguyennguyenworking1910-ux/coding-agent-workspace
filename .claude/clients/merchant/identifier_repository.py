@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from claude.agents.tools.merchant.identifier_engine import (
-    IdentifierConflictError,
+    IdentifierConflictError as IdentifierConflictError,
     IdentifierMutationPlan,
     IdentifierVersionConflictError,
     propose_identifier_mutation,
