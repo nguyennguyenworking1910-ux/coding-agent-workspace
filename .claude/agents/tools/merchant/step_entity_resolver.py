@@ -8,7 +8,6 @@ from claude.agents.tools.merchant.entity_resolution_primitives import (
 
 import re
 import unicodedata
-import uuid
 
 from dataclasses import dataclass
 from enum import Enum

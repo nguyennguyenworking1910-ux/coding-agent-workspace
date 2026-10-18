@@ -24,30 +24,24 @@ from __future__ import annotations
 try:
     from tmux_handler_base import (
         LOCK_TIMEOUT_SECONDS,
-        MAX_RESOLUTION_AGE_SECONDS,
         canonical_uuid_text,
         clean_text,
-        get_handler_dir,
         nonempty_text,
         session_key,
     )
 except ModuleNotFoundError:
     from .tmux_handler_base import (
         LOCK_TIMEOUT_SECONDS,
-        MAX_RESOLUTION_AGE_SECONDS,
         canonical_uuid_text,
         clean_text,
-        get_handler_dir,
         nonempty_text,
         session_key,
     )
 
-import hashlib
 import json
 import os
 import tempfile
 import time
-import uuid
 
 from pathlib import Path
 from typing import Any
