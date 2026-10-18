@@ -55,6 +55,8 @@ from typing import Any
 from filelock import FileLock, Timeout
 
 
+_nonempty_exact_text = nonempty_text
+
 CLAUDE_DIR = Path(__file__).resolve().parents[1]
 
 PENDING_STEP_RESOLUTION_DIR = (
@@ -188,18 +190,6 @@ def pending_step_resolution_dir() -> Path:
     )
 
 
-def session_key(
-    session_id: Any,
-) -> str:
-    value = clean_text(
-        session_id
-    )
-
-    return hashlib.sha256(
-        value.encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
 
 def pending_step_resolution_path(
@@ -220,32 +210,8 @@ def pending_step_resolution_lock_path(
     )
 
 
-def clean_text(
-    value: Any,
-) -> str:
-    return str(
-        value or ""
-    ).strip()
 
 
-def _nonempty_exact_text(
-    value: Any,
-) -> str | None:
-    if not isinstance(
-        value,
-        str,
-    ):
-        return None
-
-    cleaned = value.strip()
-
-    if (
-        not cleaned
-        or cleaned != value
-    ):
-        return None
-
-    return cleaned
 
 
 def _optional_exact_text(
