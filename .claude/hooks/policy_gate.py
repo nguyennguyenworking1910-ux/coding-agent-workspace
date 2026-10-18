@@ -1577,6 +1577,43 @@ def merchant_resolution_use_decision(
     return None
 
 
+
+def _bind_parent_merchant_receipt(
+    merchant_receipt: Any,
+    *,
+    pane_session_id: Any,
+    owner_session_id: Any,
+    owner_run_id: Any,
+    owner_task_id: Any,
+    merchant_expected_query: Any,
+) -> Any:
+    """Bind parent Merchant evidence without changing gate decisions."""
+    merchant_binding = (
+        bind_merchant_resolution_receipt(
+            merchant_receipt,
+            pane_session_id=(
+                pane_session_id
+            ),
+            owner_session_id=(
+                owner_session_id
+            ),
+            teammate_name=(
+                MERCHANT_MANAGER_AGENT
+            ),
+            run_id=(
+                owner_run_id
+            ),
+            task_id=(
+                owner_task_id
+            ),
+            expected_query=(
+                merchant_expected_query
+            ),
+        )
+    )
+
+    return merchant_binding
+
 def project_resolution_use_decision(
     payload: dict[str, Any],
     session_id: Any,
@@ -1766,28 +1803,13 @@ def project_resolution_use_decision(
         )
     )
 
-    merchant_binding = (
-        bind_merchant_resolution_receipt(
-            merchant_receipt,
-            pane_session_id=(
-                pane_session_id
-            ),
-            owner_session_id=(
-                owner_session_id
-            ),
-            teammate_name=(
-                MERCHANT_MANAGER_AGENT
-            ),
-            run_id=(
-                owner_run_id
-            ),
-            task_id=(
-                owner_task_id
-            ),
-            expected_query=(
-                merchant_expected_query
-            ),
-        )
+    merchant_binding = _bind_parent_merchant_receipt(
+        merchant_receipt,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        owner_run_id=owner_run_id,
+        owner_task_id=owner_task_id,
+        merchant_expected_query=merchant_expected_query,
     )
 
     if (
@@ -2098,28 +2120,13 @@ def step_resolution_use_decision(
         )
     )
 
-    merchant_binding = (
-        bind_merchant_resolution_receipt(
-            merchant_receipt,
-            pane_session_id=(
-                pane_session_id
-            ),
-            owner_session_id=(
-                owner_session_id
-            ),
-            teammate_name=(
-                MERCHANT_MANAGER_AGENT
-            ),
-            run_id=(
-                owner_run_id
-            ),
-            task_id=(
-                owner_task_id
-            ),
-            expected_query=(
-                merchant_expected_query
-            ),
-        )
+    merchant_binding = _bind_parent_merchant_receipt(
+        merchant_receipt,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        owner_run_id=owner_run_id,
+        owner_task_id=owner_task_id,
+        merchant_expected_query=merchant_expected_query,
     )
 
     if (
@@ -2535,28 +2542,13 @@ def document_revision_resolution_use_decision(
         )
     )
 
-    merchant_binding = (
-        bind_merchant_resolution_receipt(
-            merchant_receipt,
-            pane_session_id=(
-                pane_session_id
-            ),
-            owner_session_id=(
-                owner_session_id
-            ),
-            teammate_name=(
-                MERCHANT_MANAGER_AGENT
-            ),
-            run_id=(
-                owner_run_id
-            ),
-            task_id=(
-                owner_task_id
-            ),
-            expected_query=(
-                merchant_expected_query
-            ),
-        )
+    merchant_binding = _bind_parent_merchant_receipt(
+        merchant_receipt,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        owner_run_id=owner_run_id,
+        owner_task_id=owner_task_id,
+        merchant_expected_query=merchant_expected_query,
     )
 
     if not merchant_binding.accepted:
