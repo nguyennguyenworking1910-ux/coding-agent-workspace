@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any

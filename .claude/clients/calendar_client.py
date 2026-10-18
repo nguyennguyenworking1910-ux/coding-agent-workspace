@@ -13,10 +13,8 @@ later with an opaque 403, so scope failures are translated into an actionable
 message rather than surfacing raw.
 """
 
-import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-import json
 
 from . import config
 

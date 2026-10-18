@@ -29,7 +29,6 @@ with the templates is a failure.
 import argparse
 import importlib.util
 import os
-import re
 import sys
 from pathlib import Path
 

@@ -1,6 +1,5 @@
 """Tool implementations for the Scheduler Agent."""
 
-from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from ....clients import GoogleCalendarClient
 

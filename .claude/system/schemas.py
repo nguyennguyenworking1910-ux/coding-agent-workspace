@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 
 class TaskClass(str, Enum):
     SMALL = "small_task"
