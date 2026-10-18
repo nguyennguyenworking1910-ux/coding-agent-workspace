@@ -232,35 +232,6 @@ def _optional_exact_text(
     return cleaned
 
 
-def canonical_uuid_text(
-    value: Any,
-) -> str | None:
-    if (
-        not isinstance(
-            value,
-            str,
-        )
-        or not value
-    ):
-        return None
-
-    try:
-        canonical = str(
-            uuid.UUID(
-                value
-            )
-        )
-    except (
-        AttributeError,
-        TypeError,
-        ValueError,
-    ):
-        return None
-
-    if canonical != value:
-        return None
-
-    return canonical
 
 
 def _positive_integer(
