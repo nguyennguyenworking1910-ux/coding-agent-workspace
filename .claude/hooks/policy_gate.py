@@ -1304,12 +1304,11 @@ def _step_id_from_cli_tokens(
 
     return command, None
 
-def merchant_resolution_use_decision(
-    payload: dict[str, Any],
-    session_id: Any,
-) -> dict[str, Any] | None:
-    """Require trusted resolver evidence before consuming merchant_id."""
 
+def _resolution_cli_preflight(
+    payload: dict[str, Any],
+) -> tuple[Any, Any] | None:
+    """Shared sender/tool/direct CLI preflight; no binding authorization."""
     sender_agent_type = str(
         payload.get(
             "agent_type"
@@ -1357,6 +1356,18 @@ def merchant_resolution_use_decision(
             command_text_value
         )
     )
+    return tokens, command_text_value
+
+def merchant_resolution_use_decision(
+    payload: dict[str, Any],
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Require trusted resolver evidence before consuming merchant_id."""
+
+    preflight = _resolution_cli_preflight(payload)
+    if preflight is None:
+        return None
+    tokens, command_text_value = preflight
 
     # ------------------------------------------------------------
     # A Merchant CLI reference that is not one direct invocation is
@@ -1572,53 +1583,10 @@ def project_resolution_use_decision(
 ) -> dict[str, Any] | None:
     """Require trusted Project resolver evidence before consuming project_id."""
 
-    sender_agent_type = str(
-        payload.get(
-            "agent_type"
-        )
-        or ""
-    ).strip()
-
-    if (
-        sender_agent_type
-        != MERCHANT_MANAGER_AGENT
-    ):
+    preflight = _resolution_cli_preflight(payload)
+    if preflight is None:
         return None
-
-    tool_name = str(
-        payload.get(
-            "tool_name"
-        )
-        or ""
-    ).strip()
-
-    if tool_name not in {
-        "Bash",
-        "PowerShell",
-    }:
-        return None
-
-    tool_input = payload.get(
-        "tool_input"
-    )
-
-    if not isinstance(
-        tool_input,
-        dict,
-    ):
-        return None
-
-    command_text_value = (
-        tool_input.get(
-            "command"
-        )
-    )
-
-    tokens = (
-        _direct_merchant_agent_cli_tokens(
-            command_text_value
-        )
-    )
+    tokens, command_text_value = preflight
 
     # ------------------------------------------------------------
     # A Merchant CLI reference that is not one direct invocation
@@ -1958,53 +1926,10 @@ def step_resolution_use_decision(
 ) -> dict[str, Any] | None:
     """Require trusted Step resolver evidence before consuming step_id."""
 
-    sender_agent_type = str(
-        payload.get(
-            "agent_type"
-        )
-        or ""
-    ).strip()
-
-    if (
-        sender_agent_type
-        != MERCHANT_MANAGER_AGENT
-    ):
+    preflight = _resolution_cli_preflight(payload)
+    if preflight is None:
         return None
-
-    tool_name = str(
-        payload.get(
-            "tool_name"
-        )
-        or ""
-    ).strip()
-
-    if tool_name not in {
-        "Bash",
-        "PowerShell",
-    }:
-        return None
-
-    tool_input = payload.get(
-        "tool_input"
-    )
-
-    if not isinstance(
-        tool_input,
-        dict,
-    ):
-        return None
-
-    command_text_value = (
-        tool_input.get(
-            "command"
-        )
-    )
-
-    tokens = (
-        _direct_merchant_agent_cli_tokens(
-            command_text_value
-        )
-    )
+    tokens, command_text_value = preflight
 
     # ------------------------------------------------------------
     # No wrapped Merchant CLI may consume trusted Step bindings.
@@ -2417,53 +2342,10 @@ def document_revision_resolution_use_decision(
 ) -> dict[str, Any] | None:
     """Require trusted revision evidence before consuming revision_id."""
 
-    sender_agent_type = str(
-        payload.get(
-            "agent_type"
-        )
-        or ""
-    ).strip()
-
-    if (
-        sender_agent_type
-        != MERCHANT_MANAGER_AGENT
-    ):
+    preflight = _resolution_cli_preflight(payload)
+    if preflight is None:
         return None
-
-    tool_name = str(
-        payload.get(
-            "tool_name"
-        )
-        or ""
-    ).strip()
-
-    if tool_name not in {
-        "Bash",
-        "PowerShell",
-    }:
-        return None
-
-    tool_input = payload.get(
-        "tool_input"
-    )
-
-    if not isinstance(
-        tool_input,
-        dict,
-    ):
-        return None
-
-    command_text_value = (
-        tool_input.get(
-            "command"
-        )
-    )
-
-    tokens = (
-        _direct_merchant_agent_cli_tokens(
-            command_text_value
-        )
-    )
+    tokens, command_text_value = preflight
 
     # ------------------------------------------------------------
     # Fail closed on wrappers / chaining / pipes / redirects for
