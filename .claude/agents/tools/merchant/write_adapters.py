@@ -277,7 +277,7 @@ class MerchantRepositoryWriteAdapters:
         merchant = self.repositories.merchants.read_merchant(
             merchant_id=payload["merchant_id"]
         )
-        plan = propose_merchant_activation(
+        propose_merchant_activation(
             merchant,
             expected_version=payload["expected_version"],
             reason=payload["reason"],

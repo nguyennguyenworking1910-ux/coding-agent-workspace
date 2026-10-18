@@ -219,7 +219,6 @@ def _split_sql_statements(sql_text: str) -> list[str]:
         # Dollar-quoted string: $tag$ ... $tag$
         if char == "$":
             # Find the closing tag
-            tag_start = i
             tag_match = re.match(r"\$([a-zA-Z0-9_]*)\$", sql_text[i:])
             if tag_match:
                 tag = tag_match.group(1)
