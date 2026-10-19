@@ -725,8 +725,9 @@ def _merchant_id_from_cli_tokens(
 
 
 
-def _scan_unique_project_id_flag(
+def _scan_unique_cli_id_flag(
     arguments: tuple[str, ...],
+    flag_name: str,
 ) -> str | None:
     """Read one Project ID flag; fail closed for malformed duplicates."""
     supplied_project_id: str | None = None
@@ -735,7 +736,7 @@ def _scan_unique_project_id_flag(
     while index < len(arguments):
         token = arguments[index]
 
-        if token == "--project-id":
+        if token == flag_name:
             if supplied_project_id is not None:
                 return ""
 
@@ -751,7 +752,7 @@ def _scan_unique_project_id_flag(
             index += 2
             continue
 
-        if token.startswith("--project-id="):
+        if token.startswith((flag_name + "=")):
             if supplied_project_id is not None:
                 return ""
 
@@ -767,6 +768,14 @@ def _scan_unique_project_id_flag(
         index += 1
 
     return supplied_project_id
+
+
+def _scan_unique_project_id_flag(
+    arguments: tuple[str, ...],
+) -> str | None:
+    """Preserve the existing Project ID scanner interface."""
+    return _scan_unique_cli_id_flag(arguments, "--project-id")
+
 
 
 def _project_id_from_cli_tokens(
@@ -1071,93 +1080,14 @@ def _document_revision_id_from_cli_tokens(
     # ------------------------------------------------------------
 
     if command == "project create":
-        revision_id: str | None = None
-        seen = False
+        revision_id = _scan_unique_cli_id_flag(
+            arguments,
+            "--reused-document-revision-id",
+        )
+        if revision_id == "":
+            return command, "", "MERCHANT"
 
-        index = 0
-
-        while index < len(
-            arguments
-        ):
-            token = arguments[
-                index
-            ]
-
-            if (
-                token
-                == "--reused-document-revision-id"
-            ):
-                if seen:
-                    return (
-                        command,
-                        "",
-                        "MERCHANT",
-                    )
-
-                if (
-                    index + 1
-                    >= len(arguments)
-                ):
-                    return (
-                        command,
-                        "",
-                        "MERCHANT",
-                    )
-
-                value = str(
-                    arguments[
-                        index + 1
-                    ]
-                ).strip()
-
-                if (
-                    not value
-                    or value.startswith(
-                        "-"
-                    )
-                ):
-                    return (
-                        command,
-                        "",
-                        "MERCHANT",
-                    )
-
-                revision_id = value
-                seen = True
-                index += 2
-                continue
-
-            if token.startswith(
-                "--reused-document-revision-id="
-            ):
-                if seen:
-                    return (
-                        command,
-                        "",
-                        "MERCHANT",
-                    )
-
-                value = (
-                    token.split(
-                        "=",
-                        1,
-                    )[1]
-                    .strip()
-                )
-
-                if not value:
-                    return (
-                        command,
-                        "",
-                        "MERCHANT",
-                    )
-
-                revision_id = value
-                seen = True
-
-            index += 1
-
-        if not seen:
+        if revision_id is None:
             return (
                 command,
                 None,
