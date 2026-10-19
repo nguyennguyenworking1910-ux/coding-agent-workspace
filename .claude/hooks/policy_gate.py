@@ -1937,6 +1937,30 @@ def project_resolution_use_decision(
 
     return None
 
+
+def _bind_parent_project_receipt(
+    project_receipt: Any,
+    *,
+    pane_session_id: Any,
+    owner_session_id: Any,
+    owner_run_id: Any,
+    owner_task_id: Any,
+    trusted_merchant_id: Any,
+    project_expected_query: Any,
+) -> Any:
+    """Forward exact Project binding context without gate decisions."""
+    return bind_project_resolution_receipt(
+        project_receipt,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        teammate_name=MERCHANT_MANAGER_AGENT,
+        run_id=owner_run_id,
+        task_id=owner_task_id,
+        trusted_merchant_id=trusted_merchant_id,
+        expected_query=project_expected_query,
+    )
+
+
 def step_resolution_use_decision(
     payload: dict[str, Any],
     session_id: Any,
@@ -2171,31 +2195,14 @@ def step_resolution_use_decision(
         )
     )
 
-    project_binding = (
-        bind_project_resolution_receipt(
-            project_receipt,
-            pane_session_id=(
-                pane_session_id
-            ),
-            owner_session_id=(
-                owner_session_id
-            ),
-            teammate_name=(
-                MERCHANT_MANAGER_AGENT
-            ),
-            run_id=(
-                owner_run_id
-            ),
-            task_id=(
-                owner_task_id
-            ),
-            trusted_merchant_id=(
-                trusted_merchant_id
-            ),
-            expected_query=(
-                project_expected_query
-            ),
-        )
+    project_binding = _bind_parent_project_receipt(
+        project_receipt,
+        pane_session_id=pane_session_id,
+        owner_session_id=owner_session_id,
+        owner_run_id=owner_run_id,
+        owner_task_id=owner_task_id,
+        trusted_merchant_id=trusted_merchant_id,
+        project_expected_query=project_expected_query,
     )
 
     if (
@@ -2585,31 +2592,14 @@ def document_revision_resolution_use_decision(
             )
         )
 
-        project_binding = (
-            bind_project_resolution_receipt(
-                project_receipt,
-                pane_session_id=(
-                    pane_session_id
-                ),
-                owner_session_id=(
-                    owner_session_id
-                ),
-                teammate_name=(
-                    MERCHANT_MANAGER_AGENT
-                ),
-                run_id=(
-                    owner_run_id
-                ),
-                task_id=(
-                    owner_task_id
-                ),
-                trusted_merchant_id=(
-                    trusted_merchant_id
-                ),
-                expected_query=(
-                    project_expected_query
-                ),
-            )
+        project_binding = _bind_parent_project_receipt(
+            project_receipt,
+            pane_session_id=pane_session_id,
+            owner_session_id=owner_session_id,
+            owner_run_id=owner_run_id,
+            owner_task_id=owner_task_id,
+            trusted_merchant_id=trusted_merchant_id,
+            project_expected_query=project_expected_query,
         )
 
         if not project_binding.accepted:
