@@ -724,6 +724,51 @@ def _merchant_id_from_cli_tokens(
     return command, None
 
 
+
+def _scan_unique_project_id_flag(
+    arguments: tuple[str, ...],
+) -> str | None:
+    """Read one Project ID flag; fail closed for malformed duplicates."""
+    supplied_project_id: str | None = None
+    index = 0
+
+    while index < len(arguments):
+        token = arguments[index]
+
+        if token == "--project-id":
+            if supplied_project_id is not None:
+                return ""
+
+            if index + 1 >= len(arguments):
+                return ""
+
+            value = str(arguments[index + 1]).strip()
+
+            if not value or value.startswith("-"):
+                return ""
+
+            supplied_project_id = value
+            index += 2
+            continue
+
+        if token.startswith("--project-id="):
+            if supplied_project_id is not None:
+                return ""
+
+            value = token.split("=", 1)[1].strip()
+
+            if not value:
+                return ""
+
+            supplied_project_id = value
+            index += 1
+            continue
+
+        index += 1
+
+    return supplied_project_id
+
+
 def _project_id_from_cli_tokens(
     tokens: tuple[str, ...],
 ) -> tuple[str, str | None]:
@@ -818,73 +863,9 @@ def _project_id_from_cli_tokens(
     if command == "step resolve":
         supplied_project_id: str | None = None
 
-        index = 0
-
-        while index < len(
-            arguments
-        ):
-            token = arguments[index]
-
-            if token == "--project-id":
-                if (
-                    supplied_project_id
-                    is not None
-                ):
-                    return command, ""
-
-                if (
-                    index + 1
-                    >= len(arguments)
-                ):
-                    return command, ""
-
-                value = str(
-                    arguments[
-                        index + 1
-                    ]
-                ).strip()
-
-                if (
-                    not value
-                    or value.startswith("-")
-                ):
-                    return command, ""
-
-                supplied_project_id = (
-                    value
-                )
-
-                index += 2
-                continue
-
-            if token.startswith(
-                "--project-id="
-            ):
-                if (
-                    supplied_project_id
-                    is not None
-                ):
-                    return command, ""
-
-                value = (
-                    token.split(
-                        "=",
-                        1,
-                    )[1]
-                    .strip()
-                )
-
-                if not value:
-                    return command, ""
-
-                supplied_project_id = (
-                    value
-                )
-
-                index += 1
-                continue
-
-            index += 1
+        supplied_project_id = _scan_unique_project_id_flag(arguments)
+        if supplied_project_id == "":
+            return command, ""
 
         if supplied_project_id is None:
             return command, ""
@@ -921,67 +902,9 @@ def _project_id_from_cli_tokens(
                 arguments[0]
             )
 
-        index = 0
-
-        while index < len(
-            arguments
-        ):
-            token = arguments[index]
-
-            if token == "--project-id":
-                if filtered_project_id is not None:
-                    return command, ""
-
-                if (
-                    index + 1
-                    >= len(arguments)
-                ):
-                    return command, ""
-
-                value = str(
-                    arguments[
-                        index + 1
-                    ]
-                ).strip()
-
-                if (
-                    not value
-                    or value.startswith("-")
-                ):
-                    return command, ""
-
-                filtered_project_id = (
-                    value
-                )
-
-                index += 2
-                continue
-
-            if token.startswith(
-                "--project-id="
-            ):
-                if filtered_project_id is not None:
-                    return command, ""
-
-                value = (
-                    token.split(
-                        "=",
-                        1,
-                    )[1]
-                    .strip()
-                )
-
-                if not value:
-                    return command, ""
-
-                filtered_project_id = (
-                    value
-                )
-
-                index += 1
-                continue
-
-            index += 1
+        filtered_project_id = _scan_unique_project_id_flag(arguments)
+        if filtered_project_id == "":
+            return command, ""
 
         if (
             legacy_project_id is not None
