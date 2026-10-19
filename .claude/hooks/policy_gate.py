@@ -1358,6 +1358,29 @@ def _resolution_cli_preflight(
     )
     return tokens, command_text_value
 
+
+
+def _find_resolution_merchant_owner():
+    """Lookup Merchant Manager ownership without changing gate decisions."""
+    return find_unique_active_teammate_owner(
+        MERCHANT_MANAGER_AGENT
+    )
+
+
+def _resolution_owner_run_id(owner_record):
+    """Read the current owner run identity."""
+    return str(
+        owner_record.get("current_run_id") or ""
+    ).strip()
+
+
+def _resolution_owner_task_id(owner_record):
+    """Read the current owner task identity."""
+    return str(
+        owner_record.get("current_task_id") or ""
+    ).strip()
+
+
 def merchant_resolution_use_decision(
     payload: dict[str, Any],
     session_id: Any,
@@ -1441,11 +1464,7 @@ def merchant_resolution_use_decision(
         owner_session_id,
         owner_record,
         owner_resolution,
-    ) = (
-        find_unique_active_teammate_owner(
-            MERCHANT_MANAGER_AGENT
-        )
-    )
+    ) = _find_resolution_merchant_owner()
 
     if (
         owner_resolution
@@ -1461,19 +1480,9 @@ def merchant_resolution_use_decision(
             "Merchant task owner."
         )
 
-    owner_run_id = str(
-        owner_record.get(
-            "current_run_id"
-        )
-        or ""
-    ).strip()
+    owner_run_id = _resolution_owner_run_id(owner_record)
 
-    owner_task_id = str(
-        owner_record.get(
-            "current_task_id"
-        )
-        or ""
-    ).strip()
+    owner_task_id = _resolution_owner_task_id(owner_record)
 
     if not (
         owner_run_id
@@ -1710,11 +1719,7 @@ def project_resolution_use_decision(
         owner_session_id,
         owner_record,
         owner_resolution,
-    ) = (
-        find_unique_active_teammate_owner(
-            MERCHANT_MANAGER_AGENT
-        )
-    )
+    ) = _find_resolution_merchant_owner()
 
     if (
         owner_resolution
@@ -1730,19 +1735,9 @@ def project_resolution_use_decision(
             "Merchant task owner."
         )
 
-    owner_run_id = str(
-        owner_record.get(
-            "current_run_id"
-        )
-        or ""
-    ).strip()
+    owner_run_id = _resolution_owner_run_id(owner_record)
 
-    owner_task_id = str(
-        owner_record.get(
-            "current_task_id"
-        )
-        or ""
-    ).strip()
+    owner_task_id = _resolution_owner_task_id(owner_record)
 
     if not (
         owner_run_id
@@ -2029,11 +2024,7 @@ def step_resolution_use_decision(
         owner_session_id,
         owner_record,
         owner_resolution,
-    ) = (
-        find_unique_active_teammate_owner(
-            MERCHANT_MANAGER_AGENT
-        )
-    )
+    ) = _find_resolution_merchant_owner()
 
     if (
         owner_resolution
@@ -2049,19 +2040,9 @@ def step_resolution_use_decision(
             "Merchant task owner."
         )
 
-    owner_run_id = str(
-        owner_record.get(
-            "current_run_id"
-        )
-        or ""
-    ).strip()
+    owner_run_id = _resolution_owner_run_id(owner_record)
 
-    owner_task_id = str(
-        owner_record.get(
-            "current_task_id"
-        )
-        or ""
-    ).strip()
+    owner_task_id = _resolution_owner_task_id(owner_record)
 
     if not (
         owner_run_id
@@ -2449,11 +2430,7 @@ def document_revision_resolution_use_decision(
         owner_session_id,
         owner_record,
         owner_resolution,
-    ) = (
-        find_unique_active_teammate_owner(
-            MERCHANT_MANAGER_AGENT
-        )
-    )
+    ) = _find_resolution_merchant_owner()
 
     if (
         owner_resolution
@@ -2469,19 +2446,9 @@ def document_revision_resolution_use_decision(
             "active Merchant task owner."
         )
 
-    owner_run_id = str(
-        owner_record.get(
-            "current_run_id"
-        )
-        or ""
-    ).strip()
+    owner_run_id = _resolution_owner_run_id(owner_record)
 
-    owner_task_id = str(
-        owner_record.get(
-            "current_task_id"
-        )
-        or ""
-    ).strip()
+    owner_task_id = _resolution_owner_task_id(owner_record)
 
     if not (
         owner_run_id
