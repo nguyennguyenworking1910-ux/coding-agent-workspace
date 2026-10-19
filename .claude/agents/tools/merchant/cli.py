@@ -208,7 +208,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         required=True,
     )
     merchant_activate.add_argument("--reason", required=True)
-    merchant_activate.add_argument("--triggered-by", required=True)
+    merchant_activate.add_argument("--triggered-by")
 
     merchant_activate_all = merchant_actions.add_parser(
         "activate-all"

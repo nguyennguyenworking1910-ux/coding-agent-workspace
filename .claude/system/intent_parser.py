@@ -946,7 +946,23 @@ class IntentParser:
             ),
         )
 
-        sanitized = text
+        # Remove explicitly negated comma-separated action clauses,
+        # including clauses with objects (e.g. "create projects").
+        # Stop at the first sentence boundary. Positive actions in
+        # subsequent sentences remain available for classification.
+        negated_action_list = (
+            r"\b(?:do\s+not|don'?t|never|must\s+not|"
+            r"should\s+not|shall\s+not)\s+"
+            r"(?:create|add|import|update|set|approve|change|"
+            r"propose|apply|execute|persist|activate)\b"
+            r"[^.!?\n]*"
+        )
+
+        sanitized = re.sub(
+            negated_action_list,
+            " ",
+            text,
+        )
 
         for pattern in patterns:
             sanitized = re.sub(

@@ -89,7 +89,6 @@ def test_blank_required_string_is_missing():
                 "merchant_id",
                 "expected_version",
                 "reason",
-                "triggered_by",
             ),
         ),
         (

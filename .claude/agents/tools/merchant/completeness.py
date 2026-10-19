@@ -15,7 +15,6 @@ REQUIRED_WRITE_FIELDS = MappingProxyType(
             "merchant_id",
             "expected_version",
             "reason",
-            "triggered_by",
         ),
         "merchant activate-all": (
             "from_status",

@@ -3862,3 +3862,141 @@ def test_lifecycle_transitions_refresh_last_transition_at(
         record["last_transition_at"]
         == 1300.0
     )
+
+
+# E2E-03: Isolated Merchant Manager terminal lifecycle regressions.
+
+def _e2e03_setup_merchant_run(operation, suffix):
+    owner = f"e2e03-owner-{suffix}"
+    pane = f"e2e03-pane-{suffix}"
+    run_id = f"e2e03-run-{suffix}"
+    task_id = f"e2e03-task-{suffix}"
+
+    save_state(
+        owner,
+        new_state(
+            request="GALAXY merchant lifecycle validation",
+            task_class="small_task",
+            risk_level="read_only",
+            selected_agents=["merchant-manager"],
+            operations=[operation],
+            limits={
+                "max_members": 1,
+                "max_tool_rounds": 3,
+                "max_total_tool_calls": 24,
+                "max_run_budget_usd": 4.0,
+            },
+            confirmed=False,
+            run_id=run_id,
+        ),
+    )
+
+    decision, name = allocate_teammate(
+        owner, "merchant-manager", "merchant-manager"
+    )
+    assert decision == TeammateAllocationDecision.CREATE
+    assert name == "merchant-manager"
+
+    assert mark_teammate_running(
+        owner,
+        name,
+        run_id,
+        task_id,
+        operations=[operation],
+        selected_agents=["merchant-manager"],
+    )
+
+    return owner, pane, task_id
+
+
+def _e2e03_send(pane, message):
+    return run_hook({
+        "hook_event_name": "PostToolUse",
+        "session_id": pane,
+        "agent_type": "merchant-manager",
+        "tool_name": "SendMessage",
+        "tool_use_id": "e2e03-terminal-message",
+        "tool_input": {
+            "recipient": "team-lead",
+            "message": message,
+        },
+    })
+
+
+def _e2e03_idle(pane):
+    return run_hook({
+        "hook_event_name": "TeammateIdle",
+        "session_id": pane,
+        "agent_type": "merchant-manager",
+        "teammate_name": "merchant-manager",
+    })
+
+
+def test_e2e03_galaxy_read_only_report_releases(isolated_runtime):
+    owner, pane, task_id = _e2e03_setup_merchant_run(
+        "merchant_read", "galaxy-read"
+    )
+
+    assert _e2e03_send(
+        pane,
+        "GALAXY integration readiness: NOT_VERIFIABLE. "
+        "No merchant changes were performed.",
+    ) == 0
+
+    assert _e2e03_idle(pane) == 0
+
+    record = load_team_state(owner)["teammates"]["merchant-manager"]
+    assert record["status"] == "IDLE_REUSABLE"
+    assert record["result_received"] is True
+    assert record["report_source"] == "sendmessage"
+    assert record["last_completed_task_id"] == task_id
+    assert record["current_run_id"] is None
+    assert record["current_task_id"] is None
+    assert load_pending_result(pane) is None
+    assert load_pending_merchant_proposal(pane) is None
+
+
+def test_e2e03_merchant_propose_blocked_without_proposal(
+    isolated_runtime,
+):
+    owner, pane, _ = _e2e03_setup_merchant_run(
+        "merchant_propose", "blocked"
+    )
+
+    terminal = {
+        "contract_version": 1,
+        "outcome": "BLOCKED",
+        "operation": "merchant_propose",
+        "database_target": "runtime",
+        "proposal_emitted": False,
+    }
+
+    assert _e2e03_send(
+        pane, "TEAM_RESULT_JSON:\n" + json.dumps(terminal)
+    ) == 0
+
+    assert _e2e03_idle(pane) == 0
+
+    record = load_team_state(owner)["teammates"]["merchant-manager"]
+    assert record["status"] == "IDLE_REUSABLE"
+    assert load_pending_merchant_proposal(pane) is None
+
+
+def test_e2e03_merchant_propose_prose_cannot_bypass_gate(
+    isolated_runtime,
+):
+    owner, pane, _ = _e2e03_setup_merchant_run(
+        "merchant_propose", "malformed"
+    )
+
+    assert _e2e03_send(
+        pane,
+        "Merchant audit finished. No proposal was created.",
+    ) == 0
+
+    # Missing structured outcome must never authorize reuse.
+    assert _e2e03_idle(pane) != 0
+
+    record = load_team_state(owner)["teammates"]["merchant-manager"]
+    assert record["status"] != "IDLE_REUSABLE"
+    assert load_pending_merchant_proposal(pane) is None
