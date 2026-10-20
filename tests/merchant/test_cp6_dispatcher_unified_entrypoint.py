@@ -46,8 +46,7 @@ def test_dispatcher_uses_unified_trusted_entrypoint_only():
         handle_merchant_proposal_receipt=Mock(),
         handle_post_tool_use=Mock(),
         handle_teammate_idle=Mock(),
-        invoke_confirmed_merchant_session_apply=forbidden,
-        invoke_authorized_scope_apply=forbidden,
+
         invoke_trusted_merchant_session_apply=trusted_apply,
         io=io, json=json,
         locked_state=result_lock,

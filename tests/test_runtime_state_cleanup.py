@@ -149,17 +149,23 @@ class AtomicRuntimeStatePersistenceTests(unittest.TestCase):
     def test_save_uses_unique_sibling_temporary_files(self):
         observed = []
         real_replace = os.replace
+        destination = runtime_state.state_path(self.session_id)
 
-        def record(source, destination):
-            observed.append((Path(source), Path(destination)))
-            real_replace(source, destination)
+        def record(source, target):
+            source_path = Path(source)
+            target_path = Path(target)
+
+            if target_path == destination:
+                observed.append((source_path, target_path))
+
+            return real_replace(source, target)
 
         with patch("runtime_state.os.replace", side_effect=record):
             runtime_state.save_state(self.session_id, self.state("run-1"))
             runtime_state.save_state(self.session_id, self.state("run-2"))
 
+        self.assertEqual(len(observed), 2)
         first, second = observed
-        destination = runtime_state.state_path(self.session_id)
         self.assertNotEqual(first[0].name, second[0].name)
         self.assertEqual(first[0].parent, destination.parent)
         self.assertEqual(second[0].parent, destination.parent)

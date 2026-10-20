@@ -23,7 +23,7 @@ DEPENDENCY_MODULES = (
 )
 
 
-EXPECTED_TOTAL_FIELDS = 103
+EXPECTED_TOTAL_FIELDS = 101
 
 MINIMUM_PRECISE_FIELDS = 85
 
@@ -114,7 +114,7 @@ SECURITY_CRITICAL_FIELDS = {
     "capture_proposal_receipt",
     "stage_runtime_handoff_attempt",
     "validate_completeness_receipt_for_outcome",
-    "invoke_confirmed_merchant_session_apply",
+    "invoke_trusted_merchant_session_apply",
     "contains_handoff_marker",
     "pending_merchant_completeness_matches",
     "pending_merchant_proposal_matches",

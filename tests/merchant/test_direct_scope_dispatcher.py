@@ -16,7 +16,7 @@ from claude.hooks.team_result_dispatcher import (
 
 
 @pytest.mark.parametrize("direct_mode", [True, False])
-def test_dispatcher_selects_trusted_execution_mode(direct_mode):
+def test_dispatcher_invokes_unified_handler_for_both_scenarios(direct_mode):
     session_id = "isolated-dispatcher-session"
     argv = (
         "project",
@@ -56,7 +56,7 @@ def test_dispatcher_selects_trusted_execution_mode(direct_mode):
     def direct_apply(owner, arguments):
         assert owner == session_id
         assert tuple(arguments) == argv
-        assert calls[-1] == "unlock"
+        assert calls == []
         calls.append("direct")
         print(json.dumps({"success": True}))
         return 0
@@ -64,7 +64,7 @@ def test_dispatcher_selects_trusted_execution_mode(direct_mode):
     def legacy_apply(owner, arguments):
         assert owner == session_id
         assert tuple(arguments) == argv
-        assert calls[-1] == "unlock"
+        assert calls == []
         calls.append("legacy")
         print(json.dumps({"success": True}))
         return 0
@@ -109,9 +109,9 @@ def test_dispatcher_selects_trusted_execution_mode(direct_mode):
         handle_merchant_proposal_receipt=Mock(),
         handle_post_tool_use=Mock(),
         handle_teammate_idle=Mock(),
-        invoke_confirmed_merchant_session_apply=legacy_apply,
-        invoke_authorized_scope_apply=direct_apply,
-        invoke_trusted_merchant_session_apply=None,
+
+
+        invoke_trusted_merchant_session_apply=(direct_apply if direct_mode else legacy_apply),
         io=io,
         json=json,
         locked_state=locked_state,

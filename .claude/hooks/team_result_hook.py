@@ -47,7 +47,6 @@ from pathlib import Path
 from typing import Any
 from claude.system.merchant_runtime_handoff import (
     MerchantRuntimeHandoffStageError,
-    invoke_confirmed_merchant_session_apply,
     invoke_trusted_merchant_session_apply,
 )
 
@@ -1107,18 +1106,11 @@ def _dispatcher_dependencies(
         handle_teammate_idle=(
             handle_teammate_idle
         ),
-        invoke_confirmed_merchant_session_apply=(
-            invoke_confirmed_merchant_session_apply
-        ),
+
         invoke_trusted_merchant_session_apply=(
             invoke_trusted_merchant_session_apply
         ),
-        invoke_authorized_scope_apply=(
-            __import__(
-                "claude.system.merchant_runtime_handoff",
-                fromlist=["invoke_authorized_scope_apply"],
-            ).invoke_authorized_scope_apply
-        ),
+
         io=(
             io
         ),

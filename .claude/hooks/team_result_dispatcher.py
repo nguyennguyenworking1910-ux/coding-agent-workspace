@@ -54,7 +54,7 @@ class DispatcherDependencies:
     handle_merchant_proposal_receipt: HandleMerchantProposalReceiptFn
     handle_post_tool_use: HandlePostToolUseFn
     handle_teammate_idle: HandleTeammateIdleFn
-    invoke_confirmed_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn
+
     io: Any
     json: Any
     locked_state: LockedStateFn
@@ -63,8 +63,8 @@ class DispatcherDependencies:
     redirect_stderr: Callable[..., Any]
     redirect_stdout: Callable[..., Any]
     sys: Any
-    invoke_authorized_scope_apply: InvokeConfirmedMerchantSessionApplyFn | None = None
-    invoke_trusted_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn | None = None
+
+    invoke_trusted_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn
 
 
 def main(
@@ -109,13 +109,7 @@ def main(
         dependencies.handle_teammate_idle
     )
 
-    invoke_confirmed_merchant_session_apply = (
-        dependencies.invoke_confirmed_merchant_session_apply
-    )
 
-    invoke_authorized_scope_apply = (
-        dependencies.invoke_authorized_scope_apply
-    )
 
     invoke_trusted_merchant_session_apply = (
         dependencies.invoke_trusted_merchant_session_apply
@@ -198,7 +192,7 @@ def main(
     # prepare_merchant_runtime_handoff() briefly acquires the OWNER
     # session lock only to validate and persist PENDING, then releases it.
     #
-    # invoke_confirmed_merchant_session_apply() acquires the same owner
+    # The trusted runtime entrypoint acquires the same owner
     # lock internally. Calling it from inside the outer locked_state()
     # block below would therefore risk self-deadlock / lock timeout.
     # ============================================================
@@ -256,43 +250,12 @@ def main(
                         runtime_stderr
                     ),
                 ):
-                    # Production uses one trusted entrypoint. The legacy
-                    # dependency-injection path remains temporarily for tests
-                    # that have not yet migrated to the unified contract.
-                    if callable(invoke_trusted_merchant_session_apply):
-                        exit_code = invoke_trusted_merchant_session_apply(
-                            handoff_attempt.owner_session_id,
-                            handoff_attempt.arguments,
-                        )
-                    else:
-                        # Compatibility-only path. Both handlers acquire the
-                        # owner lock; release it before either invocation.
-                        with locked_state(
-                            handoff_attempt.owner_session_id
-                        ) as trusted_owner_state:
-                            if trusted_owner_state is None:
-                                raise RuntimeError(
-                                    "Merchant handoff owner state unavailable"
-                                )
-                            direct_mode = (
-                                trusted_owner_state.get("merchant_scope")
-                                is not None
-                            )
-
-                        if direct_mode:
-                            if not callable(invoke_authorized_scope_apply):
-                                raise RuntimeError(
-                                    "Direct Merchant handoff is not configured"
-                                )
-                            exit_code = invoke_authorized_scope_apply(
-                                handoff_attempt.owner_session_id,
-                                handoff_attempt.arguments,
-                            )
-                        else:
-                            exit_code = invoke_confirmed_merchant_session_apply(
-                                handoff_attempt.owner_session_id,
-                                handoff_attempt.arguments,
-                            )
+                    # Authorization selection happens only inside the
+                    # trusted runtime handoff, never in teammate input.
+                    exit_code = invoke_trusted_merchant_session_apply(
+                        handoff_attempt.owner_session_id,
+                        handoff_attempt.arguments,
+                    )
 
                 if exit_code == 0:
                     bounded_runtime_result = (

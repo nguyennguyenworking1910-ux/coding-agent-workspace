@@ -156,7 +156,7 @@ DEPENDENCY_MODULES = {
     ): {
         "locked_state":
             "LockedStateFn",
-        "invoke_confirmed_merchant_session_apply":
+        "invoke_trusted_merchant_session_apply":
             "InvokeConfirmedMerchantSessionApplyFn",
         "record_runtime_handoff_result":
             "RecordRuntimeHandoffResultFn",
