@@ -108,10 +108,15 @@ def reconcile_committed_merchant_create(
         expected_status = reservation.get("status")
         expected_attempt_id = reservation.get("execution_attempt_id")
 
-        if expected_status == "EXECUTING":
+        # A RESERVED write has not been claimed for execution.
+        # Recovery never treats unbound evidence as authorization.
+        if expected_status == "RESERVED":
+            return None
+
+        if expected_status in {"EXECUTING", "VERIFIED"}:
             if not isinstance(expected_attempt_id, str):
                 raise DirectRecoveryError(
-                    "Executing reservation missing attempt identity"
+                    "Execution-bound reservation missing attempt identity"
                 )
 
         if expected_attempt_id is not None:

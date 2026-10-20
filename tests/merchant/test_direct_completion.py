@@ -1,4 +1,4 @@
-﻿from copy import deepcopy
+from copy import deepcopy
 
 import pytest
 
@@ -24,6 +24,9 @@ def make_state(status="EXECUTING"):
                         "database": "test",
                         "operation_key": "merchant-direct:v1:example",
                         "payload_hash": "a" * 64,
+                        "execution_attempt_id": (
+                            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                        ),
                         "status": status,
                     }
                 },
@@ -163,3 +166,80 @@ def test_reassignment_during_verification_denied(
     )
 
     assert run() is False
+
+
+def test_attempt_identity_change_during_completion_is_rejected(
+    env, monkeypatch
+):
+    """Completion must reject a changed trusted execution identity."""
+    import uuid
+
+    state, calls = env
+    write = state["teammates"]["merchant-manager"][
+        "direct_writes"
+    ]["write-1"]
+
+    original_attempt = str(uuid.uuid4())
+    replacement_attempt = str(uuid.uuid4())
+
+    write["execution_attempt_id"] = original_attempt
+
+    def verify(repository, **kwargs):
+        calls.append(kwargs)
+
+        # Simulate trusted state changing during reconciliation.
+        write["execution_attempt_id"] = replacement_attempt
+        write["status"] = "VERIFIED"
+
+        return dict(write)
+
+    monkeypatch.setattr(
+        module,
+        "reconcile_committed_merchant_create",
+        verify,
+    )
+
+    assert run() is False
+    assert len(calls) == 1
+    assert write["execution_attempt_id"] == replacement_attempt
+
+def test_mutated_second_write_cannot_change_reconciliation_target(
+    env, monkeypatch
+):
+    """Later reconciliation targets must use the original snapshot."""
+    state, calls = env
+    writes = state["teammates"]["merchant-manager"]["direct_writes"]
+
+    second = deepcopy(writes["write-1"])
+    second["write_id"] = "write-2"
+    second["operation_key"] = "merchant-direct:v1:other"
+    second["execution_attempt_id"] = (
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    )
+    writes["write-2"] = second
+
+    databases = []
+
+    def repository_factory(database):
+        databases.append(database)
+        return object()
+
+    def verify(repository, **kwargs):
+        calls.append(kwargs)
+        if kwargs["write_id"] == "write-1":
+            writes["write-2"]["database"] = "runtime"
+
+        writes[kwargs["write_id"]]["status"] = "VERIFIED"
+        return dict(writes[kwargs["write_id"]])
+
+    monkeypatch.setattr(
+        module, "reconcile_committed_merchant_create", verify
+    )
+
+    result = module.reconcile_all_direct_writes(
+        **CONTEXT,
+        repository_factory=repository_factory,
+    )
+
+    assert result is False
+    assert "runtime" not in databases

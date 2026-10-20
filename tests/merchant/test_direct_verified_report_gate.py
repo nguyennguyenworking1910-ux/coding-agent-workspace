@@ -1,4 +1,4 @@
-﻿from copy import deepcopy
+from copy import deepcopy
 import uuid
 
 import pytest
@@ -34,6 +34,9 @@ def team(tmp_path, monkeypatch):
                     "run_id": "run-1",
                     "task_id": "task-1",
                     "status": "EXECUTING",
+                    "execution_attempt_id": (
+                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                    ),
                 }
             },
         }
@@ -139,3 +142,42 @@ def test_wrong_task_cannot_report(team):
         team, "merchant-manager",
         "run-1", "wrong-task", "sendmessage",
     ) is False
+
+
+@pytest.mark.parametrize(
+    "attempt_id",
+    [
+        None,
+        "",
+        "not-a-uuid",
+        "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+        123,
+    ],
+)
+def test_verified_invalid_attempt_cannot_report_or_release(
+    team, attempt_id
+):
+    """Unbound VERIFIED must not reach report or idle release."""
+    def prepare(r):
+        write = r["direct_writes"]["write-1"]
+        write["status"] = "VERIFIED"
+
+        if attempt_id is None:
+            write.pop("execution_attempt_id", None)
+        else:
+            write["execution_attempt_id"] = attempt_id
+
+    update(team, prepare)
+
+    assert report(team) is False
+
+    current = record(team)
+    assert current["status"] == "RUNNING"
+    assert current["result_received"] is False
+
+    released, _ = lifecycle.release_reported_teammate_to_idle(
+        team, "merchant-manager"
+    )
+
+    assert released is False
+    assert record(team)["status"] == "RUNNING"

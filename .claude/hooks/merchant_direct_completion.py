@@ -1,10 +1,11 @@
-﻿"""Reconcile every bound Direct Merchant write before report delivery."""
+"""Reconcile every bound Direct Merchant write before report delivery."""
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Callable
 
-from claude.hooks.team_lifecycle import load_team_state
+from claude.hooks.team_lifecycle import load_team_state, has_unresolved_direct_writes
 from claude.hooks.merchant_direct_recovery import (
     reconcile_committed_merchant_create,
 )
@@ -81,9 +82,14 @@ def reconcile_all_direct_writes(
         ):
             return False
 
+    # Preserve the original trusted reservation identity.
+    # A shallow copy is insufficient because reservation fields
+    # may be mutated during the reconciliation process.
+    original_writes = deepcopy(writes)
+
     # Reconciliation reads PostgreSQL evidence and persists VERIFIED
     # under the trusted team-state lock. It does not run CREATE.
-    for write_id, write in sorted(writes.items()):
+    for write_id, write in sorted(original_writes.items()):
         try:
             repository = repository_factory(write["database"])
 
@@ -134,10 +140,13 @@ def reconcile_all_direct_writes(
     if not isinstance(final_writes, dict):
         return False
 
-    if set(final_writes) != set(writes):
+    if set(final_writes) != set(original_writes):
         return False
 
-    for write_id, original in writes.items():
+    if has_unresolved_direct_writes(final_record):
+        return False
+
+    for write_id, original in original_writes.items():
         current = final_writes.get(write_id)
 
         if not isinstance(current, dict):
@@ -151,6 +160,7 @@ def reconcile_all_direct_writes(
             "command",
             "operation_key",
             "payload_hash",
+            "execution_attempt_id",
         ):
             if current.get(field) != original.get(field):
                 return False

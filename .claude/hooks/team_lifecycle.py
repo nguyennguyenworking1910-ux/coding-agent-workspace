@@ -1036,6 +1036,19 @@ def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
         if write.get("status") != "VERIFIED":
             return True
 
+        attempt_id = write.get("execution_attempt_id")
+        if not isinstance(attempt_id, str):
+            return True
+
+        try:
+            from uuid import UUID
+            canonical_attempt = str(UUID(attempt_id))
+        except (ValueError, AttributeError, TypeError):
+            return True
+
+        if canonical_attempt != attempt_id:
+            return True
+
     return False
 
 
@@ -1952,11 +1965,7 @@ def mark_bound_report_received(
             if not matching:
                 return False
 
-            if any(
-                not isinstance(write, dict)
-                or write.get("status") != "VERIFIED"
-                for write in writes.values()
-            ):
+            if has_unresolved_direct_writes(record):
                 return False
 
 

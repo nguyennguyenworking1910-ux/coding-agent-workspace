@@ -74,31 +74,26 @@ def reservation(state):
     ]["write-1"]
 
 
-def test_committed_write_becomes_verified(env, monkeypatch):
+def test_reserved_write_cannot_verify_unbound_evidence(
+    env, monkeypatch
+):
     state, repo = env
 
-    def verify(_repo, *, operation_key, payload_hash):
-        assert operation_key == KEY
-        assert payload_hash == HASH
-        return {
-            "verified": True,
-            "merchant_id": "merchant-123",
-        }
-
     monkeypatch.setattr(
-        module, "verify_committed_merchant_create", verify
+        module,
+        "verify_committed_merchant_create",
+        lambda *args, **kwargs: pytest.fail(
+            "RESERVED write must not query evidence"
+        ),
     )
 
     result = module.reconcile_committed_merchant_create(
         repo, **CONTEXT
     )
 
-    assert result["status"] == "VERIFIED"
-    assert result["merchant_id"] == "merchant-123"
-    assert reservation(state)["status"] == "VERIFIED"
-    assert state["teammates"]["merchant-manager"]["status"] == "RUNNING"
-    assert state["teammates"]["merchant-manager"]["result_received"] is False
-
+    assert result is None
+    assert reservation(state)["status"] == "RESERVED"
+    assert "merchant_id" not in reservation(state)
 
 def test_missing_evidence_keeps_reserved(env, monkeypatch):
     state, repo = env
@@ -140,6 +135,10 @@ def test_reassignment_during_db_read_is_rejected(
     env, monkeypatch
 ):
     state, repo = env
+    reservation(state)["status"] = "EXECUTING"
+    reservation(state)["execution_attempt_id"] = (
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    )
 
     def verify(*args, **kwargs):
         state["teammates"]["merchant-manager"][
@@ -159,7 +158,7 @@ def test_reassignment_during_db_read_is_rejected(
             repo, **CONTEXT
         )
 
-    assert reservation(state)["status"] == "RESERVED"
+    assert reservation(state)["status"] == "EXECUTING"
 
 
 def test_database_mismatch_is_rejected(env, monkeypatch):
@@ -438,3 +437,51 @@ def test_unknown_commit_preserves_trusted_attempt(
     assert current["status"] == "EXECUTING"
     assert current["execution_attempt_id"] == str(attempt)
     assert "merchant_id" not in current
+
+def test_unbound_reserved_write_cannot_be_verified(env, monkeypatch):
+    """A reservation without an attempt is not committed-write proof."""
+    state, repo = env
+    current = reservation(state)
+
+    assert current["status"] == "RESERVED"
+    assert "execution_attempt_id" not in current
+
+    monkeypatch.setattr(
+        module,
+        "verify_committed_merchant_create",
+        lambda *args, **kwargs: pytest.fail(
+            "Unbound RESERVED must not query committed evidence"
+        ),
+    )
+
+    result = module.reconcile_committed_merchant_create(
+        repo, **CONTEXT
+    )
+
+    assert result is None
+    assert current["status"] == "RESERVED"
+    assert "merchant_id" not in current
+
+def test_verified_without_attempt_cannot_reverify(env, monkeypatch):
+    """Legacy VERIFIED without trusted attempt must fail closed."""
+    state, repo = env
+    current = reservation(state)
+    current["status"] = "VERIFIED"
+    current["merchant_id"] = "merchant-legacy"
+    current.pop("execution_attempt_id", None)
+
+    monkeypatch.setattr(
+        module,
+        "verify_committed_merchant_create",
+        lambda *args, **kwargs: pytest.fail(
+            "Unbound VERIFIED must not query evidence"
+        ),
+    )
+
+    with pytest.raises(module.DirectRecoveryError):
+        module.reconcile_committed_merchant_create(
+            repo, **CONTEXT
+        )
+
+    assert current["status"] == "VERIFIED"
+    assert current["merchant_id"] == "merchant-legacy"
