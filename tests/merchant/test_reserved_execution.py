@@ -202,3 +202,31 @@ def test_unauthorized_operation_never_executes(env):
         run(repo)
 
     assert calls == []
+
+
+def test_execution_attempt_identity_is_persisted_and_forwarded(env):
+    """Trusted reservation and write adapter must share one attempt UUID."""
+    import uuid
+
+    state, repo, calls = env
+
+    result = run(repo)
+
+    assert result["success"] is True
+    assert len(calls) == 1
+
+    reservation = state["teammates"]["merchant-manager"][
+        "direct_writes"
+    ]["write-1"]
+
+    assert reservation["status"] == "EXECUTING"
+
+    persisted_attempt = reservation.get("execution_attempt_id")
+
+    assert isinstance(persisted_attempt, str)
+
+    parsed_attempt = uuid.UUID(persisted_attempt)
+
+    assert str(parsed_attempt) == persisted_attempt
+
+    assert calls[0]["execution_attempt_id"] == parsed_attempt

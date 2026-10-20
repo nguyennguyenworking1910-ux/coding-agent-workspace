@@ -32,6 +32,7 @@ def atomic_create_merchant(
     entity_repository: Any,
     *,
     operation_key: str,
+    execution_attempt_id: uuid.UUID | None = None,
     merchant_id: str | None = None,
     code: str,
     name: str,
@@ -51,6 +52,12 @@ def atomic_create_merchant(
 
     payload_hash = _canonical_hash(payload)
 
+    if (
+        execution_attempt_id is not None
+        and not isinstance(execution_attempt_id, uuid.UUID)
+    ):
+        raise ValueError("Invalid execution attempt identity")
+
     with repository.connection() as connection:
         with connection.transaction():
 
@@ -59,7 +66,7 @@ def atomic_create_merchant(
                     connection,
                     operation_key=operation_key,
                     payload_hash=payload_hash,
-                    execution_attempt_id=uuid.uuid4(),
+                    execution_attempt_id=execution_attempt_id or uuid.uuid4(),
                 )
 
                 generated_merchant_id = (

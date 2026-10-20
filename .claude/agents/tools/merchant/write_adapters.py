@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import uuid
 from typing import Any
 
 from .cli_contract import (
@@ -436,6 +437,7 @@ def execute_protected_merchant_create(
     database: str,
     operation_key: str,
     payload: dict[str, Any],
+    execution_attempt_id: uuid.UUID | None = None,
     repository: MerchantRepository | None = None,
 ) -> dict[str, Any]:
     """Execute an atomic Merchant create from a trusted caller.
@@ -451,6 +453,12 @@ def execute_protected_merchant_create(
 
     if not isinstance(operation_key, str) or not operation_key.strip():
         raise WriteAdapterError("Protected execution key is required")
+
+    if (
+        execution_attempt_id is not None
+        and not isinstance(execution_attempt_id, uuid.UUID)
+    ):
+        raise WriteAdapterError("Invalid execution attempt identity")
 
     if not isinstance(payload, dict):
         raise WriteAdapterError("Payload must be a dictionary")
@@ -487,6 +495,7 @@ def execute_protected_merchant_create(
         base_repository,
         entity_repository,
         operation_key=operation_key,
+        execution_attempt_id=execution_attempt_id,
         merchant_id=payload.get("merchant_id"),
         code=payload["code"],
         name=payload["name"],

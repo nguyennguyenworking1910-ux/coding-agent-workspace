@@ -116,6 +116,14 @@ def cleanup(repo, merchant_id, operation_key):
         with conn.transaction():
             conn.execute(
                 """
+                DELETE FROM merchant_ops.merchant_execution_claims
+                WHERE operation_key = %s
+                """,
+                (operation_key,),
+            )
+
+            conn.execute(
+                """
                 DELETE FROM merchant_ops.merchant_execution_ledger
                 WHERE operation_key = %s
                 """,
@@ -180,6 +188,33 @@ def test_reserved_execution_commit_and_recovery(environment):
         assert result["result"]["success"] is True
 
         merchant_id = result["result"]["merchant_id"]
+
+        persisted_reservation = record(context)["direct_writes"][
+            context["write_id"]
+        ]
+
+        persisted_attempt = uuid.UUID(
+            persisted_reservation["execution_attempt_id"]
+        )
+
+        with repo.connection(read_only=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT execution_attempt_id,
+                           claim_generation,
+                           claim_status
+                    FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+                claim = cur.fetchone()
+
+        assert claim is not None
+        assert claim["execution_attempt_id"] == persisted_attempt
+        assert claim["claim_generation"] == 1
+        assert claim["claim_status"] == "COMPLETED"
 
         assert counts(
             repo, merchant_id, operation_key

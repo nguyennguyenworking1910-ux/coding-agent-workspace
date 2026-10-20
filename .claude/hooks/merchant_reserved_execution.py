@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Mapping
 
 from claude.clients.merchant.atomic_create import _canonical_hash
@@ -160,6 +161,8 @@ def execute_reserved_merchant_create(
         # All lifecycle ownership mutations must honor EXECUTING.
         # The enclosing locked_team_state context persists this
         # mutation before PostgreSQL execution begins.
+        execution_attempt_id = uuid.uuid4()
+        reservation["execution_attempt_id"] = str(execution_attempt_id)
         reservation["status"] = "EXECUTING"
 
     # Persist EXECUTING before entering PostgreSQL execution.
@@ -167,6 +170,7 @@ def execute_reserved_merchant_create(
     result = execute_protected_merchant_create(
         database=database,
         operation_key=operation_key,
+        execution_attempt_id=execution_attempt_id,
         payload=dict(payload),
         repository=repository,
     )
