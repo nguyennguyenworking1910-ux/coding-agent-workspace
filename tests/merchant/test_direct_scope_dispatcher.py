@@ -111,6 +111,7 @@ def test_dispatcher_selects_trusted_execution_mode(direct_mode):
         handle_teammate_idle=Mock(),
         invoke_confirmed_merchant_session_apply=legacy_apply,
         invoke_authorized_scope_apply=direct_apply,
+        invoke_trusted_merchant_session_apply=None,
         io=io,
         json=json,
         locked_state=locked_state,

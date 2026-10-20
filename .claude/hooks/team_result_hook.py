@@ -48,6 +48,7 @@ from typing import Any
 from claude.system.merchant_runtime_handoff import (
     MerchantRuntimeHandoffStageError,
     invoke_confirmed_merchant_session_apply,
+    invoke_trusted_merchant_session_apply,
 )
 
 if __package__ in (None, ""):
@@ -1108,6 +1109,9 @@ def _dispatcher_dependencies(
         ),
         invoke_confirmed_merchant_session_apply=(
             invoke_confirmed_merchant_session_apply
+        ),
+        invoke_trusted_merchant_session_apply=(
+            invoke_trusted_merchant_session_apply
         ),
         invoke_authorized_scope_apply=(
             __import__(

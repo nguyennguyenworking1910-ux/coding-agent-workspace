@@ -201,6 +201,7 @@ def test_authenticated_direct_scope_post_tool_use(prepared_owner):
         handle_teammate_idle=Mock(),
         invoke_confirmed_merchant_session_apply=legacy_handler,
         invoke_authorized_scope_apply=direct_handler,
+        invoke_trusted_merchant_session_apply=direct_handler,
         io=io,
         json=json,
         locked_state=runtime_state.locked_state,

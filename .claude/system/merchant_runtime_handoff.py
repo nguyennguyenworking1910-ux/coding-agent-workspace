@@ -1,4 +1,4 @@
-﻿"""Trusted in-process bridge for one confirmed Merchant runtime apply.
+"""Trusted in-process bridge for one confirmed Merchant runtime apply.
 
 This module intentionally has no command-line entry point. The ordinary
 Merchant Manager adapter remains read/propose-only. Controlled orchestration
@@ -521,6 +521,46 @@ def invoke_authorized_scope_apply(
         raise MerchantRuntimeHandoffStageError(
             "CLI_INVOKE", exc
         ) from exc
+
+def invoke_trusted_merchant_session_apply(
+    session_id: str,
+    arguments: Sequence[str],
+    *,
+    write_command_factory: WriteCommandFactory | None = None,
+) -> int:
+    """Select the apply path from persisted owner state, never agent input.
+
+    This is an orchestration entrypoint, not a CLI command. Each selected
+    authorization path still performs its own full validation and one-use
+    reservation. Release the owner lock before invoking either handler.
+    """
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise MerchantRuntimeHandoffStageError("SESSION_ID")
+
+    try:
+        with locked_state(session_id) as owner_state:
+            if owner_state is None:
+                raise MerchantRuntimeHandoffError(
+                    "Merchant handoff owner state unavailable"
+                )
+            direct_mode = owner_state.get("merchant_scope") is not None
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "SELECT_AUTHORIZATION", exc
+        ) from exc
+
+    if direct_mode:
+        return invoke_authorized_scope_apply(
+            session_id,
+            arguments,
+            write_command_factory=write_command_factory,
+        )
+
+    return invoke_confirmed_merchant_session_apply(
+        session_id,
+        arguments,
+        write_command_factory=write_command_factory,
+    )
 
 def _prepare_exact_apply(arguments: Sequence[str]) -> tuple[str, ...]:
     prepared, args = _prepare_runtime_apply(arguments)

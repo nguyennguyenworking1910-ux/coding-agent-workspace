@@ -419,7 +419,7 @@ def test_successful_handoff_runs_outside_owner_state_lock(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         fake_invoke,
     )
 
@@ -530,7 +530,7 @@ def test_runtime_exception_records_failed_and_cannot_retry(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         failing_invoke,
     )
 
@@ -613,7 +613,7 @@ def test_nonzero_runtime_exit_records_bounded_cli_failure_type(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         failing_cli_invoke,
     )
 
@@ -681,7 +681,7 @@ def test_handoff_is_rejected_for_wrong_authenticated_sender(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         lambda *args, **kwargs: (
             calls.append(
                 (
@@ -795,7 +795,7 @@ def test_reused_bound_pane_without_agent_id_can_handoff_once(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         fake_invoke,
     )
 
@@ -861,7 +861,7 @@ def test_role_hint_without_agent_id_or_bound_pane_is_rejected(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         lambda *args, **kwargs: (
             calls.append(
                 (
@@ -916,7 +916,7 @@ def test_wrong_pane_cannot_use_reused_teammate_authority(
 
     monkeypatch.setattr(
         team_result_hook,
-        "invoke_confirmed_merchant_session_apply",
+        "invoke_trusted_merchant_session_apply",
         lambda *args, **kwargs: (
             calls.append(
                 (

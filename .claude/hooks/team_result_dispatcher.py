@@ -64,6 +64,7 @@ class DispatcherDependencies:
     redirect_stdout: Callable[..., Any]
     sys: Any
     invoke_authorized_scope_apply: InvokeConfirmedMerchantSessionApplyFn | None = None
+    invoke_trusted_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn | None = None
 
 
 def main(
@@ -114,6 +115,10 @@ def main(
 
     invoke_authorized_scope_apply = (
         dependencies.invoke_authorized_scope_apply
+    )
+
+    invoke_trusted_merchant_session_apply = (
+        dependencies.invoke_trusted_merchant_session_apply
     )
 
     io = (
@@ -251,40 +256,43 @@ def main(
                         runtime_stderr
                     ),
                 ):
-                    # Select execution mode only from persisted owner state.
-                    # The teammate's message cannot select direct mode.
-                    with locked_state(
-                        handoff_attempt.owner_session_id
-                    ) as trusted_owner_state:
-                        if trusted_owner_state is None:
-                            raise RuntimeError(
-                                "Merchant handoff owner state unavailable"
-                            )
-
-                        direct_mode = (
-                            trusted_owner_state.get("merchant_scope")
-                            is not None
-                        )
-
-                    # Release owner lock before invoking either handler:
-                    # both authorization paths acquire that lock internally.
-                    if direct_mode:
-                        if not callable(invoke_authorized_scope_apply):
-                            raise RuntimeError(
-                                "Direct Merchant handoff is not configured"
-                            )
-
-                        exit_code = invoke_authorized_scope_apply(
+                    # Production uses one trusted entrypoint. The legacy
+                    # dependency-injection path remains temporarily for tests
+                    # that have not yet migrated to the unified contract.
+                    if callable(invoke_trusted_merchant_session_apply):
+                        exit_code = invoke_trusted_merchant_session_apply(
                             handoff_attempt.owner_session_id,
                             handoff_attempt.arguments,
                         )
                     else:
-                        exit_code = (
-                            invoke_confirmed_merchant_session_apply(
+                        # Compatibility-only path. Both handlers acquire the
+                        # owner lock; release it before either invocation.
+                        with locked_state(
+                            handoff_attempt.owner_session_id
+                        ) as trusted_owner_state:
+                            if trusted_owner_state is None:
+                                raise RuntimeError(
+                                    "Merchant handoff owner state unavailable"
+                                )
+                            direct_mode = (
+                                trusted_owner_state.get("merchant_scope")
+                                is not None
+                            )
+
+                        if direct_mode:
+                            if not callable(invoke_authorized_scope_apply):
+                                raise RuntimeError(
+                                    "Direct Merchant handoff is not configured"
+                                )
+                            exit_code = invoke_authorized_scope_apply(
                                 handoff_attempt.owner_session_id,
                                 handoff_attempt.arguments,
                             )
-                        )
+                        else:
+                            exit_code = invoke_confirmed_merchant_session_apply(
+                                handoff_attempt.owner_session_id,
+                                handoff_attempt.arguments,
+                            )
 
                 if exit_code == 0:
                     bounded_runtime_result = (
