@@ -1,4 +1,4 @@
-"""Trusted in-process bridge for one confirmed Merchant runtime apply.
+﻿"""Trusted in-process bridge for one confirmed Merchant runtime apply.
 
 This module intentionally has no command-line entry point. The ordinary
 Merchant Manager adapter remains read/propose-only. Controlled orchestration
@@ -427,7 +427,6 @@ def _reserve_direct_authorization(
 
         state["merchant_runtime_authorization_issued"] = True
 
-
 def invoke_authorized_scope_apply(
     session_id: str,
     arguments: Sequence[str],
@@ -436,8 +435,8 @@ def invoke_authorized_scope_apply(
 ) -> int:
     """Apply one trusted user-authorized write exactly once.
 
-    No proposal, confirmation token or Agent-authored block is consulted.
-    The presented argv must equal the user-authorized argv token for token.
+    An attempted argument mismatch consumes the authorization before
+    it is rejected. The reservation must be persisted before raising.
     """
 
     if not isinstance(session_id, str) or not session_id.strip():
@@ -449,6 +448,9 @@ def invoke_authorized_scope_apply(
         )
 
     presented = tuple(arguments)
+    scope_mismatch = False
+    scope = None
+    authorization = None
 
     try:
         with locked_state(session_id) as persisted_state:
@@ -461,21 +463,48 @@ def invoke_authorized_scope_apply(
                 persisted_state
             )
 
-            # Spent before the comparison: a mismatch cannot be retried.
+            # Reserve the one-use authorization under the session lock.
             _reserve_direct_authorization(persisted_state)
 
-            if presented != tuple(scope["argv"]):
-                raise MerchantRuntimeHandoffError(
-                    "Runtime apply does not match the user-authorized scope"
-                )
+            scope_mismatch = presented != tuple(scope["argv"])
 
-            authorization = issue_runtime_apply_authorization(
-                scope["confirmation"],
-                dispatch_receipt,
-            )
+            # IMPORTANT:
+            # Do not raise on scope_mismatch inside this block.
+            # locked_state() must persist the one-use marker first.
+
     except Exception as exc:
         raise MerchantRuntimeHandoffStageError(
             "RESERVE_AUTHORIZATION",
+            exc,
+        ) from exc
+
+    if scope_mismatch:
+        raise MerchantRuntimeHandoffStageError(
+            "RESERVE_AUTHORIZATION",
+            MerchantRuntimeHandoffError(
+                "Runtime apply does not match the user-authorized scope"
+            ),
+        )
+
+    if scope is None:
+        raise MerchantRuntimeHandoffStageError(
+            "RESERVE_AUTHORIZATION",
+            MerchantRuntimeHandoffError(
+                "Merchant runtime scope unavailable"
+            ),
+        )
+
+    # At this point locked_state() has exited normally.
+    # The one-use reservation has been persisted.
+    # Issuance failure can no longer restore the spent authorization.
+    try:
+        authorization = issue_runtime_apply_authorization(
+            scope["confirmation"],
+            dispatch_receipt,
+        )
+    except Exception as exc:
+        raise MerchantRuntimeHandoffStageError(
+            "ISSUE_AUTHORIZATION",
             exc,
         ) from exc
 
@@ -489,8 +518,9 @@ def invoke_authorized_scope_apply(
             write_command_factory=write_command_factory,
         )
     except Exception as exc:
-        raise MerchantRuntimeHandoffStageError("CLI_INVOKE", exc) from exc
-
+        raise MerchantRuntimeHandoffStageError(
+            "CLI_INVOKE", exc
+        ) from exc
 
 def _prepare_exact_apply(arguments: Sequence[str]) -> tuple[str, ...]:
     prepared, args = _prepare_runtime_apply(arguments)
