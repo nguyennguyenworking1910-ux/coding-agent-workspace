@@ -1,4 +1,4 @@
-﻿import os
+import os
 import uuid
 
 import pytest
@@ -63,10 +63,32 @@ def counts(repository, merchant_id, key):
     return merchants, events, ledger
 
 
+def claim_snapshot(repository, key):
+    with repository.connection(read_only=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT claim_status, claim_generation,
+                       execution_attempt_id
+                FROM merchant_ops.merchant_execution_claims
+                WHERE operation_key = %s
+                """,
+                (key,),
+            )
+            return cur.fetchone()
+
+
 def cleanup(repository, merchant_id, key):
     with repository.connection() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (key,),
+                )
                 cur.execute(
                     """
                     DELETE FROM merchant_ops.merchant_execution_ledger
@@ -176,5 +198,71 @@ def test_atomic_create_rollback_after_domain_write(monkeypatch):
             )
 
         assert counts(repository, merchant_id, key) == (0, 0, 0)
+        assert claim_snapshot(repository, key) is None
     finally:
+        cleanup(repository, merchant_id, key)
+
+
+def test_atomic_create_persists_completed_execution_claim():
+    repository, entity, merchant_id, key, code = setup()
+
+    try:
+        result, replayed = atomic_create_merchant(
+            repository,
+            entity,
+            operation_key=key,
+            merchant_id=merchant_id,
+            code=code,
+            name="Claim Integration Test Merchant",
+        )
+
+        assert replayed is False
+        assert result["merchant_id"] == merchant_id
+
+        with repository.connection(read_only=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT claim_status, claim_generation,
+                           execution_attempt_id
+                    FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (key,),
+                )
+                row = cur.fetchone()
+
+        assert row is not None
+        assert row["claim_status"] == "COMPLETED"
+        assert row["claim_generation"] == 1
+        assert row["execution_attempt_id"] is not None
+
+        original_claim = claim_snapshot(repository, key)
+
+        replay_result, replayed = atomic_create_merchant(
+            repository,
+            entity,
+            operation_key=key,
+            merchant_id=merchant_id,
+            code=code,
+            name="Claim Integration Test Merchant",
+        )
+
+        assert replayed is True
+        assert replay_result == result
+        assert claim_snapshot(repository, key) == original_claim
+        assert counts(repository, merchant_id, key) == (1, 1, 1)
+
+    finally:
+        with repository.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM merchant_ops.merchant_execution_claims
+                        WHERE operation_key = %s
+                        """,
+                        (key,),
+                    )
+
         cleanup(repository, merchant_id, key)

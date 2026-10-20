@@ -45,6 +45,36 @@ class FakeEntity:
         )
 
 
+@pytest.fixture(autouse=True)
+def mock_transaction_scoped_claims(monkeypatch):
+    """Keep pure unit tests independent of PostgreSQL cursors."""
+    claim_token = object()
+
+    def acquire(
+        connection,
+        *,
+        operation_key,
+        payload_hash,
+        execution_attempt_id,
+    ):
+        assert isinstance(connection, FakeConnection)
+        assert operation_key
+        assert len(payload_hash) == 64
+        assert isinstance(execution_attempt_id, module.uuid.UUID)
+        return claim_token
+
+    def complete(connection, *, token):
+        assert isinstance(connection, FakeConnection)
+        assert token is claim_token
+
+    monkeypatch.setattr(
+        module, "acquire_execution_claim", acquire
+    )
+    monkeypatch.setattr(
+        module, "complete_execution_claim", complete
+    )
+
+
 def test_create_and_ledger_share_connection(monkeypatch):
     repository = FakeRepository()
     entity = FakeEntity(repository.events)
@@ -116,8 +146,19 @@ def test_generated_merchant_id_is_created_inside_execute(
     entity = FakeEntity(repository.events)
 
     generated_ids = []
+    uuid_calls = 0
 
     def fake_uuid4():
+        nonlocal uuid_calls
+        uuid_calls += 1
+
+        # First UUID belongs to the execution attempt.
+        if uuid_calls == 1:
+            return module.uuid.UUID(
+                "00000000-0000-4000-8000-000000000001"
+            )
+
+        # Merchant ID generation occurs inside execute().
         value = f"generated-{len(generated_ids) + 1}"
         generated_ids.append(value)
         return value
@@ -152,3 +193,4 @@ def test_generated_merchant_id_is_created_inside_execute(
     assert replayed is False
     assert result["merchant_id"] == "generated-1"
     assert generated_ids == ["generated-1"]
+    assert uuid_calls == 2

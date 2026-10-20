@@ -9,6 +9,10 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from claude.clients.merchant.execution_ledger import execute_once
+from claude.clients.merchant.execution_claims import (
+    acquire_execution_claim,
+    complete_execution_claim,
+)
 
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
@@ -51,6 +55,13 @@ def atomic_create_merchant(
         with connection.transaction():
 
             def create() -> dict[str, Any]:
+                claim_token = acquire_execution_claim(
+                    connection,
+                    operation_key=operation_key,
+                    payload_hash=payload_hash,
+                    execution_attempt_id=uuid.uuid4(),
+                )
+
                 generated_merchant_id = (
                     merchant_id or str(uuid.uuid4())
                 )
@@ -95,10 +106,17 @@ def atomic_create_merchant(
                         "Merchant creation returned failure"
                     )
 
-                return {
+                result = {
                     **normalized,
                     "success": True,
                 }
+
+                complete_execution_claim(
+                    connection,
+                    token=claim_token,
+                )
+
+                return result
 
             return execute_once(
                 connection,
