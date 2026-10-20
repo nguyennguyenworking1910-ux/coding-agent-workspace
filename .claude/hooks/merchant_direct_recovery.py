@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from claude.hooks.team_lifecycle import locked_team_state
@@ -104,6 +105,33 @@ def reconcile_committed_merchant_create(
 
         key = reservation.get("operation_key")
         expected_hash = reservation.get("payload_hash")
+        expected_status = reservation.get("status")
+        expected_attempt_id = reservation.get("execution_attempt_id")
+
+        if expected_status == "EXECUTING":
+            if not isinstance(expected_attempt_id, str):
+                raise DirectRecoveryError(
+                    "Executing reservation missing attempt identity"
+                )
+
+        if expected_attempt_id is not None:
+            if not isinstance(expected_attempt_id, str):
+                raise DirectRecoveryError(
+                    "Invalid execution attempt identity"
+                )
+            try:
+                parsed_attempt_id = uuid.UUID(expected_attempt_id)
+            except (ValueError, AttributeError):
+                raise DirectRecoveryError(
+                    "Invalid execution attempt identity"
+                ) from None
+
+            if str(parsed_attempt_id) != expected_attempt_id:
+                raise DirectRecoveryError(
+                    "Non-canonical execution attempt identity"
+                )
+        else:
+            parsed_attempt_id = None
 
         if not isinstance(key, str) or not key:
             raise DirectRecoveryError("Operation key missing")
@@ -112,10 +140,17 @@ def reconcile_committed_merchant_create(
             raise DirectRecoveryError("Payload hash missing")
 
     # Read committed evidence outside the state lock.
+    # An executing reservation always requires an attempt-bound claim.
+    verify_kwargs = {
+        "operation_key": key,
+        "payload_hash": expected_hash,
+    }
+    if parsed_attempt_id is not None:
+        verify_kwargs["execution_attempt_id"] = parsed_attempt_id
+
     evidence = verify_committed_merchant_create(
         repository,
-        operation_key=key,
-        payload_hash=expected_hash,
+        **verify_kwargs,
     )
 
     if evidence is None:
@@ -131,6 +166,8 @@ def reconcile_committed_merchant_create(
             current.get("database") != database
             or current.get("operation_key") != key
             or current.get("payload_hash") != expected_hash
+            or current.get("status") != expected_status
+            or current.get("execution_attempt_id") != expected_attempt_id
         ):
             raise DirectRecoveryError(
                 "Reservation changed during verification"

@@ -1,4 +1,4 @@
-﻿"""Read-only verification of committed Merchant create evidence."""
+"""Read-only verification of committed Merchant create evidence."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ def verify_committed_merchant_create(
     *,
     operation_key: str,
     payload_hash: str,
+    execution_attempt_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """
     Return verified committed evidence, or None.
@@ -28,11 +29,41 @@ def verify_committed_merchant_create(
         or not operation_key.strip()
         or not isinstance(payload_hash, str)
         or not _HASH.fullmatch(payload_hash)
+        or (
+            execution_attempt_id is not None
+            and not isinstance(execution_attempt_id, uuid.UUID)
+        )
     ):
         return None
 
     with repository.connection(read_only=True) as conn:
         with conn.cursor() as cur:
+            if execution_attempt_id is not None:
+                cur.execute(
+                    """
+                    SELECT payload_hash,
+                           execution_attempt_id,
+                           claim_generation,
+                           claim_status
+                    FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+
+                claim = cur.fetchone()
+
+                if (
+                    not isinstance(claim, dict)
+                    or str(claim.get("payload_hash")) != payload_hash
+                    or str(claim.get("execution_attempt_id"))
+                    != str(execution_attempt_id)
+                    or claim.get("claim_status") != "COMPLETED"
+                    or type(claim.get("claim_generation")) is not int
+                    or claim["claim_generation"] < 1
+                ):
+                    return None
+
             cur.execute(
                 """
                 SELECT payload_hash, result
