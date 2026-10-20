@@ -82,44 +82,6 @@ class MerchantRuntimeHandoffStageError(MerchantRuntimeHandoffError):
 
         super().__init__(message)
 
-def invoke_confirmed_merchant_apply(
-    arguments: Sequence[str],
-    *,
-    trusted_state: MutableMapping[str, Any],
-    write_command_factory: WriteCommandFactory | None = None,
-) -> int:
-    """Invoke one exact runtime apply from a policy-accepted run state.
-
-    ``trusted_state`` is the in-memory document loaded by controlled
-    orchestration after the Gate 7.3 policy hook accepted and consumed the
-    corresponding Agent dispatch. It is not accepted by any CLI parser.
-    """
-
-    prepared = _prepare_exact_apply(arguments)
-    state = _validated_state(trusted_state)
-
-    if _confirmation_mode(state) == MODE_LOCAL_AUTO:
-        # A local auto-confirmed run has a session-scoped proposal receipt to
-        # spend, and only the session entry point can spend it. Refusing here
-        # keeps receipt consumption on the one path that performs it.
-        raise MerchantRuntimeHandoffError(
-            "A local auto-confirmed Merchant apply must use the session "
-            "handoff so its proposal receipt is consumed"
-        )
-
-    confirmation, dispatch_receipt = _reserve_authorization(state)
-    authorization = issue_runtime_apply_authorization(
-        confirmation,
-        dispatch_receipt,
-    )
-
-    return _invoke_authorized_apply(
-        prepared,
-        authorization,
-        write_command_factory=write_command_factory,
-    )
-
-
 def invoke_confirmed_merchant_session_apply(
     session_id: str,
     arguments: Sequence[str],

@@ -261,6 +261,8 @@ def test_denied_dispatch_never_creates_runtime_authority(
 @pytest.mark.parametrize(
     "state_change",
     (
+        {"operations": ["merchant_propose"]},
+        {"operations": ["merchant_apply", "schedule"]},
         {"selected_agents": ["coder"]},
         {"risk_level": "write"},
         {"confirmed": False},
@@ -543,3 +545,49 @@ def test_user_named_target_mismatch_burns_persisted_reservation():
         )
 
     assert handler.calls == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ["--database", "test", "merchant", "list"],
+        ["--database=runtime", "merchant", "list"],
+        ["--password", "private", "merchant", "list"],
+        ["merchant", "list"],
+        [
+            "project",
+            "update",
+            PROJECT_ID,
+            "--propose",
+            "--status",
+            "IN_PROGRESS",
+            "--expected-version",
+            "3",
+        ],
+    ),
+)
+def test_session_apply_rejects_credentials_database_override_and_non_apply(
+    arguments,
+):
+    """Untrusted CLI modes and target overrides cannot reach the write factory."""
+    proposal, _commands, _handler = _proposal_and_commands()
+    _save_and_accept_dispatch(proposal)
+
+    factory_calls = []
+
+    def factory(database):
+        factory_calls.append(database)
+        raise AssertionError("Forbidden arguments reached write factory")
+
+    with pytest.raises(MerchantRuntimeHandoffError):
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            arguments,
+            write_command_factory=factory,
+        )
+
+    assert factory_calls == []
+
+    stored = runtime_state.load_state(SESSION_ID)
+    assert stored is not None
+    assert "merchant_runtime_authorization_issued" not in stored

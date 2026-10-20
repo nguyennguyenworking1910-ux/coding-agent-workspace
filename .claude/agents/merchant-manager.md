@@ -347,7 +347,7 @@ token or raw proposal payload. The dispatch block still does not provide the tru
 capability by itself; only the Gate 7.4 controlled in-process handoff may issue that capability.
 
 The Gate 7.4 trusted in-process authorization handoff is implemented at
-`claude.system.merchant_runtime_handoff.invoke_confirmed_merchant_apply`. Controlled
+`claude.system.merchant_runtime_handoff.invoke_trusted_merchant_session_apply`. Controlled
 orchestration—not the teammate shell—owns that call. It validates the accepted dispatch receipt
 and passes one opaque, expiring, non-serializable capability through the internal Python call
 chain. Any attempt, including a mismatch, expiry, handler failure, or success, spends the
