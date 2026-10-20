@@ -493,3 +493,53 @@ def test_user_named_target_matching_apply_still_succeeds(capsys):
 
     assert exit_code == 0
     assert handler.calls == [PAYLOAD]
+
+
+def test_user_named_target_mismatch_burns_persisted_reservation():
+    """Rejected user-named target must permanently spend authorization."""
+    proposal, commands, handler = _proposal_and_commands()
+    _save_and_accept_dispatch(proposal)
+
+    other_project_id = "00000000-0000-0000-0000-000000000099"
+
+    with runtime_state.locked_state(SESSION_ID) as state:
+        assert state is not None
+        state["request"] = (
+            f"Update project {other_project_id} to IN_PROGRESS"
+        )
+
+    # Arguments match the confirmed proposal but not the UUID
+    # explicitly named in the persisted user request.
+    with pytest.raises(
+        MerchantRuntimeHandoffError,
+        match="target|RESERVE_AUTHORIZATION",
+    ):
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
+        )
+
+    stored = runtime_state.load_state(SESSION_ID)
+
+    # This is the fail-closed invariant under investigation.
+    assert stored["merchant_runtime_authorization_issued"] is True
+
+    # Restoring the originally matching request must not permit replay.
+    with runtime_state.locked_state(SESSION_ID) as state:
+        assert state is not None
+        state["request"] = (
+            "Apply the exact Merchant project update proposal"
+        )
+
+    with pytest.raises(
+        MerchantRuntimeHandoffError,
+        match="already issued",
+    ):
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
+        )
+
+    assert handler.calls == []

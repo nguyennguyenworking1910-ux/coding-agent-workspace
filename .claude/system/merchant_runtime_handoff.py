@@ -141,6 +141,7 @@ def invoke_confirmed_merchant_session_apply(
     confirmation: dict[str, Any] | None = None
     dispatch_receipt: dict[str, Any] | None = None
     confirmation_mode = MODE_MANUAL
+    target_mismatch_error = None
 
     try:
         with locked_state(session_id) as persisted_state:
@@ -161,14 +162,26 @@ def invoke_confirmed_merchant_session_apply(
                 _reserve_authorization(state)
             )
 
-            # The reservation is spent even on mismatch, so a rejected
-            # target cannot be retried against the same authorization.
-            _require_user_named_targets_bound(state, arguments)
+            # A target mismatch must spend the one-use reservation.
+            # Do not raise before locked_state persists the marker.
+            try:
+                _require_user_named_targets_bound(state, arguments)
+            except MerchantRuntimeHandoffError as exc:
+                target_mismatch_error = exc
+
     except Exception as exc:
         raise MerchantRuntimeHandoffStageError(
             "RESERVE_AUTHORIZATION",
             exc,
         ) from exc
+
+    # The state lock has exited normally and persisted the reservation.
+    # Reject before receipt consumption, authorization issuance or CLI.
+    if target_mismatch_error is not None:
+        raise MerchantRuntimeHandoffStageError(
+            "RESERVE_AUTHORIZATION",
+            target_mismatch_error,
+        ) from target_mismatch_error
 
     if confirmation_mode == MODE_LOCAL_AUTO:
         try:

@@ -536,3 +536,109 @@ def test_local_auto_receipt_remains_consumed_when_runtime_apply_fails(
         ]
         is True
     )
+
+def test_local_auto_target_mismatch_spends_authorization_without_consuming_receipt(
+    monkeypatch,
+    tmp_path,
+):
+    """Target mismatch spends dispatch authorization, not proposal receipt."""
+    monkeypatch.setenv(
+        "CLAUDE_RUNTIME_STATE_DIR",
+        str(tmp_path / "runtime"),
+    )
+    monkeypatch.setenv(
+        "CLAUDE_MERCHANT_PREFERENCES_DIR",
+        str(tmp_path / "merchant-confirmation"),
+    )
+
+    handler = RecordingHandler()
+    commands = MerchantWriteCommands(
+        {"project update": handler}
+    )
+
+    proposal = commands.propose(
+        "project update",
+        "runtime",
+        PAYLOAD,
+    )
+    confirmation = proposal["confirmation"]
+
+    with locked_preferences(SESSION_ID, create=True) as document:
+        assert document is not None
+        document["mode"] = MODE_LOCAL_AUTO
+        document["receipt"] = None
+
+    captured = capture_proposal_receipt(SESSION_ID, proposal)
+    assert captured.accepted is True
+
+    reserved = reserve_receipt(
+        SESSION_ID,
+        confirmation["confirmation_hash"],
+    )
+    assert reserved.accepted is True
+    assert receipt_state(SESSION_ID) == RECEIPT_RESERVED
+
+    # The trusted request names a different project from the proposal.
+    other_project_id = "00000000-0000-0000-0000-000000000099"
+
+    state = new_state(
+        request=f"Update project {other_project_id} to IN_PROGRESS",
+        task_class="small_task",
+        risk_level="external_write",
+        selected_agents=["merchant-manager"],
+        operations=["merchant_apply"],
+        limits={
+            "max_members": 1,
+            "max_tool_rounds": 1,
+            "max_total_tool_calls": 6,
+            "max_run_budget_usd": 1.0,
+        },
+        confirmed=True,
+        merchant_confirmation=confirmation,
+        merchant_confirmation_mode=(
+            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        ),
+        run_id=RUN_ID,
+    )
+
+    state["merchant_dispatch_spent"] = True
+    state["merchant_dispatch"] = {
+        "operation": "merchant_apply",
+        "subagent_type": "merchant-manager",
+        "teammate_name": "merchant-manager",
+        "confirmation_hash": confirmation["confirmation_hash"],
+    }
+    save_state(SESSION_ID, state)
+
+    with pytest.raises(
+        MerchantRuntimeHandoffStageError,
+    ) as exc_info:
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
+        )
+
+    assert exc_info.value.stage == "RESERVE_AUTHORIZATION"
+
+    persisted = load_state(SESSION_ID)
+    assert persisted is not None
+    assert persisted["merchant_runtime_authorization_issued"] is True
+
+    # Target validation failed before consume_receipt().
+    assert receipt_state(SESSION_ID) == RECEIPT_RESERVED
+    assert handler.calls == []
+
+    # Fixing the request afterward must not restore the authorization.
+    persisted["request"] = "Apply exact Merchant project update proposal"
+    save_state(SESSION_ID, persisted)
+
+    with pytest.raises(MerchantRuntimeHandoffError):
+        invoke_confirmed_merchant_session_apply(
+            SESSION_ID,
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
+        )
+
+    assert receipt_state(SESSION_ID) == RECEIPT_RESERVED
+    assert handler.calls == []
