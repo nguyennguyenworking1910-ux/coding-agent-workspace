@@ -16,6 +16,7 @@ def verify_committed_merchant_create(
     operation_key: str,
     payload_hash: str,
     execution_attempt_id: uuid.UUID | None = None,
+    claim_generation: int | None = None,
 ) -> dict[str, Any] | None:
     """
     Return verified committed evidence, or None.
@@ -32,6 +33,17 @@ def verify_committed_merchant_create(
         or (
             execution_attempt_id is not None
             and not isinstance(execution_attempt_id, uuid.UUID)
+        )
+        or (
+            claim_generation is not None
+            and (
+                type(claim_generation) is not int
+                or claim_generation < 1
+            )
+        )
+        or (
+            claim_generation is not None
+            and execution_attempt_id is None
         )
     ):
         return None
@@ -61,8 +73,15 @@ def verify_committed_merchant_create(
                     or claim.get("claim_status") != "COMPLETED"
                     or type(claim.get("claim_generation")) is not int
                     or claim["claim_generation"] < 1
+                    or (
+                        claim_generation is not None
+                        and claim["claim_generation"]
+                        != claim_generation
+                    )
                 ):
                     return None
+
+                verified_generation = claim["claim_generation"]
 
             cur.execute(
                 """
@@ -135,10 +154,17 @@ def verify_committed_merchant_create(
             ):
                 return None
 
-    return {
+    evidence = {
         "verified": True,
         "operation_key": operation_key,
         "payload_hash": payload_hash,
         "merchant_id": merchant_id,
         "source": "postgresql",
     }
+
+    # Claim generation is returned only after all committed
+    # claim, ledger, and domain evidence has been verified.
+    if execution_attempt_id is not None:
+        evidence["claim_generation"] = verified_generation
+
+    return evidence

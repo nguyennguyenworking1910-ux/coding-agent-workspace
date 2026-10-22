@@ -54,11 +54,29 @@ def env(monkeypatch):
         lambda owner: state,
     )
 
+    # The trusted completion persistence boundary uses the same
+    # in-memory state as the mocked read path.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def locked(_owner):
+        yield state
+
+    monkeypatch.setattr(
+        module,
+        "locked_team_state",
+        locked,
+    )
+
     def verify(repository, **kwargs):
         calls.append(kwargs)
         write = state["teammates"]["merchant-manager"][
             "direct_writes"
         ][kwargs["write_id"]]
+        write["claim_generation"] = 1
+        write["merchant_id"] = (
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        )
         write["status"] = "VERIFIED"
         return dict(write)
 
@@ -243,3 +261,105 @@ def test_mutated_second_write_cannot_change_reconciliation_target(
 
     assert result is False
     assert "runtime" not in databases
+
+
+def test_bound_generation_mutation_blocks_completion(
+    env, monkeypatch
+):
+    """A changed generation must block final report completion."""
+    state, calls = env
+    write = state["teammates"]["merchant-manager"][
+        "direct_writes"
+    ]["write-1"]
+
+    write["claim_generation"] = 1
+
+    def verify(repository, **kwargs):
+        calls.append(kwargs)
+        write["claim_generation"] = 2
+        write["status"] = "VERIFIED"
+        return dict(write)
+
+    monkeypatch.setattr(
+        module,
+        "reconcile_committed_merchant_create",
+        verify,
+    )
+
+    assert run() is False
+    assert write["claim_generation"] == 2
+
+
+def test_verified_write_requires_valid_generation(
+    env, monkeypatch
+):
+    """A VERIFIED write without a valid generation is incomplete."""
+    state, calls = env
+    write = state["teammates"]["merchant-manager"][
+        "direct_writes"
+    ]["write-1"]
+
+    def verify(repository, **kwargs):
+        calls.append(kwargs)
+        write["status"] = "VERIFIED"
+        return dict(write)
+
+    monkeypatch.setattr(
+        module,
+        "reconcile_committed_merchant_create",
+        verify,
+    )
+
+    assert run() is False
+
+
+
+def test_completion_persists_exact_receipt(env, monkeypatch):
+    """Trusted completion persists a receipt for verified writes."""
+    from contextlib import contextmanager
+
+    from claude.hooks.merchant_completion_receipt import (
+        receipt_matches_state,
+    )
+
+    state, calls = env
+
+    @contextmanager
+    def locked(_owner):
+        yield state
+
+    monkeypatch.setattr(
+        module, "locked_team_state", locked, raising=False
+    )
+
+    assert run() is True
+
+    record = state["teammates"]["merchant-manager"]
+    receipt = record.get("direct_completion_receipt")
+
+    assert receipt is not None
+    assert receipt_matches_state(record, receipt)
+
+
+def test_completion_rejects_mutation_before_receipt_persist(
+    env, monkeypatch
+):
+    """Mutation at final lock boundary must prevent receipt creation."""
+    from contextlib import contextmanager
+
+    state, calls = env
+    record = state["teammates"]["merchant-manager"]
+
+    @contextmanager
+    def locked(_owner):
+        record["direct_writes"]["write-1"][
+            "claim_generation"
+        ] = 2
+        yield state
+
+    monkeypatch.setattr(
+        module, "locked_team_state", locked, raising=False
+    )
+
+    assert run() is False
+    assert "direct_completion_receipt" not in record

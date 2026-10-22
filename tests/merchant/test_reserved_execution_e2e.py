@@ -238,11 +238,16 @@ def test_reserved_execution_commit_and_recovery(environment):
         assert recovered is not None
         assert recovered["status"] == "VERIFIED"
         assert recovered["merchant_id"] == merchant_id
+        assert recovered["claim_generation"] == 1
 
         persisted = record(context)
         assert persisted["direct_writes"][
             context["write_id"]
         ]["status"] == "VERIFIED"
+
+        assert persisted["direct_writes"][
+            context["write_id"]
+        ]["claim_generation"] == 1
 
         assert persisted["status"] == "RUNNING"
         assert persisted["result_received"] is False
@@ -357,6 +362,10 @@ def test_committed_write_releases_through_idle_hook(
             context["write_id"]
         ]["status"] == "EXECUTING"
 
+        executed_attempt = record(context)["direct_writes"][
+            context["write_id"]
+        ]["execution_attempt_id"]
+
         owner_record = record(context)
 
         pending = {
@@ -426,12 +435,25 @@ def test_committed_write_releases_through_idle_hook(
         assert settled["authorized_operations"] == []
         assert settled["last_completed_task_id"] == task_id
 
-        verified = settled["direct_writes"][
-            context["write_id"]
-        ]
+        # Completed writes are archived before IDLE_REUSABLE.
+        assert "direct_writes" not in settled
+        assert "direct_completion_receipt" not in settled
 
-        assert verified["status"] == "VERIFIED"
+        history = settled["completed_direct_write_history"]
+        assert len(history) == 1
+
+        receipt = history[0]
+        assert receipt["run_id"] == run_id
+        assert receipt["task_id"] == task_id
+        assert set(receipt["writes"]) == {context["write_id"]}
+
+        verified = receipt["writes"][context["write_id"]]
         assert verified["merchant_id"] == merchant_id
+        assert verified["claim_generation"] == 1
+        assert (
+            verified["execution_attempt_id"]
+            == executed_attempt
+        )
 
         # Lifecycle delivery must not create another write.
         assert counts(

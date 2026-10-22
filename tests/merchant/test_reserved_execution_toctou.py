@@ -267,6 +267,7 @@ def test_verified_with_trusted_attempt_can_be_resolved():
                 "execution_attempt_id": (
                     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
                 ),
+                "claim_generation": 1,
             }
         }
     }

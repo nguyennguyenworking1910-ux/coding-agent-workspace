@@ -107,6 +107,7 @@ def reconcile_committed_merchant_create(
         expected_hash = reservation.get("payload_hash")
         expected_status = reservation.get("status")
         expected_attempt_id = reservation.get("execution_attempt_id")
+        expected_generation = reservation.get("claim_generation")
 
         # A RESERVED write has not been claimed for execution.
         # Recovery never treats unbound evidence as authorization.
@@ -138,6 +139,12 @@ def reconcile_committed_merchant_create(
         else:
             parsed_attempt_id = None
 
+        if expected_generation is not None and (
+            type(expected_generation) is not int
+            or expected_generation < 1
+        ):
+            raise DirectRecoveryError("Invalid claim generation")
+
         if not isinstance(key, str) or not key:
             raise DirectRecoveryError("Operation key missing")
 
@@ -152,6 +159,8 @@ def reconcile_committed_merchant_create(
     }
     if parsed_attempt_id is not None:
         verify_kwargs["execution_attempt_id"] = parsed_attempt_id
+    if expected_generation is not None:
+        verify_kwargs["claim_generation"] = expected_generation
 
     evidence = verify_committed_merchant_create(
         repository,
@@ -160,6 +169,22 @@ def reconcile_committed_merchant_create(
 
     if evidence is None:
         return None
+
+    if not isinstance(evidence, dict) or evidence.get("verified") is not True:
+        raise DirectRecoveryError("Invalid committed evidence")
+
+    verified_generation = evidence.get("claim_generation")
+    if (
+        type(verified_generation) is not int
+        or verified_generation < 1
+    ):
+        raise DirectRecoveryError("Committed generation missing or invalid")
+
+    if (
+        expected_generation is not None
+        and verified_generation != expected_generation
+    ):
+        raise DirectRecoveryError("Committed generation mismatch")
 
     # Reacquire lock: never apply stale evidence to a reassigned task.
     with locked_team_state(owner_session_id) as state:
@@ -173,11 +198,13 @@ def reconcile_committed_merchant_create(
             or current.get("payload_hash") != expected_hash
             or current.get("status") != expected_status
             or current.get("execution_attempt_id") != expected_attempt_id
+            or current.get("claim_generation") != expected_generation
         ):
             raise DirectRecoveryError(
                 "Reservation changed during verification"
             )
 
+        current["claim_generation"] = verified_generation
         current["status"] = "VERIFIED"
         current["merchant_id"] = evidence["merchant_id"]
 

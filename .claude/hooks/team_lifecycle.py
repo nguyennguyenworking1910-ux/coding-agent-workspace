@@ -1020,6 +1020,25 @@ def get_or_create_teammate(
 
 
 
+def has_invalid_direct_completion_receipt(
+    record: dict[str, Any],
+) -> bool:
+    """Fail closed when a Merchant Direct Write lacks matching evidence."""
+    if "merchant_execute" not in (
+        record.get("authorized_operations") or []
+    ):
+        return False
+
+    from claude.hooks.merchant_completion_receipt import (
+        receipt_matches_state,
+    )
+
+    return not receipt_matches_state(
+        record,
+        record.get("direct_completion_receipt"),
+    )
+
+
 def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
     """Fail closed when any persisted direct write is unresolved."""
     if "direct_writes" not in record:
@@ -1036,6 +1055,10 @@ def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
         if write.get("status") != "VERIFIED":
             return True
 
+        generation = write.get("claim_generation")
+        if type(generation) is not int or generation < 1:
+            return True
+
         attempt_id = write.get("execution_attempt_id")
         if not isinstance(attempt_id, str):
             return True
@@ -1050,6 +1073,76 @@ def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
             return True
 
     return False
+
+
+def _archive_completed_direct_writes_for_reuse(
+    record: dict[str, Any],
+) -> bool:
+    """Archive verified writes atomically during task reassignment.
+
+    Must be called only while holding locked_team_state.
+    Does not perform PostgreSQL writes or grant execution authority.
+    """
+    from copy import deepcopy
+    from claude.hooks.merchant_completion_receipt import (
+        receipt_matches_state,
+    )
+
+    writes = record.get("direct_writes")
+    receipt = record.get("direct_completion_receipt")
+
+    if writes is None and receipt is None:
+        return True
+
+    if not isinstance(writes, dict) or not writes:
+        return False
+
+    if not receipt_matches_state(record, receipt):
+        return False
+
+    if has_unresolved_direct_writes(record):
+        return False
+
+    history = record.get("completed_direct_write_history", [])
+    if not isinstance(history, list):
+        return False
+
+    # Preserve the entire verified snapshot, not just write IDs.
+    archived = deepcopy(receipt)
+
+    # Validate every historical receipt before changing active state.
+    from claude.hooks.merchant_completion_receipt import (
+        valid_historical_receipt,
+    )
+
+    seen_tasks = set()
+
+    for item in history:
+        if not valid_historical_receipt(item):
+            return False
+
+        task_identity = (item["run_id"], item["task_id"])
+
+        if task_identity in seen_tasks:
+            return False
+
+        seen_tasks.add(task_identity)
+
+    new_identity = (archived["run_id"], archived["task_id"])
+
+    if new_identity in seen_tasks:
+        return False
+
+    history_copy = deepcopy(history)
+
+    if archived not in history_copy:
+        history_copy.append(archived)
+
+    record["completed_direct_write_history"] = history_copy
+    record.pop("direct_writes", None)
+    record.pop("direct_completion_receipt", None)
+
+    return True
 
 
 def mark_teammate_running(
@@ -1111,6 +1204,9 @@ def mark_teammate_running(
 
         if has_unresolved_direct_writes(record):
                 return False
+
+        if not _archive_completed_direct_writes_for_reuse(record):
+            return False
 
         record["status"] = (
             TeammateLifecycleStatus.RUNNING.value
@@ -1340,6 +1436,9 @@ def reserve_reusable_teammate(
                 if has_unresolved_direct_writes(record):
                         return False, "UNRESOLVED_DIRECT_WRITE"
 
+                if not _archive_completed_direct_writes_for_reuse(record):
+                    return False, "INVALID_COMPLETED_WRITE_HISTORY"
+
                 record["status"] = (TeammateLifecycleStatus.RUNNING.value                )
                 record["current_run_id"] = run_id
                 record["current_task_id"] = task_id
@@ -1441,6 +1540,9 @@ def release_reported_teammate_to_idle(
         if has_unresolved_direct_writes(record):
                 return False, "UNRESOLVED_DIRECT_WRITE"
 
+        if has_invalid_direct_completion_receipt(record):
+            return False, "INVALID_DIRECT_COMPLETION_RECEIPT"
+
         prior_status = str(record.get("status") or "UNKNOWN")
 
         if prior_status == TeammateLifecycleStatus.IDLE_REUSABLE.value:
@@ -1465,6 +1567,12 @@ def release_reported_teammate_to_idle(
 
         if not (run_id and task_id):
             return False, "UNBOUND_REPORT"
+
+        # Archive before clearing run/task identity.
+        # The completion receipt must still match the exact
+        # verified task while the state lock is held.
+        if not _archive_completed_direct_writes_for_reuse(record):
+            return False, "INVALID_COMPLETED_WRITE_HISTORY"
 
         record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
         record["last_completed_task_id"] = task_id
@@ -1966,6 +2074,9 @@ def mark_bound_report_received(
                 return False
 
             if has_unresolved_direct_writes(record):
+                return False
+
+            if has_invalid_direct_completion_receipt(record):
                 return False
 
 

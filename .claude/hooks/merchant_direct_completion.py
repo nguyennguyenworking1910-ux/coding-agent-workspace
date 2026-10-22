@@ -5,7 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable
 
-from claude.hooks.team_lifecycle import load_team_state, has_unresolved_direct_writes
+from claude.hooks.team_lifecycle import (
+    load_team_state,
+    locked_team_state,
+    has_unresolved_direct_writes,
+)
+from claude.hooks.merchant_completion_receipt import (
+    build_completion_receipt,
+    receipt_matches_state,
+)
 from claude.hooks.merchant_direct_recovery import (
     reconcile_committed_merchant_create,
 )
@@ -79,6 +87,16 @@ def reconcile_all_direct_writes(
         if (
             not isinstance(write.get("operation_key"), str)
             or not isinstance(write.get("payload_hash"), str)
+        ):
+            return False
+
+    # An existing generation is immutable. A missing generation
+    # may be bootstrapped only through committed-evidence recovery.
+    for write in writes.values():
+        generation = write.get("claim_generation")
+
+        if generation is not None and (
+            type(generation) is not int or generation < 1
         ):
             return False
 
@@ -165,7 +183,126 @@ def reconcile_all_direct_writes(
             if current.get(field) != original.get(field):
                 return False
 
+        original_generation = original.get("claim_generation")
+        current_generation = current.get("claim_generation")
+
+        if (
+            type(current_generation) is not int
+            or current_generation < 1
+        ):
+            return False
+
+        # A bound generation must not change during reconciliation.
+        # None -> positive int is the permitted bootstrap transition.
+        if (
+            original_generation is not None
+            and current_generation != original_generation
+        ):
+            return False
+
         if current.get("status") != "VERIFIED":
             return False
+
+    # Snapshot identities after successful database reconciliation.
+    # A later locked read must still match these exact values.
+    expected_receipt = build_completion_receipt(final_record)
+
+    if expected_receipt is None:
+        return False
+
+    with locked_team_state(owner_session_id) as locked_state:
+        if not isinstance(locked_state, dict):
+            return False
+
+        locked_record = locked_state.get(
+            "teammates", {}
+        ).get(teammate_name)
+
+        if not isinstance(locked_record, dict):
+            return False
+
+        if (
+            locked_record.get("canonical_name") != teammate_name
+            or locked_record.get("status") != "RUNNING"
+            or locked_record.get("current_run_id") != run_id
+            or locked_record.get("current_task_id") != task_id
+            or locked_record.get("authorized_operations")
+            != ["merchant_execute"]
+            or locked_record.get("authorized_selected_agents")
+            != [teammate_name]
+            or locked_record.get("result_received") is True
+        ):
+            return False
+
+        # Detect changes between the last unlocked state read
+        # and this final trusted persistence boundary.
+        if not receipt_matches_state(
+            locked_record, expected_receipt
+        ):
+            return False
+
+        # Preserve the original reservation identities too.
+        # Never allow reconciliation to silently replace a
+        # previously bound execution attempt or generation.
+        locked_writes = locked_record.get("direct_writes")
+
+        if not isinstance(locked_writes, dict):
+            return False
+
+        if set(locked_writes) != set(original_writes):
+            return False
+
+        for write_id, original in original_writes.items():
+            current = locked_writes.get(write_id)
+
+            if not isinstance(current, dict):
+                return False
+
+            for field in (
+                "write_id",
+                "run_id",
+                "task_id",
+                "database",
+                "command",
+                "operation_key",
+                "payload_hash",
+                "execution_attempt_id",
+            ):
+                if current.get(field) != original.get(field):
+                    return False
+
+            original_generation = original.get(
+                "claim_generation"
+            )
+            current_generation = current.get(
+                "claim_generation"
+            )
+
+            if (
+                type(current_generation) is not int
+                or current_generation < 1
+            ):
+                return False
+
+            if (
+                original_generation is not None
+                and current_generation != original_generation
+            ):
+                return False
+
+        existing_receipt = locked_record.get(
+            "direct_completion_receipt"
+        )
+
+        # Do not overwrite conflicting or malformed receipts.
+        if (
+            existing_receipt is not None
+            and existing_receipt != expected_receipt
+        ):
+            return False
+
+        locked_record["direct_completion_receipt"] = (
+            expected_receipt
+        )
 
     return True

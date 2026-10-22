@@ -365,3 +365,206 @@ def test_claim_integrity_fail_closed(repository, tamper):
                     """,
                     (mid,),
                 )
+
+
+def test_evidence_generation_contract_rejects_mismatch(
+    repository, monkeypatch
+):
+    """Verifier must reject a mismatched expected generation."""
+    import inspect
+
+    from claude.hooks.merchant_execution_evidence import (
+        verify_committed_merchant_create,
+    )
+
+    signature = inspect.signature(
+        verify_committed_merchant_create
+    )
+
+    assert "claim_generation" in signature.parameters, (
+        "Verifier must accept an expected claim_generation"
+    )
+
+
+
+@pytest.mark.parametrize(
+    "expected_generation,accepted",
+    [
+        (1, True),
+        (2, False),
+        (0, False),
+        (-1, False),
+        (True, False),
+        ("1", False),
+        (1.0, False),
+    ],
+)
+def test_exact_claim_generation_postgres(
+    repository, expected_generation, accepted
+):
+    """Read-only evidence requires the exact expected generation."""
+    entity = MerchantEntityRepository(repository)
+    merchant_id = str(uuid.uuid4())
+    operation_key = f"pytest:claim-generation:{uuid.uuid4()}"
+    attempt_id = uuid.uuid4()
+    code = f"T{uuid.uuid4().hex[:18].upper()}"
+    name = "Generation Evidence Merchant"
+
+    payload_hash = atomic_module._canonical_hash({
+        "command": "merchant create",
+        "merchant_id": merchant_id,
+        "code": code,
+        "name": name,
+        "region_code": None,
+        "created_by": None,
+    })
+
+    try:
+        result, replayed = atomic_create_merchant(
+            repository,
+            entity,
+            operation_key=operation_key,
+            execution_attempt_id=attempt_id,
+            merchant_id=merchant_id,
+            code=code,
+            name=name,
+        )
+
+        assert result["success"] is True
+        assert replayed is False
+
+        evidence = verify_committed_merchant_create(
+            repository,
+            operation_key=operation_key,
+            payload_hash=payload_hash,
+            execution_attempt_id=attempt_id,
+            claim_generation=expected_generation,
+        )
+
+        if accepted:
+            assert evidence is not None
+            assert evidence["merchant_id"] == merchant_id
+        else:
+            assert evidence is None
+
+    finally:
+        with repository.connection() as conn:
+            with conn.transaction():
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_ledger
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+
+                mid = uuid.UUID(merchant_id)
+
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.project_events
+                    WHERE merchant_id = %s
+                      AND entity_type = 'MERCHANT'
+                    """,
+                    (mid,),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchants
+                    WHERE id = %s
+                    """,
+                    (mid,),
+                )
+
+
+
+def test_committed_evidence_returns_claim_generation(repository):
+    """Exact committed claim evidence exposes its DB generation."""
+    entity = MerchantEntityRepository(repository)
+
+    merchant_id = str(uuid.uuid4())
+    operation_key = f"pytest:generation-bootstrap:{uuid.uuid4()}"
+    attempt_id = uuid.uuid4()
+    code = f"T{uuid.uuid4().hex[:18].upper()}"
+    name = "Generation Bootstrap Merchant"
+
+    payload_hash = atomic_module._canonical_hash({
+        "command": "merchant create",
+        "merchant_id": merchant_id,
+        "code": code,
+        "name": name,
+        "region_code": None,
+        "created_by": None,
+    })
+
+    try:
+        result, replayed = atomic_create_merchant(
+            repository,
+            entity,
+            operation_key=operation_key,
+            execution_attempt_id=attempt_id,
+            merchant_id=merchant_id,
+            code=code,
+            name=name,
+        )
+
+        assert result["success"] is True
+        assert replayed is False
+
+        evidence = verify_committed_merchant_create(
+            repository,
+            operation_key=operation_key,
+            payload_hash=payload_hash,
+            execution_attempt_id=attempt_id,
+            claim_generation=1,
+        )
+
+        assert evidence is not None
+        assert evidence["verified"] is True
+        assert evidence["merchant_id"] == merchant_id
+        assert evidence["claim_generation"] == 1
+
+    finally:
+        with repository.connection() as conn:
+            with conn.transaction():
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_ledger
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
+
+                mid = uuid.UUID(merchant_id)
+
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.project_events
+                    WHERE merchant_id = %s
+                      AND entity_type = 'MERCHANT'
+                    """,
+                    (mid,),
+                )
+
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchants
+                    WHERE id = %s
+                    """,
+                    (mid,),
+                )

@@ -192,7 +192,9 @@ def test_executing_committed_write_becomes_verified(
         module,
         "verify_committed_merchant_create",
         lambda *args, **kwargs: {
+            "verified": True,
             "merchant_id": "merchant-123",
+            "claim_generation": 1,
         },
     )
 
@@ -317,6 +319,7 @@ def test_executing_recovery_requires_bound_claim_attempt(
         return {
             "verified": True,
             "merchant_id": "merchant-123",
+            "claim_generation": 1,
         }
 
     monkeypatch.setattr(
@@ -485,3 +488,126 @@ def test_verified_without_attempt_cannot_reverify(env, monkeypatch):
 
     assert current["status"] == "VERIFIED"
     assert current["merchant_id"] == "merchant-legacy"
+
+
+
+
+def test_missing_generation_without_committed_evidence(
+    env, monkeypatch
+):
+    """Unknown commit must remain EXECUTING without retry."""
+    state, repo = env
+    current = reservation(state)
+
+    current["status"] = "EXECUTING"
+    current["execution_attempt_id"] = (
+        "00000000-0000-4000-8000-000000000001"
+    )
+    current.pop("claim_generation", None)
+
+    calls = []
+
+    def verify(_repo, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        module, "verify_committed_merchant_create", verify
+    )
+
+    result = module.reconcile_committed_merchant_create(
+        repo, **CONTEXT
+    )
+
+    assert result is None
+    assert len(calls) == 1
+    assert current["status"] == "EXECUTING"
+    assert "claim_generation" not in current
+    assert "merchant_id" not in current
+
+
+def test_committed_evidence_bootstraps_exact_generation(
+    env, monkeypatch
+):
+    """Crash recovery can bind the generation of its own claim."""
+    import uuid
+
+    state, repo = env
+    current = reservation(state)
+
+    attempt = uuid.uuid4()
+    current["status"] = "EXECUTING"
+    current["execution_attempt_id"] = str(attempt)
+    current.pop("claim_generation", None)
+
+    def verify(
+        _repo,
+        *,
+        operation_key,
+        payload_hash,
+        execution_attempt_id,
+        **kwargs,
+    ):
+        assert operation_key == KEY
+        assert payload_hash == HASH
+        assert execution_attempt_id == attempt
+
+        return {
+            "verified": True,
+            "merchant_id": "merchant-123",
+            "claim_generation": 1,
+        }
+
+    monkeypatch.setattr(
+        module, "verify_committed_merchant_create", verify
+    )
+
+    result = module.reconcile_committed_merchant_create(
+        repo, **CONTEXT
+    )
+
+    assert result is not None
+    assert result["status"] == "VERIFIED"
+    assert result["claim_generation"] == 1
+    assert current["claim_generation"] == 1
+    assert current["merchant_id"] == "merchant-123"
+
+
+def test_generation_change_during_verification_is_rejected(
+    env, monkeypatch
+):
+    """Evidence cannot overwrite an intervening generation change."""
+    import uuid
+
+    state, repo = env
+    current = reservation(state)
+
+    attempt = uuid.uuid4()
+    current["status"] = "EXECUTING"
+    current["execution_attempt_id"] = str(attempt)
+    current["claim_generation"] = 1
+
+    def verify(_repo, **kwargs):
+        assert kwargs.get("claim_generation") == 1
+
+        # Simulate an unauthorized concurrent state mutation.
+        current["claim_generation"] = 2
+
+        return {
+            "verified": True,
+            "merchant_id": "merchant-123",
+            "claim_generation": 1,
+        }
+
+    monkeypatch.setattr(
+        module, "verify_committed_merchant_create", verify
+    )
+
+    with pytest.raises(module.DirectRecoveryError):
+        module.reconcile_committed_merchant_create(
+            repo, **CONTEXT
+        )
+
+    assert current["status"] == "EXECUTING"
+    assert current["claim_generation"] == 2
+    assert "merchant_id" not in current
