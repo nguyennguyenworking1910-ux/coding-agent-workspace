@@ -998,7 +998,7 @@ def test_project_create_canonical_handoff_message_parses():
     assert candidate["confirmation_hash"] == CONFIRMATION_HASH
 
 
-def test_local_auto_posttooluse_composition_consumes_receipt_before_cli_failure(
+def test_legacy_local_auto_is_rejected_before_cli_execution(
     isolated_state,
     monkeypatch,
 ):
@@ -1200,51 +1200,24 @@ def test_local_auto_posttooluse_composition_consumes_receipt_before_cli_failure(
         == 0
     )
 
-    # ------------------------------------------------------------
-    # Critical 12H.5 invariant.
-    # ------------------------------------------------------------
 
-    assert (
-        receipt_state(OWNER_SESSION_ID)
-        == RECEIPT_CONSUMED
-    )
+    # Legacy LOCAL_AUTO state has no direct Merchant scope.
+    assert receipt_state(OWNER_SESSION_ID) == RECEIPT_RESERVED
+    assert cli_calls == []
 
-    assert len(cli_calls) == 1
-
-    persisted = load_state(
-        OWNER_SESSION_ID
-    )
-
+    persisted = load_state(OWNER_SESSION_ID)
     assert persisted is not None
+    assert "merchant_runtime_authorization_issued" not in persisted
 
-    handoff = persisted[
-        HANDOFF_STATE_KEY
-    ]
-
-    assert (
-        handoff["status"]
-        == HANDOFF_FAILED
-    )
-
-    assert (
-        handoff["exit_code"]
-        == 1
-    )
-
-    assert (
-        handoff["failure_type"]
-        == "MerchantRepositoryError"
-    )
-
-    assert (
-        persisted[
-            "merchant_runtime_authorization_issued"
-        ]
-        is True
+    handoff = persisted[HANDOFF_STATE_KEY]
+    assert handoff["status"] == HANDOFF_FAILED
+    assert handoff.get("exit_code") is None
+    assert handoff["failure_type"] == (
+        "MerchantRuntimeHandoffError:SELECT_AUTHORIZATION"
     )
 
 
-def test_local_auto_consume_rejection_persists_bounded_failure_stage(
+def test_legacy_local_auto_does_not_consume_receipt_without_scope(
     isolated_state,
     monkeypatch,
 ):
@@ -1446,46 +1419,17 @@ def test_local_auto_consume_rejection_persists_bounded_failure_stage(
         == RECEIPT_RESERVED
     )
 
-    # ------------------------------------------------------------
-    # But runtime authorization reservation happened first.
-    # ------------------------------------------------------------
 
-    persisted = load_state(
-        OWNER_SESSION_ID
-    )
+    # No direct scope: legacy receipt consumption is never reached.
+    assert receipt_state(OWNER_SESSION_ID) == RECEIPT_RESERVED
 
+    persisted = load_state(OWNER_SESSION_ID)
     assert persisted is not None
+    assert "merchant_runtime_authorization_issued" not in persisted
 
-    assert (
-        persisted[
-            "merchant_runtime_authorization_issued"
-        ]
-        is True
-    )
-
-    # ------------------------------------------------------------
-    # Gate 12H must persist only the bounded failure stage.
-    # No raw receipt reason or sensitive runtime information.
-    # ------------------------------------------------------------
-
-    handoff = persisted[
-        HANDOFF_STATE_KEY
-    ]
-
-    assert (
-        handoff["status"]
-        == HANDOFF_FAILED
-    )
-
-    assert (
-        handoff.get("exit_code")
-        is None
-    )
-
-    assert (
-        handoff["failure_type"]
-        == (
-            "MerchantRuntimeHandoffError:"
-            "CONSUME_RECEIPT"
-        )
+    handoff = persisted[HANDOFF_STATE_KEY]
+    assert handoff["status"] == HANDOFF_FAILED
+    assert handoff.get("exit_code") is None
+    assert handoff["failure_type"] == (
+        "MerchantRuntimeHandoffError:SELECT_AUTHORIZATION"
     )

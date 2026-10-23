@@ -36,22 +36,28 @@ def test_direct_path_is_selected_from_persisted_scope(monkeypatch):
     assert calls == [("direct", SESSION, ARGV)]
 
 
-def test_proposal_path_is_selected_without_direct_scope(monkeypatch):
-    runtime_state.save_state(SESSION, {"merchant_confirmation": {"test": True}})
-    calls = []
+def test_missing_direct_scope_rejects_legacy_proposal(monkeypatch):
+    import pytest
 
-    def proposal(session_id, arguments, *, write_command_factory=None):
-        calls.append(("proposal", session_id, arguments))
-        return 9
+    runtime_state.save_state(
+        SESSION, {"merchant_confirmation": {"test": True}}
+    )
 
-    def direct(*args, **kwargs):
-        raise AssertionError("Direct apply must not run without direct scope")
+    def forbidden(*args, **kwargs):
+        pytest.fail("No execution path is allowed without direct scope")
 
-    monkeypatch.setattr(handoff, "invoke_authorized_scope_apply", direct)
-    monkeypatch.setattr(handoff, "invoke_confirmed_merchant_session_apply", proposal)
+    monkeypatch.setattr(
+        handoff, "invoke_authorized_scope_apply", forbidden
+    )
+    monkeypatch.setattr(
+        handoff, "invoke_confirmed_merchant_session_apply", forbidden
+    )
 
-    assert handoff.invoke_trusted_merchant_session_apply(SESSION, ARGV) == 9
-    assert calls == [("proposal", SESSION, ARGV)]
+    with pytest.raises(
+        handoff.MerchantRuntimeHandoffStageError,
+        match="SELECT_AUTHORIZATION",
+    ):
+        handoff.invoke_trusted_merchant_session_apply(SESSION, ARGV)
 
 
 def test_missing_owner_state_fails_closed(monkeypatch):

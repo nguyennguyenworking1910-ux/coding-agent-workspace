@@ -531,10 +531,12 @@ def invoke_trusted_merchant_session_apply(
             write_command_factory=write_command_factory,
         )
 
-    return invoke_confirmed_merchant_session_apply(
-        session_id,
-        arguments,
-        write_command_factory=write_command_factory,
+    raise MerchantRuntimeHandoffStageError(
+        "SELECT_AUTHORIZATION",
+        MerchantRuntimeHandoffError(
+            "Direct Merchant scope is required; "
+            "legacy confirmation/apply fallback is disabled"
+        ),
     )
 
 def _prepare_exact_apply(arguments: Sequence[str]) -> tuple[str, ...]:
