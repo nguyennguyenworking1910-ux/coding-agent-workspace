@@ -1,9 +1,44 @@
+<!-- CP79_STATUS_START -->
+## Current Verified Progress ? 2026-10-23
+
+**Branch:** `feat/cp7-9-merchant-reliability`
+
+**Commits:** `2709d29` (recovery and diagnostics), `6daa5be` (roadmap).
+
+**Full non-live regression:** 3,280 passed, 20 skipped,
+1 xfailed, 97 subtests passed.
+
+| Checkpoint | Status |
+|---|---|
+| CP7.9A ? Crash Recovery | PASSED |
+| CP7.9B ? Diagnostics | PASSED |
+| CP7.9C ? Error Classification | Audit completed, acceptance pending |
+| CP7.9D ? Legacy Compatibility | Acceptance pending |
+| CP7.9E ? Full Regression | PASSED |
+| CP7.9F ? Final Handoff | Pending |
+
+**Verified CP7.9 progress:** 70%.
+
+**Verified unified production progress:** 8.4% / 100%.
+
+**Next:** Close CP7.9C?D with existing evidence,
+complete handoff, then begin CP12 reconciliation.
+
+**Architecture:** Direct Execution First. No generic
+proposal/confirmation/apply layer. Unknown COMMIT
+outcome requires evidence reconciliation, never
+a new Merchant CREATE attempt.
+
+Historical progress entries below are retained for reference;
+this dated status supersedes their progress figures.
+<!-- CP79_STATUS_END -->
+
 # Agent Ecosystem — Unified Roadmap to Production
 
-**Version:** 2.0 — Direct Execution First (22 October 2026)  
-**Scope:** `coding-agent-workspace` — CP7.9 + original CP12–CP18, from trusted Merchant lifecycle to secure internal multi-user production rollout, with **no proposal/confirmation/apply layer for authorized internal Merchant writes**.  
-**Current working branch reported:** `feat/cp7-9-merchant-reliability` (local); **last verified completed baseline:** CP7.8 at commit `80322f0`.  
-**Source-of-truth documents:** `AGENT_ECOSYSTEM_CHECKPOINT_12_TO_18_ROADMAP_2026-09-24.md` (original), `CP7_9_Merchant_Reliability_Roadmap.md` (new), CP7.8 test/commit logs.  
+**Version:** 2.0 — Direct Execution First (22 October 2026)
+**Scope:** `coding-agent-workspace` — CP7.9 + original CP12–CP18, from trusted Merchant lifecycle to secure internal multi-user production rollout, with **no proposal/confirmation/apply layer for authorized internal Merchant writes**.
+**Current working branch reported:** `feat/cp7-9-merchant-reliability` (local); **last verified completed baseline:** CP7.8 at commit `80322f0`.
+**Source-of-truth documents:** `AGENT_ECOSYSTEM_CHECKPOINT_12_TO_18_ROADMAP_2026-09-24.md` (original), `CP7_9_Merchant_Reliability_Roadmap.md` (new), CP7.8 test/commit logs.
 **Document type:** planning and progress ledger; **not** authorization to mutate production databases, deploy services, or change security policy.
 
 > **Progress philosophy:** 100% means **production rollout criteria satisfied**, not merely code written or tests passing. A completed earlier checkpoint can support later stages, but it must not be counted twice. Historic statements and currently validated evidence are tracked separately. **Proposal elimination is a fixed design requirement for future acceptance; progress is not awarded for merely updating this roadmap.**
