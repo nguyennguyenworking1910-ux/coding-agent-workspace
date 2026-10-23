@@ -363,3 +363,236 @@ def test_completion_rejects_mutation_before_receipt_persist(
 
     assert run() is False
     assert "direct_completion_receipt" not in record
+
+
+
+def test_real_completion_receipt_save_failure_is_retryable(
+    tmp_path, monkeypatch
+):
+    """A failed receipt save preserves durable state and permits retry."""
+    import json
+
+    from claude.hooks import team_lifecycle
+    from claude.hooks.merchant_completion_receipt import (
+        receipt_matches_state,
+    )
+
+    target = tmp_path / "owner-1.json"
+    lock_path = tmp_path / "owner-1.lock"
+
+    monkeypatch.setattr(
+        team_lifecycle, "team_state_dir", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        team_lifecycle,
+        "team_state_path",
+        lambda _session: target,
+    )
+    monkeypatch.setattr(
+        team_lifecycle,
+        "team_lock_path",
+        lambda _session: lock_path,
+    )
+
+    state = make_state(status="VERIFIED")
+    write = state["teammates"]["merchant-manager"][
+        "direct_writes"
+    ]["write-1"]
+
+    write["claim_generation"] = 1
+    write["merchant_id"] = (
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    )
+
+    team_lifecycle.save_team_state("owner-1", state)
+
+    # Use the actual disk-backed lifecycle read and lock.
+    monkeypatch.setattr(
+        module,
+        "load_team_state",
+        team_lifecycle.load_team_state,
+    )
+    monkeypatch.setattr(
+        module,
+        "locked_team_state",
+        team_lifecycle.locked_team_state,
+    )
+
+    evidence_reads = []
+    diagnostic_events = []
+
+    def collect_diagnostic(encoded):
+        diagnostic_events.append(json.loads(encoded))
+
+    def verify(_repository, **kwargs):
+        evidence_reads.append(dict(kwargs))
+
+        persisted = team_lifecycle.load_team_state("owner-1")
+        current = persisted["teammates"]["merchant-manager"][
+            "direct_writes"
+        ][kwargs["write_id"]]
+
+        assert current["status"] == "VERIFIED"
+        assert current["claim_generation"] == 1
+        assert current["execution_attempt_id"] == (
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        )
+
+        # This stub only returns verified evidence. It never writes.
+        return dict(current)
+
+    monkeypatch.setattr(
+        module,
+        "reconcile_committed_merchant_create",
+        verify,
+    )
+
+    original_replace = team_lifecycle.replace_with_retry
+    failures = []
+
+    def injected_replace(source, destination):
+        pending = json.loads(
+            source.read_text(encoding="utf-8")
+        )
+
+        record = pending["teammates"]["merchant-manager"]
+
+        if (
+            record.get("direct_completion_receipt") is not None
+            and not failures
+        ):
+            failures.append("receipt-save")
+            raise OSError("INJECTED_COMPLETION_RECEIPT_SAVE_FAILURE")
+
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(
+        team_lifecycle,
+        "replace_with_retry",
+        injected_replace,
+    )
+
+    with pytest.raises(
+        OSError,
+        match="INJECTED_COMPLETION_RECEIPT_SAVE_FAILURE",
+    ):
+        module.reconcile_all_direct_writes(
+            **CONTEXT,
+            repository_factory=lambda _database: object(),
+            diagnostic_sink=collect_diagnostic,
+        )
+
+    assert diagnostic_events == []
+
+    # The failed save must not leave a durable completion receipt.
+    after_failure = team_lifecycle.load_team_state("owner-1")
+    failed_record = after_failure["teammates"]["merchant-manager"]
+    failed_write = failed_record["direct_writes"]["write-1"]
+
+    assert "direct_completion_receipt" not in failed_record
+    assert failed_write["status"] == "VERIFIED"
+    assert failed_write["claim_generation"] == 1
+    assert failed_write["execution_attempt_id"] == (
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    )
+    assert failures == ["receipt-save"]
+
+    # Same verified write, same execution identity, no new CREATE.
+    assert module.reconcile_all_direct_writes(
+        **CONTEXT,
+        repository_factory=lambda _database: object(),
+        diagnostic_sink=collect_diagnostic,
+    ) is True
+
+    assert len(diagnostic_events) == 1
+    assert diagnostic_events[0]["event_type"] == "merchant.completion"
+    assert diagnostic_events[0]["stage"] == "completion_receipt"
+    assert diagnostic_events[0]["outcome"] == "completed"
+    assert diagnostic_events[0]["write_id"] == "write-1"
+    assert diagnostic_events[0]["claim_generation"] == 1
+
+    after_retry = team_lifecycle.load_team_state("owner-1")
+    final_record = after_retry["teammates"]["merchant-manager"]
+    receipt = final_record.get("direct_completion_receipt")
+
+    assert receipt is not None
+    assert receipt_matches_state(final_record, receipt)
+    assert final_record["direct_writes"]["write-1"] == failed_write
+    assert len(evidence_reads) == 2
+
+    # Repeated reconciliation must preserve the receipt.
+    assert module.reconcile_all_direct_writes(
+        **CONTEXT,
+        repository_factory=lambda _database: object(),
+    ) is True
+
+    final_state = team_lifecycle.load_team_state("owner-1")
+    assert (
+        final_state["teammates"]["merchant-manager"][
+            "direct_completion_receipt"
+        ] == receipt
+    )
+
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+
+def test_completion_diagnostic_emitted_after_receipt_persistence(
+    env, monkeypatch
+):
+    import json
+    from contextlib import contextmanager
+
+    state, _calls = env
+    events = []
+    inside_lock = [False]
+
+    @contextmanager
+    def locked(_owner):
+        inside_lock[0] = True
+        try:
+            yield state
+        finally:
+            inside_lock[0] = False
+
+    monkeypatch.setattr(module, "locked_team_state", locked)
+
+    def sink(encoded):
+        assert inside_lock[0] is False
+        record = state["teammates"]["merchant-manager"]
+        assert record.get("direct_completion_receipt") is not None
+        events.append(json.loads(encoded))
+
+    result = module.reconcile_all_direct_writes(
+        **CONTEXT,
+        repository_factory=lambda _database: object(),
+        diagnostic_sink=sink,
+    )
+
+    assert result is True
+    assert len(events) == 1
+    assert events[0]["event_type"] == "merchant.completion"
+    assert events[0]["stage"] == "completion_receipt"
+    assert events[0]["outcome"] == "completed"
+    assert events[0]["write_id"] == "write-1"
+    assert events[0]["claim_generation"] == 1
+
+
+def test_completion_diagnostic_sink_failure_is_non_authoritative(env):
+    state, _calls = env
+
+    def broken_sink(_encoded):
+        raise OSError("SENSITIVE_SINK_FAILURE")
+
+    result = module.reconcile_all_direct_writes(
+        **CONTEXT,
+        repository_factory=lambda _database: object(),
+        diagnostic_sink=broken_sink,
+    )
+
+    assert result is True
+    assert (
+        state["teammates"]["merchant-manager"]
+        .get("direct_completion_receipt")
+        is not None
+    )

@@ -9,6 +9,10 @@ from claude.hooks.team_lifecycle import locked_team_state
 from claude.hooks.merchant_execution_evidence import (
     verify_committed_merchant_create,
 )
+from claude.hooks.merchant_diagnostics import (
+    build_diagnostic_event,
+    emit_diagnostic_event,
+)
 
 
 class DirectRecoveryError(RuntimeError):
@@ -74,6 +78,7 @@ def reconcile_committed_merchant_create(
     task_id: str,
     write_id: str,
     database: str,
+    diagnostic_sink: Any = None,
 ) -> dict[str, Any] | None:
     """Verify a previously reserved write without executing it.
 
@@ -209,4 +214,22 @@ def reconcile_committed_merchant_create(
         current["merchant_id"] = evidence["merchant_id"]
 
         # Do not mark REPORT_RECEIVED or release the teammate here.
-        return dict(current)
+        verified_result = dict(current)
+
+    # The state lock has exited and persistence has succeeded.
+    # Diagnostics are never authoritative business evidence.
+    try:
+        event = build_diagnostic_event(
+            event_type="merchant.recovery",
+            stage="state_persistence",
+            outcome="verified",
+            run_id=run_id,
+            task_id=task_id,
+            write_id=write_id,
+            claim_generation=verified_generation,
+        )
+        emit_diagnostic_event(event, diagnostic_sink)
+    except Exception:
+        pass
+
+    return verified_result

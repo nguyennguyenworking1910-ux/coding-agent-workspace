@@ -17,6 +17,10 @@ from claude.hooks.merchant_completion_receipt import (
 from claude.hooks.merchant_direct_recovery import (
     reconcile_committed_merchant_create,
 )
+from claude.hooks.merchant_diagnostics import (
+    build_diagnostic_event,
+    emit_diagnostic_event,
+)
 
 
 class DirectCompletionError(RuntimeError):
@@ -30,6 +34,7 @@ def reconcile_all_direct_writes(
     run_id: str,
     task_id: str,
     repository_factory: Callable[[str], Any],
+    diagnostic_sink: Any = None,
 ) -> bool:
     """Return True only after every bound write has verified DB evidence.
 
@@ -304,5 +309,32 @@ def reconcile_all_direct_writes(
         locked_record["direct_completion_receipt"] = (
             expected_receipt
         )
+
+        # Snapshot only trusted, validated write identities.
+        diagnostic_writes = tuple(
+            (
+                write_id,
+                locked_writes[write_id]["claim_generation"],
+            )
+            for write_id in sorted(locked_writes)
+        )
+
+    # The lock has exited: the receipt is durably persisted.
+    # Telemetry must never change the completion result.
+    if diagnostic_sink is not None:
+        for write_id, generation in diagnostic_writes:
+            try:
+                event = build_diagnostic_event(
+                    event_type="merchant.completion",
+                    stage="completion_receipt",
+                    outcome="completed",
+                    run_id=run_id,
+                    task_id=task_id,
+                    write_id=write_id,
+                    claim_generation=generation,
+                )
+                emit_diagnostic_event(event, diagnostic_sink)
+            except Exception:
+                pass
 
     return True

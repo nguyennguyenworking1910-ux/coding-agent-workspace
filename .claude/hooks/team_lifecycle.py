@@ -1516,6 +1516,7 @@ def mark_report_received(
 def release_reported_teammate_to_idle(
     session_id: Any,
     teammate_name: str,
+    diagnostic_sink: Any = None,
 ) -> tuple[bool, str]:
     """Atomically release one authenticated, reported teammate for reuse.
 
@@ -1568,6 +1569,29 @@ def release_reported_teammate_to_idle(
         if not (run_id and task_id):
             return False, "UNBOUND_REPORT"
 
+        # Snapshot trusted Merchant write identities before archive.
+        diagnostic_writes = ()
+
+        if (
+            "merchant_execute" in
+            (record.get("authorized_operations") or [])
+            and isinstance(record.get("direct_writes"), dict)
+            and record.get("direct_completion_receipt") is not None
+        ):
+            diagnostic_writes = tuple(
+                (
+                    write_id,
+                    write.get("claim_generation"),
+                )
+                for write_id, write in sorted(
+                    record["direct_writes"].items()
+                )
+                if isinstance(write_id, str)
+                and isinstance(write, dict)
+                and write.get("run_id") == run_id
+                and write.get("task_id") == task_id
+            )
+
         # Archive before clearing run/task identity.
         # The completion receipt must still match the exact
         # verified task while the state lock is held.
@@ -1584,9 +1608,31 @@ def release_reported_teammate_to_idle(
         _touch_transition(
             record
         )
-        
-        return True, prior_status
 
+    # Successful context exit means durable state persistence.
+    # Diagnostics are best-effort and non-authoritative.
+    if diagnostic_sink is not None and diagnostic_writes:
+        from claude.hooks.merchant_diagnostics import (
+            build_diagnostic_event,
+            emit_diagnostic_event,
+        )
+
+        for write_id, generation in diagnostic_writes:
+            try:
+                event = build_diagnostic_event(
+                    event_type="merchant.archive",
+                    stage="idle_release",
+                    outcome="completed",
+                    run_id=run_id,
+                    task_id=task_id,
+                    write_id=write_id,
+                    claim_generation=generation,
+                )
+                emit_diagnostic_event(event, diagnostic_sink)
+            except Exception:
+                pass
+
+    return True, prior_status
 
 def mark_teammate_acknowledged(
     session_id: Any,
@@ -2006,6 +2052,7 @@ def mark_bound_report_received(
     run_id: str,
     task_id: str,
     source: str = "sendmessage",
+    diagnostic_sink: Any = None,
 ) -> bool:
     """Mark a report received only when run/task binding still matches."""
 
@@ -2103,7 +2150,51 @@ def mark_bound_report_received(
             record
         )
 
-        return True
+        # Capture validated Merchant write identities before
+        # leaving the lock. Do not emit while holding it.
+        diagnostic_writes = ()
+
+        if "merchant_execute" in (
+            record.get("authorized_operations") or []
+        ):
+            diagnostic_writes = tuple(
+                (
+                    write_id,
+                    write.get("claim_generation"),
+                )
+                for write_id, write in sorted(
+                    record["direct_writes"].items()
+                )
+                if isinstance(write_id, str)
+                and isinstance(write, dict)
+                and write.get("run_id") == current_run_id
+                and write.get("task_id") == current_task_id
+            )
+
+    # Successful context exit means state persistence completed.
+    # Diagnostics are best-effort and never grant authority.
+    if diagnostic_sink is not None:
+        from claude.hooks.merchant_diagnostics import (
+            build_diagnostic_event,
+            emit_diagnostic_event,
+        )
+
+        for write_id, generation in diagnostic_writes:
+            try:
+                event = build_diagnostic_event(
+                    event_type="merchant.report",
+                    stage="report_transition",
+                    outcome="completed",
+                    run_id=current_run_id,
+                    task_id=current_task_id,
+                    write_id=write_id,
+                    claim_generation=generation,
+                )
+                emit_diagnostic_event(event, diagnostic_sink)
+            except Exception:
+                pass
+
+    return True
 
 
 def bind_reported_teammate_pane_session(
