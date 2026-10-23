@@ -1,39 +1,106 @@
-<!-- CP79_STATUS_START -->
-## Current Verified Progress ? 2026-10-23
-
-**Branch:** `feat/cp7-9-merchant-reliability`
-
-**Commits:** `2709d29` (recovery and diagnostics), `6daa5be` (roadmap).
-
-**Full non-live regression:** 3,280 passed, 20 skipped,
-1 xfailed, 97 subtests passed.
-
-| Checkpoint | Status |
-|---|---|
-| CP7.9A ? Crash Recovery | PASSED |
-| CP7.9B ? Diagnostics | PASSED |
-| CP7.9C ? Error Classification | Audit completed, acceptance pending |
-| CP7.9D ? Legacy Compatibility | Acceptance pending |
-| CP7.9E ? Full Regression | PASSED |
-| CP7.9F ? Final Handoff | Pending |
-
-**Verified CP7.9 progress:** 70%.
-
-**Verified unified production progress:** 8.4% / 100%.
-
-**Next:** Close CP7.9C?D with existing evidence,
-complete handoff, then begin CP12 reconciliation.
-
-**Architecture:** Direct Execution First. No generic
-proposal/confirmation/apply layer. Unknown COMMIT
-outcome requires evidence reconciliation, never
-a new Merchant CREATE attempt.
-
-Historical progress entries below are retained for reference;
-this dated status supersedes their progress figures.
-<!-- CP79_STATUS_END -->
-
 # Agent Ecosystem — Unified Roadmap to Production
+
+<!-- CURRENT_STATUS_START -->
+## CURRENT STATUS & SESSION HANDOFF — 23 October 2026
+
+**This section is the authoritative CURRENT state.** Historical baseline prose farther down was written on 22 October; where it conflicts, the dated status and verified Git/test evidence below prevail. No new checkpoint credit is awarded by editing this file.
+
+- **Local repository:** `C:\Users\nguyen.nguyen30\Desktop\coding-agent-workspace`
+- **Branch:** `feat/cp7-9-merchant-reliability`
+- **Last verified commit:** `26d979c` — `fix(merchant): fail closed without direct scope`
+- **Latest working-tree state:** One modified, **uncommitted** file: `.claude/agents/tools/merchant/cli.py` (CP12-B.1 runtime legacy-mode guard, 8 added lines); latest Git state was observed before this document update. Do **not** assume clean working tree or stage it implicitly.
+- **User requirement:** No Claude Code. Work via ChatGPT-authored instructions and user-run local PowerShell/Python/pytest. Keep changes small, traceable, and easy to debug/handoff.
+
+### Current production progress — separate verified work from provisional credit
+
+| Stage | Roadmap weight | Stage acceptance | Credited contribution |
+|---|---:|---|---:|
+| CP7.9 Merchant Reliability | 12.00 pp | 70% accepted: A 40%, B 15%, E non-live regression 15%; C, D, F not finally accepted | **8.40 pp** |
+| CP12 Direct Execution Authority | 17.00 pp | CP12-A (no trusted-scope fallback) **PASS + committed**; remaining CP12 gates incomplete | **0.34 pp provisional** (locally allocated 2% of CP12; not yet reconciled with official 12A–H subgate ledger) |
+| CP13–CP18 | 71.00 pp | Not yet newly reconciled/accepted | 0.00 pp |
+| **TOTAL** | **100.00 pp** | | **8.40 pp strict verified; 8.74 pp including provisional CP12-A credit** |
+
+**Progress convention:** Until CP12-A's fractional credit is formally mapped to one of the official CP12 subgates, show both **strict 8.40%** and **working 8.74%**; do not silently describe 8.74% as audited official ledger. There has been no new acceptance from the CP12-B.1 failed regression.
+
+### Evidence and completed checkpoints
+
+| Item | Result / evidence | Acceptance |
+|---|---|---|
+| CP7.9A recovery | Verified crash/persistence, generation, bounded read-only committed-evidence recovery; included in `2709d29` | PASS (40% CP7.9) |
+| CP7.9B diagnostics | Allowlisted best-effort lifecycle diagnostics; `2709d29`; focused `125 passed, 1 xfailed` | PASS (15% CP7.9) |
+| CP7.9C error classification | Exception handler inventory and caller/recovery audit; existing fail-closed behavior, but classification acceptance review pending | PENDING (10%) |
+| CP7.9D legacy state compatibility | 71 selected tests passed, state/receipt/generation/archive tests inspected; not yet exhaustive legacy-state acceptance | PENDING (15%) |
+| CP7.9E non-live full suite | Most recent **clean** full suite at CP12-A: `3282 passed, 20 skipped, 1 xfailed, 97 subtests passed` (80.88 s); live DB tests intentionally skipped | PASS for non-live portion (15%) |
+| CP7.9F final handoff | Recovery commit `2709d29`, roadmap commits `6daa5be` and `49195a3`; final CP7.9 gate handoff still pending | PENDING (5%) |
+| CP12-A disable operational legacy fallback | `26d979c`; missing `merchant_scope` raises `SELECT_AUTHORIZATION`; direct-scope route still allowed; full suite `3282 passed` | PASS, committed |
+| CP12-B baseline | 80 relevant tests passed on clean `26d979c` | PASS baseline only |
+| **CP12-B.1 runtime legacy mode guard** | Added fail-closed check in `.claude/agents/tools/merchant/cli.py`, blocking runtime business-write `PROPOSE/APPLY` before constructing write handler | **PATCH PRESENT, TARGETED REGRESSION FAILED, NOT COMMITTED** |
+
+### CURRENT BLOCKER — CP12-B.1 (resume here)
+
+**Exact test failure** from the latest user-run targeted suite:
+
+```text
+tests/merchant/test_direct_execution_boundary.py::test_cli_main_runtime_proposal_is_not_blocked_by_write_guard
+AssertionError: assert [] == ['runtime']
+1 failed, 81 passed in 5.08s
+```
+
+The existing test expects runtime `--propose` to construct a `write_command_factory` (tracking `factory_calls == ['runtime']`). New CP12-B.1 architecture requires **deny before factory creation**, so `factory_calls == []` is the intended boundary. The CLI emits a bounded JSON error `MerchantCommandError` and does not invoke a handler. This is **an expected legacy-test mismatch to examine**, not proof of a new execution engine defect. Do not remove the runtime guard to satisfy the old test.
+
+**Next implementation procedure (smallest safe batch):**
+
+1. Inspect full body of `test_cli_main_runtime_proposal_is_not_blocked_by_write_guard` and nearby direct-execution boundary tests; confirm current expectations and error result assertions.
+2. Update/rename **only** that test to require runtime `--propose` rejection *before factory construction* (`factory_calls == []`, nonzero exit/error, no handler mutation). Add/retain a matching runtime `--apply` rejection assertion if coverage is missing; avoid changing admin `bootstrap.py`/`migrate.py` `--apply` semantics.
+3. Run targeted `test_direct_execution_boundary.py`, `test_direct_cli_execution.py`, `test_direct_agent_cli.py`, `test_merchant_cli.py`, `test_runtime_authorization.py`; inspect any remaining failures without weakening authorization.
+4. Complete CP12-B.2: decide how to remove public Merchant business-write CLI `PROPOSE/APPLY` without altering database-admin CLIs or allowing generic runtime Merchant CREATE. Update affected tests together, not one-by-one; do not delete internal legacy helpers until caller/dependency audit confirms safety.
+5. Run full non-live `pytest tests -q --tb=short -rs`, `git diff --check`, review exact staged files and commit. No live DB writes or automatic retries of uncertain commits.
+
+**Critical nuance:** `merchant create` on `runtime` is intentionally blocked from generic CLI `EXECUTE` and instead requires durable reservation + `execute_reserved_merchant_create()` → protected PostgreSQL executor. Other approved runtime commands use exact one-use `RuntimeApplyAuthorization.consume_direct`. Removing proposal/apply must **not** create a bypass into either path.
+
+### Known production architectural paths and boundaries
+
+```text
+PostToolUse → team_result_dispatcher.py → invoke_trusted_merchant_session_apply()
+  → trusted merchant_scope present: invoke_authorized_scope_apply() → one-use authorization / EXECUTE
+  → scope absent: SELECT_AUTHORIZATION fail-closed (CP12-A)
+
+Direct Merchant CREATE: durable reservation/generation fence
+  → execute_reserved_merchant_create() → execute_protected_merchant_create()
+  → PostgreSQL claim/ledger/COMMIT → read-only evidence verification
+  → completion receipt → report → idle archive
+
+Merchant generic CLI: cli.py → dispatch_write_command() → write_commands.execute()
+  → runtime authority check; runtime merchant create denied
+  → CP12-B.1 now blocks runtime PROPOSE/APPLY at entrypoint (uncommitted)
+```
+
+**Safety invariants:** user/model/teammate text cannot mint trusted scope; keep exact entity binding, one-use authority, durable reservations, generation fencing, no replay if COMMIT uncertain, no unsafe background retries; reporting/diagnostics cannot claim authority. Historical proposal records may be read for audits but cannot authorize business writes. Do not globally remove `--apply` from database bootstrap/migration admin tools.
+
+### Verified Git history and resume commands
+
+```text
+80322f0  CP7.8 baseline
+2709d29  test(merchant): harden recovery and lifecycle diagnostics
+6daa5be  docs: establish direct-execution production roadmap
+49195a3  docs: sync CP7.9 verified progress
+26d979c  fix(merchant): fail closed without direct scope
+```
+
+On new session, start in repository root:
+
+```powershell
+git branch --show-current
+git log -1 --oneline
+git status --short
+git diff -- .claude/agents/tools/merchant/cli.py
+.\.venv\Scripts\python.exe -m pytest .\tests\merchant\test_direct_execution_boundary.py -q --tb=short
+```
+
+**Session handoff instruction:** Read this dated CURRENT STATUS first, then the original roadmap sections for CP12–18 scope. Do not start with CP7.9A.3: already finished. Do not treat CP12-B.1 as committed. After next validated change, update this CURRENT STATUS and progress ledger with actual results and Git hash. No Claude Code.
+
+<!-- CURRENT_STATUS_END -->
+
 
 **Version:** 2.0 — Direct Execution First (22 October 2026)
 **Scope:** `coding-agent-workspace` — CP7.9 + original CP12–CP18, from trusted Merchant lifecycle to secure internal multi-user production rollout, with **no proposal/confirmation/apply layer for authorized internal Merchant writes**.
@@ -84,7 +151,7 @@ Natural language request
 
 **Coverage caveat:** Existing tests verify the new Merchant CREATE path and selected lifecycle gates; Project/Step/Document/etc. full elimination is **PENDING AUDIT**, not already complete.
 
-## 2. The official 100% allocation
+## 2. Original allocation and 22 October baseline (historical; see CURRENT STATUS for latest)
 
 | Stage | Weight of unified roadmap | Credited now | Evidence / exit gate |
 |---|---:|---:|---|
@@ -241,7 +308,7 @@ The final 100% requires **all** of the following conditions, beyond a green unit
 - CP18A/B/C can be designed early, but production capabilities cannot be accepted until prerequisite security evidence exists.
 - For checkpoint status, use `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `PARTIAL`, `PASS`, `FAILED`, and `CARRIED_FORWARD_UNVERIFIED`. A PASS requires recorded tests/evidence.
 
-## 6. Progress ledger and reporting protocol
+## 6. Progress ledger and reporting protocol (historical baseline plus current status above)
 
 ### Formula
 
@@ -282,7 +349,7 @@ Keep the **same denominator and weights** across turns. A reweighting requires a
 
 **Current verified status: 1.8% / 100%; CP7.9 local: 15% / 100%; 98.2% remaining.** Historic CP12A–H may be credited after evidence reconciliation, but not before.
 
-## 7. Immediate next executable work
+## 7. Historical next executable work (superseded by CURRENT BLOCKER above)
 
 **CP7.9A.3 — Fault-injection test of state persistence (direct-execution recovery, no legacy proposal flow):** use temporary filesystem storage, exercise the real `locked_team_state`→`save_team_state` boundary, intercept a persistence failure, verify actual disk state and exception semantics, and retry exact bound committed evidence. Compare against `test_direct_recovery.py` fixture, which currently provides an in-memory `locked` context manager and cannot demonstrate durability. Keep production mutations out of scope.
 
