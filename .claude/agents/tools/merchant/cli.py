@@ -643,7 +643,13 @@ def dispatch_write_command(
     database: str,
     runtime_authorization: Any = None,
 ) -> Any:
-    """Build an exact payload and select propose or apply."""
+    """Dispatch authorized business writes using EXECUTE only."""
+
+    # Reject legacy modes before payload construction or handler invocation.
+    if args.mode != "EXECUTE":
+        raise PermissionError(
+            "Merchant business-write dispatcher requires EXECUTE"
+        )
 
     command = normalize_command(
         f"{args.resource} {args.action}"
@@ -689,33 +695,7 @@ def dispatch_write_command(
             payload,
         )
 
-    if args.mode == "PROPOSE":
-        if args.proposal_hash is not None:
-            raise ValueError(
-                "--proposal-hash is only valid with --apply"
-            )
-
-        return commands.propose(
-            command,
-            database,
-            payload,
-        )
-
-    if args.mode == "APPLY":
-        if args.proposal_hash is None:
-            raise ValueError(
-                "--apply requires --proposal-hash"
-            )
-
-        return commands.apply(
-            command,
-            database,
-            payload,
-            proposal_hash=args.proposal_hash,
-            runtime_authorization=runtime_authorization,
-        )
-
-    raise ValueError("Write mode must be PROPOSE or APPLY")
+    raise ValueError("Unsupported Merchant write mode")
 
 
 def dispatch_completeness_command(
@@ -1112,12 +1092,6 @@ def main(
                     "Merchant business-write CLI requires EXECUTE"
                 )
 
-            if database == "runtime" and args.mode != "EXECUTE":
-                raise PermissionError(
-                    "Runtime Merchant business writes require EXECUTE; "
-                    "legacy PROPOSE/APPLY modes are disabled"
-                )
-
             # Reject forged runtime capabilities before handler creation.
             if database == "runtime" and args.mode == "EXECUTE":
                 from .cli_contract import (
@@ -1140,16 +1114,6 @@ def main(
                     "Direct Merchant Create requires a trusted "
                     "durable reservation; generic CLI execution "
                     "is not authorized"
-                )
-
-            if (
-                database == "runtime"
-                and args.mode != "PROPOSE"
-                and runtime_authorization is None
-            ):
-                raise PermissionError(
-                    "Runtime Merchant writes require the trusted "
-                    "runtime handoff"
                 )
 
             factory = (

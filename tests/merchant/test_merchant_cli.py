@@ -69,6 +69,23 @@ class RecordingWriteCommands:
     def __init__(self):
         self.calls = []
 
+    def execute(
+        self,
+        command,
+        database,
+        payload,
+        *,
+        runtime_authorization=None,
+    ):
+        self.calls.append(
+            ("execute", command, database, payload)
+        )
+        return {
+            "success": True,
+            "mode": "EXECUTE",
+            "command": command,
+        }
+
     def propose(self, command, database, payload):
         self.calls.append(
             ("propose", command, database, payload)
@@ -285,7 +302,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
             [
                 "merchant",
                 "create",
-                "--propose",
+                "--execute",
                 "--code",
                 "BETA",
                 "--name",
@@ -304,7 +321,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
             [
                 "project",
                 "create",
-                "--propose",
+                "--execute",
                 "--merchant-id",
                 MERCHANT_ID,
                 "--type",
@@ -328,7 +345,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "project",
                 "update",
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--status",
                 "in_progress",
                 "--expected-version",
@@ -346,7 +363,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "step",
                 "update",
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--status",
                 "in_progress",
                 "--assigned-to",
@@ -367,7 +384,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "document",
                 "revision-create",
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--type",
                 "merchant_agreement",
                 "--content-hash",
@@ -388,7 +405,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "document",
                 "approve",
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--role",
                 "legal",
                 "--status",
@@ -406,7 +423,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "procurement",
                 "update",
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--type",
                 "purchase_request",
                 "--external-id",
@@ -425,7 +442,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
                 "identifier-set",
                 MERCHANT_ID,
                 PROJECT_ID,
-                "--propose",
+                "--execute",
                 "--type",
                 "product_id",
                 "--value",
@@ -445,7 +462,7 @@ def test_dispatch_rejects_non_allowlisted_namespace():
         ),
     ),
 )
-def test_write_proposals_parse_and_dispatch(
+def test_write_execute_parse_and_dispatch(
     argv,
     command,
     expected_payload,
@@ -459,10 +476,10 @@ def test_write_proposals_parse_and_dispatch(
         database="test",
     )
 
-    assert result["mode"] == "PROPOSE"
+    assert result["mode"] == "EXECUTE"
     assert len(commands.calls) == 1
     mode, actual_command, database, payload = commands.calls[0]
-    assert mode == "propose"
+    assert mode == "execute"
     assert actual_command == command
     assert database == "test"
 
@@ -481,7 +498,7 @@ def test_contact_import_reads_utf8_csv(tmp_path):
         [
             "contact",
             "import",
-            "--propose",
+            "--execute",
             "--merchant-id",
             MERCHANT_ID,
             "--file",
@@ -510,58 +527,29 @@ def test_contact_import_reads_utf8_csv(tmp_path):
     ]
 
 
-def test_write_apply_dispatches_hash_and_in_process_authority():
-    proposal = "a" * 64
-    args = build_argument_parser().parse_args(
-        [
-            "project",
-            "update",
-            PROJECT_ID,
-            "--apply",
-            "--proposal-hash",
-            proposal,
-            "--status",
-            "BLOCKED",
-            "--expected-version",
-            "2",
-        ]
-    )
-    commands = RecordingWriteCommands()
-    authorization = object()
+@pytest.mark.parametrize(
+    "mode",
+    ("--propose", "--apply"),
+)
+def test_dispatch_rejects_legacy_modes(mode):
+    argv = [
+        "project",
+        "update",
+        PROJECT_ID,
+        "--status",
+        "BLOCKED",
+        "--expected-version",
+        "2",
+        mode,
+    ]
 
-    result = dispatch_write_command(
-        args,
-        commands,
-        database="runtime",
-        runtime_authorization=authorization,
-    )
+    if mode == "--apply":
+        argv.extend(["--proposal-hash", "a" * 64])
 
-    assert result["mode"] == "APPLY"
-    call = commands.calls[0]
-    assert call[0] == "apply"
-    assert call[1] == "project update"
-    assert call[2] == "runtime"
-    assert call[4] == proposal
-    assert call[5] is authorization
-
-
-def test_propose_rejects_proposal_hash():
-    args = build_argument_parser().parse_args(
-        [
-            "merchant",
-            "create",
-            "--propose",
-            "--proposal-hash",
-            "a" * 64,
-            "--code",
-            "BETA",
-            "--name",
-            "Beta Media",
-        ]
-    )
+    args = build_argument_parser().parse_args(argv)
     commands = RecordingWriteCommands()
 
-    with pytest.raises(ValueError, match="only valid"):
+    with pytest.raises(PermissionError, match="EXECUTE"):
         dispatch_write_command(
             args,
             commands,
@@ -571,21 +559,19 @@ def test_propose_rejects_proposal_hash():
     assert commands.calls == []
 
 
-def test_apply_requires_proposal_hash():
-    args = build_argument_parser().parse_args(
-        [
-            "merchant",
-            "create",
-            "--apply",
-            "--code",
-            "BETA",
-            "--name",
-            "Beta Media",
-        ]
-    )
+def test_dispatch_rejects_legacy_mode_without_hash():
+    args = build_argument_parser().parse_args([
+        "merchant",
+        "create",
+        "--apply",
+        "--code",
+        "BETA",
+        "--name",
+        "Beta Media",
+    ])
     commands = RecordingWriteCommands()
 
-    with pytest.raises(ValueError, match="requires"):
+    with pytest.raises(PermissionError, match="EXECUTE"):
         dispatch_write_command(
             args,
             commands,
