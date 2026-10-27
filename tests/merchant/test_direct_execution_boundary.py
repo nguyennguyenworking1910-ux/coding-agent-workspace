@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 
 from claude.agents.tools.merchant import agent_cli
 from claude.agents.tools.merchant import cli
@@ -85,14 +85,16 @@ def test_cli_main_refuses_unauthorized_runtime_write(arguments):
     assert factory_calls == []
 
 
-def test_cli_main_runtime_proposal_is_not_blocked_by_write_guard():
+def test_cli_main_runtime_proposal_is_rejected_before_factory():
     factory_calls = []
 
     def factory(database):
         factory_calls.append(database)
-        raise RuntimeError("stop after guard")
+        raise AssertionError(
+            "Runtime proposal must be rejected before handler creation"
+        )
 
-    cli.main(
+    code = cli.main(
         (
             "--database",
             "runtime",
@@ -109,4 +111,5 @@ def test_cli_main_runtime_proposal_is_not_blocked_by_write_guard():
         runtime_authorization=None,
     )
 
-    assert factory_calls == ["runtime"]
+    assert code == 1
+    assert factory_calls == []

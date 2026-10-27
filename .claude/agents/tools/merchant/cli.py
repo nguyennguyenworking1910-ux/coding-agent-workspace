@@ -1104,6 +1104,14 @@ def main(
                 commands,
             )
         elif command in WRITE_COMMANDS:
+            # Operational runtime writes are direct-execute only.
+            # Reject legacy modes before constructing write handlers.
+            if database == "runtime" and args.mode != "EXECUTE":
+                raise PermissionError(
+                    "Runtime Merchant business writes require EXECUTE; "
+                    "legacy PROPOSE/APPLY modes are disabled"
+                )
+
             # Reject forged runtime capabilities before handler creation.
             if database == "runtime" and args.mode == "EXECUTE":
                 from .cli_contract import (

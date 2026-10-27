@@ -301,116 +301,33 @@ def test_local_auto_reserved_receipt_is_consumed_only_by_session_handoff(
         )
     )
 
-    captured_output = (
-        capsys.readouterr()
-    )
+    captured_output = capsys.readouterr()
 
-    assert exit_code == 0
+    # Legacy authorization was consumed, but no business write ran.
+    assert exit_code == 1
+    runtime_result = json.loads(captured_output.err)
+    assert runtime_result["success"] is False
+    assert runtime_result["error"]["type"] == "MerchantCommandError"
+    assert receipt_state(SESSION_ID) == RECEIPT_CONSUMED
+    assert handler.calls == []
 
-    runtime_result = json.loads(
-        captured_output.out
-    )
+    persisted = load_state(SESSION_ID)
+    assert persisted is not None
+    assert persisted["merchant_runtime_authorization_issued"] is True
 
-    assert (
-        runtime_result[
-            "success"
-        ]
-        is True
-    )
-
-    assert (
-        runtime_result[
-            "mode"
-        ]
-        == "APPLY"
-    )
-
-    assert (
-        runtime_result[
-            "database"
-        ]
-        == "runtime"
-    )
-
-    # ------------------------------------------------------------
-    # Critical Checkpoint 12H.5 assertion:
-    #
-    # RESERVED → CONSUMED only through the trusted session handoff.
-    # ------------------------------------------------------------
-
-    assert (
-        receipt_state(
-            SESSION_ID
-        )
-        == RECEIPT_CONSUMED
-    )
-
-    assert (
-        handler.calls
-        == [
-            PAYLOAD
-        ]
-    )
-
-    persisted = (
-        load_state(
-            SESSION_ID
-        )
-    )
-
-    assert (
-        persisted
-        is not None
-    )
-
-    assert (
-        persisted[
-            "merchant_runtime_authorization_issued"
-        ]
-        is True
-    )
-
-    # ------------------------------------------------------------
-    # The same persisted run can never issue a second runtime apply.
-    # ------------------------------------------------------------
-
+    # A rejected legacy attempt must not become replayable.
     with pytest.raises(
         MerchantRuntimeHandoffStageError,
-        match=(
-            "Merchant runtime handoff failed "
-            "at stage RESERVE_AUTHORIZATION"
-        ),
-    ) as exc_info:
+        match="RESERVE_AUTHORIZATION",
+    ):
         invoke_confirmed_merchant_session_apply(
             SESSION_ID,
-            _apply_arguments(
-                proposal
-            ),
-            write_command_factory=(
-                lambda database: (
-                    commands
-                )
-            ),
+            _apply_arguments(proposal),
+            write_command_factory=lambda database: commands,
         )
 
-    assert (
-        handler.calls
-        == [
-            PAYLOAD
-        ]
-    )
-
-    assert (
-        receipt_state(
-            SESSION_ID
-        )
-        == RECEIPT_CONSUMED
-    )
-
-    assert (
-        exc_info.value.stage
-        == "RESERVE_AUTHORIZATION"
-    )
+    assert handler.calls == []
+    assert receipt_state(SESSION_ID) == RECEIPT_CONSUMED
 
 
 def test_local_auto_receipt_remains_consumed_when_runtime_apply_fails(
@@ -524,7 +441,7 @@ def test_local_auto_receipt_remains_consumed_when_runtime_apply_fails(
         == RECEIPT_CONSUMED
     )
 
-    assert handler.calls == [PAYLOAD]
+    assert handler.calls == []
 
     persisted = load_state(SESSION_ID)
 

@@ -141,12 +141,11 @@ def test_accepted_policy_session_reaches_repository_once(capsys):
         write_command_factory=lambda database: commands,
     )
 
-    output = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert output["success"] is True
-    assert output["mode"] == "APPLY"
-    assert output["database"] == "runtime"
-    assert handler.calls == [PAYLOAD]
+    error = json.loads(capsys.readouterr().err)
+    assert exit_code == 1
+    assert error["success"] is False
+    assert error["error"]["type"] == "MerchantCommandError"
+    assert handler.calls == []
 
     stored = runtime_state.load_state(SESSION_ID)
     assert stored["merchant_dispatch_spent"] is True
@@ -159,7 +158,7 @@ def test_accepted_policy_session_reaches_repository_once(capsys):
             write_command_factory=lambda database: commands,
         )
 
-    assert len(handler.calls) == 1
+    assert handler.calls == []
 
 
 def test_payload_mismatch_is_spent_before_repository_handler(capsys):
@@ -174,7 +173,7 @@ def test_payload_mismatch_is_spent_before_repository_handler(capsys):
 
     error = json.loads(capsys.readouterr().err)
     assert exit_code == 1
-    assert error["error"]["type"] == "RuntimeWriteDeniedError"
+    assert error["error"]["type"] == "MerchantCommandError"
     assert handler.calls == []
     assert runtime_state.load_state(SESSION_ID)[
         "merchant_runtime_authorization_issued"
@@ -196,7 +195,7 @@ def test_handler_failure_remains_non_retryable(capsys):
     assert exit_code == 1
     assert error["error"]["type"] == "MerchantCommandError"
     assert error["error"]["message"] == "Merchant command failed"
-    assert len(handler.calls) == 1
+    assert handler.calls == []
 
     with pytest.raises(MerchantRuntimeHandoffError, match="already issued"):
         invoke_confirmed_merchant_session_apply(
@@ -343,8 +342,8 @@ def test_concurrent_session_replay_runs_one_handler(capsys):
         thread.join()
 
     capsys.readouterr()
-    assert sorted(outcomes) == ["denied", "exit:0"]
-    assert len(handler.calls) == 1
+    assert sorted(outcomes) == ["denied", "exit:1"]
+    assert handler.calls == []
 
 
 @pytest.mark.parametrize("session_id", (None, "", "   "))
@@ -493,8 +492,8 @@ def test_user_named_target_matching_apply_still_succeeds(capsys):
         write_command_factory=lambda database: commands,
     )
 
-    assert exit_code == 0
-    assert handler.calls == [PAYLOAD]
+    assert exit_code == 1
+    assert handler.calls == []
 
 
 def test_user_named_target_mismatch_burns_persisted_reservation():
