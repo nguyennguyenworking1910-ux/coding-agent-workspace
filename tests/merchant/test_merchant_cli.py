@@ -598,29 +598,31 @@ def test_apply_requires_proposal_hash():
 def test_main_routes_write_without_building_read_commands(capsys):
     writes = RecordingWriteCommands()
     read_calls = []
+    write_factory_calls = []
+
+    def write_factory(database):
+        write_factory_calls.append(database)
+        return writes
 
     exit_code = main(
         [
-            "--database",
-            "test",
-            "merchant",
-            "create",
+            "--database", "test",
+            "merchant", "create",
             "--propose",
-            "--code",
-            "BETA",
-            "--name",
-            "Beta Media",
+            "--code", "BETA",
+            "--name", "Beta Media",
         ],
         command_factory=lambda database: read_calls.append(database),
-        write_command_factory=lambda database: writes,
+        write_command_factory=write_factory,
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    assert json.loads(captured.out)["mode"] == "PROPOSE"
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "MerchantCommandError" in captured.err
     assert read_calls == []
-    assert writes.calls[0][0] == "propose"
+    assert write_factory_calls == []
+    assert writes.calls == []
 
 
 @pytest.mark.parametrize(

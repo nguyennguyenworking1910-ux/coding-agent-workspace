@@ -1106,6 +1106,12 @@ def main(
         elif command in WRITE_COMMANDS:
             # Operational runtime writes are direct-execute only.
             # Reject legacy modes before constructing write handlers.
+            # Public business writes are EXECUTE-only.
+            if args.mode != "EXECUTE":
+                raise PermissionError(
+                    "Merchant business-write CLI requires EXECUTE"
+                )
+
             if database == "runtime" and args.mode != "EXECUTE":
                 raise PermissionError(
                     "Runtime Merchant business writes require EXECUTE; "
