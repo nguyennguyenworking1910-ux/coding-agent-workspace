@@ -6,6 +6,9 @@ import json
 
 import pytest
 
+from claude.agents.tools.merchant.cli_contract import (
+    build_proposal,
+)
 from claude.agents.tools.merchant.write_commands import (
     MerchantWriteCommands,
 )
@@ -137,11 +140,11 @@ def test_local_auto_reserved_receipt_is_consumed_only_by_session_handoff(
     )
 
     proposal = (
-        commands.propose(
+        {"success": True, **build_proposal(
             "project update",
             "runtime",
             PAYLOAD,
-        )
+        ).to_dict()}
     )
 
     confirmation = (
@@ -352,11 +355,11 @@ def test_local_auto_receipt_remains_consumed_when_runtime_apply_fails(
         }
     )
 
-    proposal = commands.propose(
+    proposal = {"success": True, **build_proposal(
         "project update",
         "runtime",
         PAYLOAD,
-    )
+    ).to_dict()}
 
     confirmation = proposal["confirmation"]
 
@@ -473,11 +476,11 @@ def test_local_auto_target_mismatch_spends_authorization_without_consuming_recei
         {"project update": handler}
     )
 
-    proposal = commands.propose(
+    proposal = {"success": True, **build_proposal(
         "project update",
         "runtime",
         PAYLOAD,
-    )
+    ).to_dict()}
     confirmation = proposal["confirmation"]
 
     with locked_preferences(SESSION_ID, create=True) as document:

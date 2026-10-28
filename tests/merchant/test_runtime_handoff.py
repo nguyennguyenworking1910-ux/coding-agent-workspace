@@ -9,6 +9,9 @@ from claude.agents.tools.merchant.agent_cli import (
     MerchantAgentCliError,
     invoke_agent_cli,
 )
+from claude.agents.tools.merchant.cli_contract import (
+    build_proposal,
+)
 from claude.agents.tools.merchant.write_commands import (
     MerchantWriteCommands,
 )
@@ -43,11 +46,11 @@ def _proposal_and_commands(handler=None):
     commands = MerchantWriteCommands(
         {"project update": selected_handler}
     )
-    proposal = commands.propose(
+    proposal = build_proposal(
         "project update",
         "runtime",
         PAYLOAD,
-    )
+    ).to_dict()
     return proposal, commands, selected_handler
 
 

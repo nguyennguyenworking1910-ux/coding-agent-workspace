@@ -158,18 +158,17 @@ def test_capability_is_not_copyable_picklable_or_json_serializable():
     assert "payload" not in repr(authorization).lower()
 
 
-def test_exact_runtime_apply_consumes_capability_and_calls_handler_once():
+def test_exact_runtime_execute_consumes_capability_and_calls_handler_once():
     proposal, authorization = _authorization()
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"project update": handler}
     )
 
-    result = commands.apply(
+    result = commands.execute(
         "project update",
         "runtime",
         PAYLOAD,
-        proposal_hash=proposal["proposal_hash"],
         runtime_authorization=authorization,
     )
 
@@ -179,34 +178,32 @@ def test_exact_runtime_apply_consumes_capability_and_calls_handler_once():
     assert handler.calls == [PAYLOAD]
 
 
-def test_successful_capability_cannot_be_replayed():
+def test_direct_execute_capability_cannot_be_replayed():
     proposal, authorization = _authorization()
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"project update": handler}
     )
 
-    commands.apply(
+    commands.execute(
         "project update",
         "runtime",
         PAYLOAD,
-        proposal_hash=proposal["proposal_hash"],
         runtime_authorization=authorization,
     )
 
     with pytest.raises(RuntimeAuthorizationConsumedError):
-        commands.apply(
+        commands.execute(
             "project update",
             "runtime",
             PAYLOAD,
-            proposal_hash=proposal["proposal_hash"],
             runtime_authorization=authorization,
         )
 
     assert len(handler.calls) == 1
 
 
-def test_expired_capability_is_consumed_without_calling_handler():
+def test_expired_direct_capability_is_consumed_without_calling_handler():
     clock = FakeClock()
     proposal, authorization = _authorization(
         clock=clock,
@@ -219,11 +216,10 @@ def test_expired_capability_is_consumed_without_calling_handler():
     )
 
     with pytest.raises(RuntimeAuthorizationExpiredError):
-        commands.apply(
+        commands.execute(
             "project update",
             "runtime",
             PAYLOAD,
-            proposal_hash=proposal["proposal_hash"],
             runtime_authorization=authorization,
         )
 
@@ -283,7 +279,7 @@ def test_any_apply_mismatch_consumes_capability(
         )
 
 
-def test_handler_failure_still_consumes_capability():
+def test_direct_handler_failure_still_consumes_capability():
     proposal, authorization = _authorization()
     handler = RecordingHandler(error=ValueError("write failed"))
     commands = MerchantWriteCommands(
@@ -291,27 +287,25 @@ def test_handler_failure_still_consumes_capability():
     )
 
     with pytest.raises(ValueError, match="write failed"):
-        commands.apply(
+        commands.execute(
             "project update",
             "runtime",
             PAYLOAD,
-            proposal_hash=proposal["proposal_hash"],
             runtime_authorization=authorization,
         )
 
     with pytest.raises(RuntimeAuthorizationConsumedError):
-        commands.apply(
+        commands.execute(
             "project update",
             "runtime",
             PAYLOAD,
-            proposal_hash=proposal["proposal_hash"],
             runtime_authorization=authorization,
         )
 
     assert len(handler.calls) == 1
 
 
-def test_concurrent_replay_allows_exactly_one_handler_call():
+def test_concurrent_direct_replay_allows_exactly_one_handler_call():
     proposal, authorization = _authorization()
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
@@ -320,15 +314,14 @@ def test_concurrent_replay_allows_exactly_one_handler_call():
     barrier = threading.Barrier(3)
     outcomes = []
 
-    def apply_once():
+    def execute_once():
         barrier.wait()
 
         try:
-            commands.apply(
+            commands.execute(
                 "project update",
                 "runtime",
                 PAYLOAD,
-                proposal_hash=proposal["proposal_hash"],
                 runtime_authorization=authorization,
             )
             outcomes.append("success")
@@ -336,8 +329,8 @@ def test_concurrent_replay_allows_exactly_one_handler_call():
             outcomes.append("consumed")
 
     threads = [
-        threading.Thread(target=apply_once),
-        threading.Thread(target=apply_once),
+        threading.Thread(target=execute_once),
+        threading.Thread(target=execute_once),
     ]
 
     for thread in threads:
@@ -417,22 +410,56 @@ def test_issuance_rejects_untrusted_ttl(ttl):
         )
 
 
-def test_test_database_apply_remains_available_without_capability():
+def test_test_database_execute_without_runtime_capability():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"project update": handler}
     )
-    proposal = commands.propose(
+
+    result = commands.execute(
         "project update",
         "test",
         PAYLOAD,
     )
 
-    commands.apply(
-        "project update",
-        "test",
-        PAYLOAD,
-        proposal_hash=proposal["proposal_hash"],
-    )
-
+    assert result["success"] is True
+    assert result["mode"] == "EXECUTE"
     assert handler.calls == [PAYLOAD]
+
+def test_direct_payload_mismatch_consumes_authorization():
+    """Tampering consumes authority without reaching the handler."""
+    _proposal_result, authorization = _authorization()
+
+    handler = RecordingHandler()
+    commands = MerchantWriteCommands(
+        {"project update": handler}
+    )
+
+    tampered = {
+        **PAYLOAD,
+        "status": "BLOCKED",
+    }
+
+    with pytest.raises(
+        RuntimeWriteDeniedError,
+        match="does not match the confirmed proposal",
+    ):
+        commands.execute(
+            "project update",
+            "runtime",
+            tampered,
+            runtime_authorization=authorization,
+        )
+
+    assert authorization.consumed is True
+    assert handler.calls == []
+
+    with pytest.raises(RuntimeAuthorizationConsumedError):
+        commands.execute(
+            "project update",
+            "runtime",
+            PAYLOAD,
+            runtime_authorization=authorization,
+        )
+
+    assert handler.calls == []

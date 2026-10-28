@@ -9,9 +9,11 @@ import pytest
 from claude.agents.tools.merchant.cli_contract import (
     MerchantCliContractError,
     ProposalHashError,
+    build_proposal,
     RuntimeWriteDeniedError,
     issue_runtime_apply_authorization,
     proposal_hash,
+    verify_proposal_hash,
 )
 from claude.agents.tools.merchant.write_commands import (
     MerchantWriteCommands,
@@ -51,23 +53,28 @@ def _runtime_authorization(proposal):
     )
 
 
-def test_propose_never_calls_mutation_handler():
+def test_historical_proposal_builder_never_calls_mutation_handler():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"merchant create": handler}
     )
+    payload = {
+        "code": "BETA",
+        "name": "Beta Media",
+        "region_code": "VN",
+    }
 
-    result = commands.propose(
+    prepared = materialize_write_payload(
         "merchant create",
         "test",
-        {
-            "code": "BETA",
-            "name": "Beta Media",
-            "region_code": "VN",
-        },
+        payload,
     )
+    result = build_proposal(
+        "merchant create",
+        "test",
+        prepared,
+    ).to_dict()
 
-    assert result["success"] is True
     assert result["mode"] == "PROPOSE"
     assert result["requires_confirmation"] is True
     assert uuid.UUID(result["payload"]["merchant_id"])
@@ -122,7 +129,7 @@ def test_explicit_id_is_preserved_and_bound():
     assert prepared["revision_id"] == explicit_id
 
 
-def test_contact_ids_are_stable_and_output_is_pii_free():
+def test_historical_contact_ids_are_stable_and_pii_free():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"contact import": handler}
@@ -139,18 +146,30 @@ def test_contact_ids_are_stable_and_output_is_pii_free():
         ],
     }
 
-    first = commands.propose(
+    prepared_first = materialize_write_payload(
         "contact import",
         "test",
         payload,
     )
-    second = commands.propose(
+    prepared_second = materialize_write_payload(
         "contact import",
         "test",
         payload,
     )
 
+    first = build_proposal(
+        "contact import",
+        "test",
+        prepared_first,
+    ).to_dict()
+    second = build_proposal(
+        "contact import",
+        "test",
+        prepared_second,
+    ).to_dict()
+
     contact = first["payload"]["contacts"][0]
+
     assert first["proposal_hash"] == second["proposal_hash"]
     assert contact["name"] == "[REDACTED]"
     assert contact["email"] == "[REDACTED]"
@@ -160,7 +179,7 @@ def test_contact_ids_are_stable_and_output_is_pii_free():
     assert handler.calls == []
 
 
-def test_matching_apply_invokes_handler_once():
+def test_direct_execute_invokes_handler_once():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"project update": handler}
@@ -170,83 +189,72 @@ def test_matching_apply_invokes_handler_once():
         "status": "IN_PROGRESS",
         "expected_version": 1,
     }
-    proposal = commands.propose(
-        "project update",
-        "test",
-        payload,
-    )
 
-    result = commands.apply(
+    result = commands.execute(
         "project update",
         "test",
         payload,
-        proposal_hash=proposal["proposal_hash"],
     )
 
     assert result["success"] is True
-    assert result["mode"] == "APPLY"
+    assert result["mode"] == "EXECUTE"
     assert result["result"] == {"status": "committed"}
     assert handler.calls == [payload]
 
 
-def test_changed_apply_payload_never_calls_handler():
-    handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {"project update": handler}
-    )
+def test_historical_hash_detects_changed_payload():
     original = {
         "project_id": MERCHANT_ID,
         "status": "IN_PROGRESS",
         "expected_version": 1,
     }
-    proposal = commands.propose(
-        "project update",
-        "test",
-        original,
-    )
+    digest = proposal_hash("project update", "test", original)
 
     with pytest.raises(ProposalHashError):
-        commands.apply(
+        verify_proposal_hash(
+            digest,
             "project update",
             "test",
             {**original, "status": "BLOCKED"},
-            proposal_hash=proposal["proposal_hash"],
         )
 
-    assert handler.calls == []
 
-
-def test_hash_is_bound_to_database_and_command():
-    handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "project update": handler,
-            "step update": handler,
-        }
-    )
+def test_historical_hash_binds_database_and_command():
     payload = {
         "project_id": MERCHANT_ID,
         "status": "IN_PROGRESS",
         "expected_version": 1,
     }
-    proposal = commands.propose(
-        "project update",
-        "test",
-        payload,
-    )
+    digest = proposal_hash("project update", "test", payload)
 
     with pytest.raises(ProposalHashError):
-        commands.apply(
-            "step update",
-            "test",
-            payload,
-            proposal_hash=proposal["proposal_hash"],
+        verify_proposal_hash(
+            digest, "project update", "runtime", payload
+        )
+
+    with pytest.raises(ProposalHashError):
+        verify_proposal_hash(
+            digest, "step update", "test", payload
+        )
+
+
+def test_runtime_create_rejects_missing_authorization():
+    handler = RecordingHandler()
+    commands = MerchantWriteCommands(
+        {"merchant create": handler}
+    )
+
+    with pytest.raises(PermissionError, match="durable reservation"):
+        commands.execute(
+            "merchant create",
+            "runtime",
+            {"code": "BETA", "name": "Beta Media"},
         )
 
     assert handler.calls == []
 
 
-def test_runtime_authority_is_checked_before_handler():
+def test_runtime_create_rejects_generic_execution_even_with_capability():
     handler = RecordingHandler()
     commands = MerchantWriteCommands(
         {"merchant create": handler}
@@ -255,53 +263,32 @@ def test_runtime_authority_is_checked_before_handler():
         "code": "BETA",
         "name": "Beta Media",
     }
-    proposal = commands.propose(
+
+    prepared = materialize_write_payload(
         "merchant create",
         "runtime",
         payload,
     )
+    proposal = build_proposal(
+        "merchant create",
+        "runtime",
+        prepared,
+    ).to_dict()
+    authorization = _runtime_authorization(proposal)
 
-    with pytest.raises(RuntimeWriteDeniedError):
-        commands.apply(
+    with pytest.raises(PermissionError, match="durable reservation"):
+        commands.execute(
             "merchant create",
             "runtime",
             payload,
-            proposal_hash=proposal["proposal_hash"],
+            runtime_authorization=authorization,
         )
 
     assert handler.calls == []
+    assert authorization.consumed is False
 
 
-def test_trusted_runtime_capability_uses_exact_proposal():
-    handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {"merchant create": handler}
-    )
-    payload = {
-        "code": "BETA",
-        "name": "Beta Media",
-    }
-    proposal = commands.propose(
-        "merchant create",
-        "runtime",
-        payload,
-    )
-
-    result = commands.apply(
-        "merchant create",
-        "runtime",
-        payload,
-        proposal_hash=proposal["proposal_hash"],
-        runtime_authorization=_runtime_authorization(
-            proposal
-        ),
-    )
-
-    assert result["database"] == "runtime"
-    assert len(handler.calls) == 1
-
-
-def test_sensitive_apply_result_is_redacted():
+def test_sensitive_execute_result_is_redacted():
     handler = RecordingHandler(
         {
             "identifier_value": PRIVATE_IDENTIFIER,
@@ -319,25 +306,22 @@ def test_sensitive_apply_result_is_redacted():
         "value": PRIVATE_IDENTIFIER,
         "scope": "MASTER",
     }
-    proposal = commands.propose(
+
+    result = commands.execute(
         "integration identifier-set",
         "test",
         payload,
     )
 
-    result = commands.apply(
-        "integration identifier-set",
-        "test",
-        payload,
-        proposal_hash=proposal["proposal_hash"],
-    )
-
+    assert result["success"] is True
+    assert result["mode"] == "EXECUTE"
+    assert len(handler.calls) == 1
     assert PRIVATE_IDENTIFIER not in repr(result)
     assert result["result"]["identifier_value"] == "[REDACTED]"
     assert result["result"]["value"] == "[REDACTED]"
 
 
-def test_missing_handler_fails_in_both_modes():
+def test_direct_execute_rejects_missing_handler():
     commands = MerchantWriteCommands({})
     payload = {
         "project_id": MERCHANT_ID,
@@ -346,18 +330,10 @@ def test_missing_handler_fails_in_both_modes():
     }
 
     with pytest.raises(WriteCommandNotConfiguredError):
-        commands.propose(
+        commands.execute(
             "project update",
             "test",
             payload,
-        )
-
-    with pytest.raises(WriteCommandNotConfiguredError):
-        commands.apply(
-            "project update",
-            "test",
-            payload,
-            proposal_hash="0" * 64,
         )
 
 
@@ -365,13 +341,14 @@ def test_missing_handler_fails_in_both_modes():
     "contacts",
     (None, {}, ["not-an-object"]),
 )
-def test_contact_payload_shape_fails_before_proposal(contacts):
+def test_invalid_contact_payload_rejected_before_execute(contacts):
+    handler = RecordingHandler()
     commands = MerchantWriteCommands(
-        {"contact import": RecordingHandler()}
+        {"contact import": handler}
     )
 
     with pytest.raises(MerchantCliContractError):
-        commands.propose(
+        commands.execute(
             "contact import",
             "test",
             {
@@ -380,6 +357,8 @@ def test_contact_payload_shape_fails_before_proposal(contacts):
                 "contacts": contacts,
             },
         )
+
+    assert handler.calls == []
 
 
 # Regression tests: Merchant activation preflight and binding
@@ -414,16 +393,25 @@ class RecordingPreflight:
         }
 
 
-def test_merchant_activate_all_proposal_invokes_preflight_exactly_once():
-    """Regression Test 1: propose invokes activation read-only preflight exactly once."""
-    preflight = RecordingPreflight()
-    mutation_handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": mutation_handler,
-        }
+def test_merchant_activate_all_execute_runs_preflight_before_handler():
+    """Direct activation runs preflight once before mutation."""
+    events = []
+
+    def preflight(payload):
+        events.append("preflight")
+        return RecordingPreflight()(payload)
+
+    def handler(payload):
+        events.append("handler")
+        return {"status": "committed"}
+
+    commands = MerchantWriteCommands({
+        "merchant activate-all": handler,
+    })
+    commands.register_preflight_validator(
+        "merchant activate-all",
+        preflight,
     )
-    commands._preflight_validators["merchant activate-all"] = preflight
 
     payload = {
         "merchant_ids": [
@@ -433,30 +421,35 @@ def test_merchant_activate_all_proposal_invokes_preflight_exactly_once():
         "reason": "test activation",
     }
 
-    commands.propose(
+    result = commands.execute(
         "merchant activate-all",
         "test",
         payload,
     )
 
-    assert len(preflight.calls) == 1, (
-        "Preflight must be called exactly once during proposal"
-    )
-    assert len(mutation_handler.calls) == 0, (
-        "Mutation handler must never be called during proposal"
-    )
+    assert result["success"] is True
+    assert result["mode"] == "EXECUTE"
+    assert events == ["preflight", "handler"]
 
 
-def test_merchant_activate_all_proposal_never_calls_mutation_handler():
-    """Regression Test 2: propose invokes mutation handler zero times, apply calls it once."""
-    mutation_handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": mutation_handler,
-        }
-    )
+def test_activate_all_execute_calls_handler_once_after_preflight():
+    events = []
     preflight = RecordingPreflight()
-    commands._preflight_validators["merchant activate-all"] = preflight
+
+    def tracked_preflight(payload):
+        events.append("preflight")
+        return preflight(payload)
+
+    def handler(payload):
+        events.append("handler")
+        return {"status": "committed"}
+
+    commands = MerchantWriteCommands(
+        {"merchant activate-all": handler}
+    )
+    commands.register_preflight_validator(
+        "merchant activate-all", tracked_preflight
+    )
 
     payload = {
         "merchant_ids": [
@@ -467,41 +460,26 @@ def test_merchant_activate_all_proposal_never_calls_mutation_handler():
         "reason": "batch activation",
     }
 
-    result = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
-    assert result["mode"] == "PROPOSE"
-    assert mutation_handler.calls == [], (
-        "Mutation handler must not be called during proposal"
-    )
     assert result["success"] is True
-    assert "proposal_hash" in result
-    assert len(result["proposal_hash"]) == 64
-
-    apply_result = commands.apply(
-        "merchant activate-all",
-        "test",
-        payload,
-        proposal_hash=result["proposal_hash"],
-    )
-
-    assert len(mutation_handler.calls) == 1, (
-        "Mutation handler must be called exactly once during apply"
-    )
+    assert result["mode"] == "EXECUTE"
+    assert result["result"] == {"status": "committed"}
+    assert events == ["preflight", "handler"]
+    assert len(preflight.calls) == 1
 
 
-def test_merchant_activate_all_proposal_contains_sorted_manifest():
-    """Regression Test 3: activate-all proposal payload contains exact sorted merchant manifest."""
+def test_merchant_activate_all_execute_contains_sorted_manifest():
+    handler = RecordingHandler()
     preflight = RecordingPreflight()
     commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": RecordingHandler(),
-        }
+        {"merchant activate-all": handler}
     )
-    commands._preflight_validators["merchant activate-all"] = preflight
+    commands.register_preflight_validator(
+        "merchant activate-all", preflight
+    )
 
     payload = {
         "merchant_ids": [
@@ -512,42 +490,25 @@ def test_merchant_activate_all_proposal_contains_sorted_manifest():
         "reason": "sorted manifest test",
     }
 
-    result = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
-    proposal_payload = result.get("payload", {})
-    manifest = proposal_payload.get("manifest", [])
+    assert result["success"] is True
+    assert len(preflight.calls) == 1
+    assert len(handler.calls) == 1
 
-    assert isinstance(manifest, list), (
-        "Proposal must include manifest list"
-    )
-    assert len(manifest) == 2, (
-        "Manifest must contain exact count of merchants"
-    )
-    assert manifest[0]["merchant_id"] <= manifest[1]["merchant_id"], (
-        "Manifest must be sorted by merchant_id"
-    )
-    for entry in manifest:
-        assert set(entry.keys()) == {"merchant_id", "code", "account_status", "version"}, (
-            "Manifest entries must contain exactly these 4 fields"
-        )
+    manifest = handler.calls[0]["manifest"]
+    assert isinstance(manifest, list)
+    assert len(manifest) == 2
+
+    ids = [entry["merchant_id"] for entry in manifest]
+    assert ids == sorted(ids)
+    assert set(ids) == set(payload["merchant_ids"])
 
 
-def test_merchant_activate_all_changing_one_merchant_invalidates_binding():
-    """Regression Test 4: Changing one merchant while preserving expected_count invalidates binding."""
-    handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": handler,
-        }
-    )
-    preflight = RecordingPreflight()
-    commands._preflight_validators["merchant activate-all"] = preflight
-
-    original_payload = {
+def test_activate_all_changed_merchant_changes_manifest_binding():
+    original = {
         "merchant_ids": [
             "00000000-0000-0000-0000-000000000001",
             "00000000-0000-0000-0000-000000000002",
@@ -555,170 +516,216 @@ def test_merchant_activate_all_changing_one_merchant_invalidates_binding():
         "expected_count": 2,
         "reason": "original",
     }
-
-    proposal = commands.propose(
-        "merchant activate-all",
-        "test",
-        original_payload,
-    )
-
-    assert proposal["success"] is True
-    assert "proposal_hash" in proposal
-    original_hash = proposal["proposal_hash"]
-
-    changed_payload = {
+    changed = {
+        **original,
         "merchant_ids": [
             "00000000-0000-0000-0000-000000000001",
             "00000000-0000-0000-0000-000000000003",
         ],
+    }
+
+    preflight = RecordingPreflight()
+    first_preflight = preflight(original)
+    second_preflight = preflight(changed)
+
+    first = materialize_write_payload(
+        "merchant activate-all",
+        "test",
+        original,
+        preflight_result=first_preflight,
+    )
+    second = materialize_write_payload(
+        "merchant activate-all",
+        "test",
+        changed,
+        preflight_result=second_preflight,
+    )
+
+    first_ids = {
+        row["merchant_id"] for row in first["manifest"]
+    }
+    second_ids = {
+        row["merchant_id"] for row in second["manifest"]
+    }
+
+    assert first_ids == set(original["merchant_ids"])
+    assert second_ids == set(changed["merchant_ids"])
+    assert first_ids != second_ids
+
+    original_hash = proposal_hash(
+        "merchant activate-all", "test", first
+    )
+    changed_hash = proposal_hash(
+        "merchant activate-all", "test", second
+    )
+
+    assert original_hash != changed_hash
+
+    with pytest.raises(ProposalHashError):
+        verify_proposal_hash(
+            original_hash,
+            "merchant activate-all",
+            "test",
+            second,
+        )
+
+
+def test_activate_all_changed_version_changes_manifest_binding():
+    merchant_id = "00000000-0000-0000-0000-000000000001"
+    payload = {
+        "merchant_ids": [merchant_id],
+        "expected_count": 1,
+        "reason": "version binding test",
+    }
+
+    original_preflight = {
+        "merchants": [{
+            "merchant_id": merchant_id,
+            "code": "TEST0",
+            "account_status": "ONBOARDING",
+            "version": 1,
+        }]
+    }
+    changed_preflight = {
+        "merchants": [{
+            "merchant_id": merchant_id,
+            "code": "TEST0",
+            "account_status": "ONBOARDING",
+            "version": 2,
+        }]
+    }
+
+    first = materialize_write_payload(
+        "merchant activate-all",
+        "test",
+        payload,
+        preflight_result=original_preflight,
+    )
+    second = materialize_write_payload(
+        "merchant activate-all",
+        "test",
+        payload,
+        preflight_result=changed_preflight,
+    )
+
+    assert first["manifest"][0]["version"] == 1
+    assert second["manifest"][0]["version"] == 2
+
+    original_hash = proposal_hash(
+        "merchant activate-all", "test", first
+    )
+    changed_hash = proposal_hash(
+        "merchant activate-all", "test", second
+    )
+
+    assert original_hash != changed_hash
+
+    with pytest.raises(ProposalHashError):
+        verify_proposal_hash(
+            original_hash,
+            "merchant activate-all",
+            "test",
+            second,
+        )
+
+
+def test_activate_all_execute_preserves_exact_preflight_manifest():
+    """Handler receives the exact manifest produced by preflight."""
+    handler = RecordingHandler()
+    preflight = RecordingPreflight()
+
+    observed = []
+
+    def tracked_preflight(payload):
+        result = preflight(payload)
+        observed.append(result)
+        return result
+
+    commands = MerchantWriteCommands(
+        {"merchant activate-all": handler}
+    )
+    commands.register_preflight_validator(
+        "merchant activate-all", tracked_preflight
+    )
+
+    payload = {
+        "merchant_ids": [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        ],
         "expected_count": 2,
-        "reason": "original",
+        "reason": "manifest consistency test",
     }
 
-    changed_proposal = commands.propose(
-        "merchant activate-all",
-        "test",
-        changed_payload,
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
-    assert changed_proposal["proposal_hash"] != original_hash, (
-        "Different manifest must produce different proposal hash"
-    )
+    assert result["success"] is True
+    assert result["mode"] == "EXECUTE"
+    assert len(preflight.calls) == 1
+    assert len(observed) == 1
+    assert len(handler.calls) == 1
 
-    with pytest.raises(ProposalHashError):
-        commands.apply(
-            "merchant activate-all",
-            "test",
-            changed_payload,
-            proposal_hash=original_hash,
-        )
+    received = handler.calls[0]
+    expected_manifest = observed[0]["merchants"]
 
-    assert handler.calls == [], (
-        "Handler must not be called for mismatched manifest"
-    )
+    assert received["manifest"] == expected_manifest
+    assert len(received["manifest"]) == payload["expected_count"]
+
+    actual_ids = {
+        row["merchant_id"]
+        for row in received["manifest"]
+    }
+    assert actual_ids == set(payload["merchant_ids"])
 
 
-def test_merchant_activate_all_changing_version_invalidates_binding():
-    """Regression Test 5: Changing one merchant version invalidates binding."""
+
+def test_merchant_activate_all_execute_manifest_has_required_fields():
     handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": handler,
-        }
-    )
-    preflight = RecordingPreflight()
-    commands._preflight_validators["merchant activate-all"] = preflight
-
-    payload = {
-        "merchant_ids": ["00000000-0000-0000-0000-000000000001"],
-        "expected_count": 1,
-        "merchant_versions": {
-            "00000000-0000-0000-0000-000000000001": 1,
-        },
-        "reason": "version binding test",
-    }
-
-    proposal = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
-    )
-
-    changed_payload = {
-        "merchant_ids": ["00000000-0000-0000-0000-000000000001"],
-        "expected_count": 1,
-        "merchant_versions": {
-            "00000000-0000-0000-0000-000000000001": 2,
-        },
-        "reason": "version binding test",
-    }
-
-    with pytest.raises(ProposalHashError):
-        commands.apply(
-            "merchant activate-all",
-            "test",
-            changed_payload,
-            proposal_hash=proposal["proposal_hash"],
-        )
-
-    assert handler.calls == [], (
-        "Handler must not be called when version changes"
-    )
-
-
-def test_merchant_activate_all_applies_with_manifest_consistency_check():
-    """Regression Test 5b: Apply verifies manifest consistency in same transaction."""
-    handler = RecordingHandler()
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": handler,
-        }
-    )
-    preflight = RecordingPreflight()
-    commands._preflight_validators["merchant activate-all"] = preflight
-
-    payload = {
-        "merchant_ids": ["00000000-0000-0000-0000-000000000001"],
-        "expected_count": 1,
-        "reason": "manifest check test",
-    }
-
-    proposal = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
-    )
-
-    assert proposal["success"] is True
-    assert "manifest" in proposal.get("payload", {}), (
-        "Proposal must include manifest for later verification"
-    )
-
-
-def test_merchant_activate_all_manifest_includes_all_fields():
-    """Regression Test 6b: Manifest includes exact required fields per merchant."""
     preflight = RecordingPreflight()
     commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": RecordingHandler(),
-        }
+        {"merchant activate-all": handler}
     )
-    commands._preflight_validators["merchant activate-all"] = preflight
+    commands.register_preflight_validator(
+        "merchant activate-all", preflight
+    )
 
     payload = {
-        "merchant_ids": ["00000000-0000-0000-0000-000000000001"],
+        "merchant_ids": [
+            "00000000-0000-0000-0000-000000000001",
+        ],
         "expected_count": 1,
         "reason": "field validation test",
     }
 
-    result = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
-    proposal_payload = result.get("payload", {})
-    manifest = proposal_payload.get("manifest", [])
+    assert result["success"] is True
+    assert len(handler.calls) == 1
 
-    if manifest:
-        for entry in manifest:
-            required_fields = {"merchant_id", "code", "account_status", "version"}
-            actual_fields = set(entry.keys())
-            assert required_fields == actual_fields, (
-                f"Manifest entry must have exactly {required_fields}, "
-                f"got {actual_fields}"
-            )
+    manifest = handler.calls[0]["manifest"]
+    assert len(manifest) == 1
+
+    required = {
+        "merchant_id", "code", "account_status", "version"
+    }
+    for entry in manifest:
+        assert set(entry) == required
+        assert entry["merchant_id"] in payload["merchant_ids"]
 
 
-def test_merchant_activate_all_expected_count_matches_manifest_length():
-    """Regression Test 7b: Proposal ensures expected_count matches actual manifest."""
+def test_merchant_activate_all_execute_manifest_count_matches():
+    handler = RecordingHandler()
     preflight = RecordingPreflight()
     commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": RecordingHandler(),
-        }
+        {"merchant activate-all": handler}
     )
-    commands._preflight_validators["merchant activate-all"] = preflight
+    commands.register_preflight_validator(
+        "merchant activate-all", preflight
+    )
 
     payload = {
         "merchant_ids": [
@@ -729,32 +736,33 @@ def test_merchant_activate_all_expected_count_matches_manifest_length():
         "reason": "count matching test",
     }
 
-    result = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
-    proposal_payload = result.get("payload", {})
-    manifest = proposal_payload.get("manifest", [])
-    expected_count = proposal_payload.get("expected_count", 0)
+    assert result["success"] is True
+    assert len(preflight.calls) == 1
+    assert len(handler.calls) == 1
 
-    if manifest:
-        assert len(manifest) == expected_count, (
-            f"Manifest length {len(manifest)} must match expected_count {expected_count}"
-        )
+    prepared = handler.calls[0]
+    manifest = prepared["manifest"]
+    assert len(manifest) == prepared["expected_count"]
+    assert prepared["expected_count"] == payload["expected_count"]
+    assert len(manifest) == len(payload["merchant_ids"])
 
 
-def test_merchant_activate_all_apply_atomicity_with_handler():
-    """Regression Test 8b: Apply invokes handler after manifest verification."""
-    handler = RecordingHandler({"event_ids": ["event-1", "event-2"]})
-    commands = MerchantWriteCommands(
-        {
-            "merchant activate-all": handler,
-        }
+def test_activate_all_execute_returns_handler_event_ids():
+    handler = RecordingHandler(
+        {"event_ids": ["event-1", "event-2"]}
     )
     preflight = RecordingPreflight()
-    commands._preflight_validators["merchant activate-all"] = preflight
+
+    commands = MerchantWriteCommands(
+        {"merchant activate-all": handler}
+    )
+    commands.register_preflight_validator(
+        "merchant activate-all", preflight
+    )
 
     payload = {
         "merchant_ids": [
@@ -765,22 +773,15 @@ def test_merchant_activate_all_apply_atomicity_with_handler():
         "reason": "atomicity test",
     }
 
-    proposal = commands.propose(
-        "merchant activate-all",
-        "test",
-        payload,
-    )
-
-    result = commands.apply(
-        "merchant activate-all",
-        "test",
-        payload,
-        proposal_hash=proposal["proposal_hash"],
+    result = commands.execute(
+        "merchant activate-all", "test", payload
     )
 
     assert result["success"] is True
-    assert result["mode"] == "APPLY"
+    assert result["mode"] == "EXECUTE"
+    assert len(preflight.calls) == 1
     assert len(handler.calls) == 1
-    assert "event_ids" in result.get("result", {}), (
-        "Apply result should include event IDs from handler"
-    )
+    assert result["result"]["event_ids"] == [
+        "event-1", "event-2"
+    ]
+    assert len(handler.calls[0]["manifest"]) == 2

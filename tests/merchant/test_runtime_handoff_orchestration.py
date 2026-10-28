@@ -12,6 +12,9 @@ import pytest
 from claude.agents.tools.merchant.cli_contract import (
     build_confirmation_envelope,
 )
+from claude.agents.tools.merchant.cli_contract import (
+    build_proposal,
+)
 from claude.agents.tools.merchant.write_commands import (
     MerchantWriteCommands,
 )
@@ -1015,7 +1018,7 @@ def test_legacy_local_auto_is_rejected_before_cli_execution(
         }
     )
 
-    proposal = proposal_commands.propose(
+    proposal = {"success": True, **build_proposal(
         "project update",
         "runtime",
         {
@@ -1026,7 +1029,7 @@ def test_legacy_local_auto_is_rejected_before_cli_execution(
             "triggered_by": None,
             "allow_reopen": False,
         },
-    )
+    ).to_dict()}
 
     confirmation = proposal[
         "confirmation"
@@ -1234,7 +1237,7 @@ def test_legacy_local_auto_does_not_consume_receipt_without_scope(
         }
     )
 
-    proposal = proposal_commands.propose(
+    proposal = {"success": True, **build_proposal(
         "project update",
         "runtime",
         {
@@ -1245,7 +1248,7 @@ def test_legacy_local_auto_does_not_consume_receipt_without_scope(
             "triggered_by": None,
             "allow_reopen": False,
         },
-    )
+    ).to_dict()}
 
     confirmation = proposal[
         "confirmation"

@@ -11,6 +11,8 @@ import pytest
 from claude.agents.tools.merchant.cli_contract import (
     ProposalHashError,
     WRITE_COMMANDS,
+    build_proposal,
+    verify_proposal_hash,
 )
 from claude.agents.tools.merchant.write_adapters import (
     MerchantRepositoryWriteAdapters,
@@ -64,12 +66,11 @@ def make_repositories():
 
 
 def apply_payload(commands, command, payload):
-    proposal = commands.propose(command, "test", payload)
-    return commands.apply(
+    """Exercise the direct write contract on the isolated test target."""
+    return commands.execute(
         command,
         "test",
         payload,
-        proposal_hash=proposal["proposal_hash"],
     )
 
 
@@ -184,18 +185,11 @@ def test_project_create_rejects_type_variant_mismatch():
         "workflow_variant": "MEDIA_TOP_UP_NEW_DOCUMENT",
         "requires_procurement": False,
     }
-    proposal = commands.propose(
-        "project create",
-        "test",
-        payload,
-    )
-
     with pytest.raises(WriteAdapterError, match="does not match"):
-        commands.apply(
+        commands.execute(
             "project create",
             "test",
             payload,
-            proposal_hash=proposal["proposal_hash"],
         )
 
     assert services["workflows"].calls == []
@@ -366,12 +360,10 @@ def test_identifier_adapter_renames_sensitive_value():
     assert "value" not in arguments
 
 
-def test_changed_payload_stops_before_repository_adapter():
+def test_historical_proposal_hash_detects_changed_payload():
+    """Keep hash-binding coverage without a legacy mutation API."""
     repositories, services = make_repositories()
-    commands = build_repository_write_commands(
-        "test",
-        repositories=repositories,
-    )
+
     payload = {
         "project_id": PROJECT_ID,
         "status": "IN_PROGRESS",
@@ -380,18 +372,19 @@ def test_changed_payload_stops_before_repository_adapter():
         "triggered_by": None,
         "allow_reopen": False,
     }
-    proposal = commands.propose(
+
+    proposal = build_proposal(
         "project update",
         "test",
         payload,
     )
 
     with pytest.raises(ProposalHashError):
-        commands.apply(
+        verify_proposal_hash(
+            proposal.proposal_hash,
             "project update",
             "test",
             {**payload, "status": "BLOCKED"},
-            proposal_hash=proposal["proposal_hash"],
         )
 
     assert services["projects"].calls == []

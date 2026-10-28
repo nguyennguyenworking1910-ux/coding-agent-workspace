@@ -15,13 +15,10 @@ from .cli_contract import (
     WRITE_COMMANDS,
     CommandNotAllowedError,
     MerchantCliContractError,
-    build_proposal,
     normalize_command,
     normalize_database_target,
     redact_payload,
-    require_apply_authorization,
     to_json_value,
-    verify_proposal_hash,
 )
 
 
@@ -112,31 +109,10 @@ class MerchantWriteCommands:
         database: str,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Return a redacted proposal without invoking its handler."""
-
-        normalized_command = normalize_command(command)
-        self._handler(normalized_command)
-
-        preflight_result = None
-        validator = self._preflight_validators.get(normalized_command)
-        if validator is not None:
-            preflight_result = validator(payload)
-
-        prepared_payload = materialize_write_payload(
-            normalized_command,
-            database,
-            payload,
-            preflight_result=preflight_result,
+        """Legacy PROPOSE entrypoint disabled."""
+        raise PermissionError(
+            "Legacy Merchant propose is disabled; use EXECUTE"
         )
-        proposal = build_proposal(
-            normalized_command,
-            database,
-            prepared_payload,
-        )
-        return {
-            "success": True,
-            **proposal.to_dict(),
-        }
 
     def apply(
         self,
@@ -147,55 +123,10 @@ class MerchantWriteCommands:
         proposal_hash: str,
         runtime_authorization: Any = None,
     ) -> dict[str, Any]:
-        """Verify authority and proposal binding before one mutation."""
-
-        normalized_command = normalize_command(command)
-        normalized_database = normalize_database_target(database)
-        handler = self._handler(normalized_command)
-
-        preflight_result = None
-        validator = self._preflight_validators.get(normalized_command)
-        if validator is not None:
-            preflight_result = validator(payload)
-
-        prepared_payload = materialize_write_payload(
-            normalized_command,
-            normalized_database,
-            payload,
-            preflight_result=preflight_result,
+        """Legacy APPLY entrypoint disabled."""
+        raise PermissionError(
+            "Legacy Merchant apply is disabled; use EXECUTE"
         )
-
-        require_apply_authorization(
-            normalized_command,
-            normalized_database,
-            runtime_authorization=runtime_authorization,
-            payload=prepared_payload,
-            proposal_hash=proposal_hash,
-        )
-        verify_proposal_hash(
-            proposal_hash,
-            normalized_command,
-            normalized_database,
-            prepared_payload,
-        )
-
-        result = handler(to_json_value(prepared_payload))
-        sensitive_fields = COMMAND_SENSITIVE_FIELDS.get(
-            normalized_command,
-            frozenset(),
-        )
-        return {
-            "contract_version": CONTRACT_VERSION,
-            "success": True,
-            "mode": "APPLY",
-            "command": normalized_command,
-            "database": normalized_database,
-            "proposal_hash": proposal_hash.strip().lower(),
-            "result": redact_payload(
-                result,
-                extra_sensitive_fields=sensitive_fields,
-            ),
-        }
 
 
     def execute(
