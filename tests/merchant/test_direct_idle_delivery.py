@@ -89,6 +89,8 @@ def build_environment(
         clear_pending_result=clear,
         clear_pending_merchant_completeness=clear,
         _clear_merchant_resolution_after_release=clear,
+        # The event comes from the task's verified pane and session.
+        direct_pane_identity_status=lambda *args: "MATCH",
     )
 
     return deps, calls

@@ -28,7 +28,7 @@ DEPENDENCY_MODULES = (
 # precise proposal/apply fields and added 2 precise legacy-termination
 # fields. CP12H.4C added 1 precise pane-identity field. No field was
 # loosened.
-EXPECTED_TOTAL_FIELDS = 85
+EXPECTED_TOTAL_FIELDS = 86
 
 MINIMUM_PRECISE_FIELDS = 73
 

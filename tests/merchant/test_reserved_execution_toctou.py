@@ -117,7 +117,8 @@ def test_reassignment_between_validation_and_write(
 
     repository = SimpleNamespace(
         config=SimpleNamespace(
-            database="coding_agent_merchant_test"
+            database="coding_agent_merchant_test",
+            user="merchant_test",
         )
     )
 

@@ -410,6 +410,9 @@ def test_committed_write_releases_through_idle_hook(
                 )
             ),
 
+            # tmux pane identity is simulated with owner discovery.
+            direct_pane_identity_status=lambda *args: "MATCH",
+
             load_pending_result=lambda session: (
                 pending if session == pane else None
             ),

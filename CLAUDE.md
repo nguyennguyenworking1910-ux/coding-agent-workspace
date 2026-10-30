@@ -306,8 +306,11 @@ authority is an exact scope the user types with `/solve --confirm --merchant-sco
 policy gate records one dispatch receipt for it. The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
-the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`; self-declared `agent_type` and
-`session_id` never bind a pane). The trusted hook stages the request with trusted completeness
+the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an
+ancestor of the hook process, and the pane's psmux server must be the nearest server ancestor of
+the harness `leadProcess.pid`; pane ids are per-server under psmux, so `%N` alone is never an
+identity; self-declared `agent_type` and `session_id` never bind a pane, and a task is never
+settled by a pane that was not verified for that exact task). The trusted hook stages the request with trusted completeness
 evidence and persists a team-state reservation bound to the exact owner, teammate, run, task,
 command, payload and execution attempt. Authority is spent only at
 `reserve_direct_scope_authorization`, which refuses without that reservation and records the
@@ -320,6 +323,15 @@ spend against it:
   the capability re-checks the reservation when it is consumed, immediately before the mutation.
 
 The reserved Create executor also refuses unless the spent authority names its reservation.
+
+Runtime (production) Direct EXECUTE is disabled in code (`RUNTIME_DIRECT_EXECUTE_ENABLED = False`
+in `.claude/hooks/merchant_direct_handoff.py`) until separately approved. The user may select the
+test database for one Create with `/solve --confirm --merchant-target test --merchant-scope [...]`;
+the target is bound into the scope and confirmation hashes, staged request, reservation, spent
+authority and receipt, and a read-only preflight verifies `coding_agent_merchant_test` /
+`merchant_test` before anything is reserved or spent. A refused preflight (invalid
+configuration, database unavailable, runtime disabled, unsupported test-mode command) spends
+nothing.
 
 A boolean, CLI flag, environment variable, task assignment, teammate message, or
 `TEAM_RESULT_JSON` cannot grant runtime-write authority. A request whose arguments differ from

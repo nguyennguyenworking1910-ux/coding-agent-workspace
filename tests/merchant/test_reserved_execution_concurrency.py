@@ -147,7 +147,8 @@ def test_inflight_write_blocks_ownership_mutation(
 
     repo = SimpleNamespace(
         config=SimpleNamespace(
-            database="coding_agent_merchant_test"
+            database="coding_agent_merchant_test",
+            user="merchant_test",
         )
     )
 
@@ -284,7 +285,8 @@ def test_second_execution_cannot_claim_same_write(
 
     repo = SimpleNamespace(
         config=SimpleNamespace(
-            database="coding_agent_merchant_test"
+            database="coding_agent_merchant_test",
+            user="merchant_test",
         )
     )
 

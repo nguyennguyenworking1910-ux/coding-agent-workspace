@@ -2805,7 +2805,7 @@ def _validated_merchant_direct_dispatch_scope(state):
     if not isinstance(tokens, list):
         raise ValueError("Malformed direct scope arguments")
 
-    validated = validate_direct_scope(tokens)
+    validated = validate_direct_scope(tokens, scope.get("database_target"))
 
     for field in ("scope_hash", "command", "database_target"):
         if scope.get(field) != validated[field]:
@@ -2853,6 +2853,8 @@ def _record_merchant_execute_dispatch(
         "operation": MERCHANT_EXECUTE_OPERATION,
         "subagent_type": subagent_type,
         "teammate_name": teammate_name,
+        # Binds the scope's database target: the confirmation hash
+        # covers command, target and payload.
         "confirmation_hash": direct_scope["confirmation_hash"],
     }
     return None

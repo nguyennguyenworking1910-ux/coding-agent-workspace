@@ -46,6 +46,7 @@ class DispatcherDependencies:
 
     HOOK_EVENT_NAMES: Any
     MerchantRuntimeHandoffStageError: Any
+    DirectPreflightRefused: type[Exception]
     bounded_runtime_apply_failure: BoundedRuntimeApplyFailureFn
     bounded_runtime_apply_result: BoundedRuntimeApplyResultFn
     emit_post_tool_context: EmitPostToolContextFn
@@ -80,6 +81,10 @@ def main(
 
     MerchantRuntimeHandoffStageError = (
         dependencies.MerchantRuntimeHandoffStageError
+    )
+
+    DirectPreflightRefused = (
+        dependencies.DirectPreflightRefused
     )
 
     bounded_runtime_apply_failure = (
@@ -228,6 +233,7 @@ def main(
             succeeded = False
             bounded_runtime_result = None
             runtime_failure_type: str | None = None
+            preflight_reason: str | None = None
 
             try:
                 # merchant_cli_main writes JSON to stdout/stderr.
@@ -281,7 +287,11 @@ def main(
                 # exceptions may contain sensitive operational data.
                 succeeded = False
                 exit_code = None
-                if isinstance(
+                if isinstance(exc, DirectPreflightRefused):
+                    # Refused before any reservation or spend.
+                    preflight_reason = exc.reason
+                    runtime_failure_type = f"PREFLIGHT:{exc.reason}"
+                elif isinstance(
                     exc,
                     MerchantRuntimeHandoffStageError,
                 ):
@@ -328,6 +338,18 @@ def main(
                     "be executed again. Continue only with allowlisted "
                     "read-only runtime verification, then report "
                     "EXECUTE_SUCCESS. Do not send another "
+                    "MERCHANT_EXECUTE_REQUEST_JSON for this run/task."
+                )
+
+                return 0
+
+            if result_recorded and preflight_reason is not None:
+                emit_post_tool_context(
+                    "Merchant Direct EXECUTE was refused before execution. "
+                    f"Reason: {preflight_reason}. No reservation was made, "
+                    "no database write was attempted and the authorization "
+                    "was not spent, but this run cannot execute again. "
+                    "Report FAILED. Do not send another "
                     "MERCHANT_EXECUTE_REQUEST_JSON for this run/task."
                 )
 

@@ -65,7 +65,10 @@ def _stage(argv):
             teammate_name=TEAMMATE,
             run_id=current["current_run_id"],
             task_id=current["current_task_id"],
-            candidate={"arguments": tuple(argv)},
+            candidate={
+                "arguments": tuple(argv),
+                "database_target": "runtime",
+            },
         )
 
     assert attempt is not None, reason

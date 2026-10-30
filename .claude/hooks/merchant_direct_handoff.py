@@ -10,7 +10,15 @@ that the TeammateIdle gate must settle from trusted evidence:
   executed through the one-use runtime authorization.
 
 No identity, command, argument or database target here comes from agent
-input. The staged attempt was validated against the user-typed scope.
+input. The staged attempt was validated against the user-typed scope, whose
+database target (``runtime`` or ``test``) is bound into the scope hash, the
+confirmation hash, the staged handoff, the reservation, the spent authority
+and the execution receipt.
+
+Before any reservation or spend, the target is checked: runtime execution is
+disabled in code, test mode supports only ``merchant create``, and a
+read-only preflight verifies the effective database name and user. A
+preflight failure leaves no footprint and spends nothing.
 """
 
 from __future__ import annotations
@@ -39,9 +47,15 @@ from claude.hooks.team_lifecycle import locked_team_state
 
 MERCHANT_CREATE_COMMAND = "merchant create"
 
-# Trusted orchestration setting, never agent input. Tests set "test" so
-# the real reserved path runs against the test database only.
-DIRECT_CREATE_DATABASE = "runtime"
+# Runtime (production) Direct EXECUTE stays disabled until separately
+# approved. This is code, not configuration: no environment variable or
+# agent input can enable it.
+RUNTIME_DIRECT_EXECUTE_ENABLED = False
+
+# Test mode exists to validate the real Create path end to end.
+TEST_MODE_COMMANDS = frozenset({MERCHANT_CREATE_COMMAND})
+
+PREFLIGHT_STAGE = "PREFLIGHT"
 
 # The Merchant CLI reports a class name only for validation and repository
 # errors, which are raised before commit and roll the transaction back.
@@ -51,6 +65,14 @@ UNCLASSIFIED_CLI_FAILURE = "MerchantCommandError"
 
 class DirectHandoffError(PermissionError):
     """The staged request does not match active lifecycle authority."""
+
+
+class DirectPreflightRefused(PermissionError):
+    """Refused before any reservation or spend; nothing was attempted."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _bound_record(
@@ -230,8 +252,10 @@ def _create_payload(argv: tuple[str, ...]) -> dict[str, Any]:
     return build_write_payload(args, MERCHANT_CREATE_COMMAND)
 
 
-def _execute_reserved_create(attempt: PreparedRuntimeHandoff) -> int:
-    from claude.clients.merchant.repository import MerchantRepository
+def _execute_reserved_create(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+) -> int:
     from claude.hooks.merchant_direct_write_state import (
         reserve_merchant_create,
     )
@@ -249,7 +273,7 @@ def _execute_reserved_create(attempt: PreparedRuntimeHandoff) -> int:
         if "direct_scope_execution" in record:
             raise DirectHandoffError("Task already has write evidence")
 
-    database = DIRECT_CREATE_DATABASE
+    database = attempt.database_target
     payload = _create_payload(tuple(attempt.arguments))
     write_id = f"scope-{attempt.scope_hash[:32]}"
 
@@ -281,7 +305,7 @@ def _execute_reserved_create(attempt: PreparedRuntimeHandoff) -> int:
         raise DirectHandoffError("Scope is not a Merchant Create")
 
     result = execute_reserved_merchant_create(
-        repository=MerchantRepository(role=database),
+        repository=repository,
         owner_session_id=attempt.owner_session_id,
         teammate_name=attempt.teammate_name,
         pane_session_id=pane_session_id,
@@ -297,12 +321,49 @@ def _execute_reserved_create(attempt: PreparedRuntimeHandoff) -> int:
     return 0
 
 
+def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
+    """Refuse before any reservation or spend; return the Create repository.
+
+    Raises DirectPreflightRefused with RUNTIME_EXECUTION_DISABLED,
+    TEST_MODE_COMMAND_UNSUPPORTED, INVALID_CONFIGURATION or
+    DATABASE_UNAVAILABLE. The one-use authority stays unspent.
+    """
+
+    from claude.hooks.merchant_reserved_execution import (
+        DatabasePreflightError,
+        preflight_database_identity,
+        repository_for_target,
+    )
+
+    target = attempt.database_target
+
+    if target == "runtime" and not RUNTIME_DIRECT_EXECUTE_ENABLED:
+        raise DirectPreflightRefused("RUNTIME_EXECUTION_DISABLED")
+
+    if target == "test" and attempt.command not in TEST_MODE_COMMANDS:
+        raise DirectPreflightRefused("TEST_MODE_COMMAND_UNSUPPORTED")
+
+    if attempt.command != MERCHANT_CREATE_COMMAND:
+        # Scoped writes connect through the runtime capability path.
+        return None
+
+    try:
+        repository = repository_for_target(target)
+        preflight_database_identity(repository, target)
+    except DatabasePreflightError as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+
+    return repository
+
+
 def invoke_direct_merchant_execute(
     attempt: PreparedRuntimeHandoff,
 ) -> int:
     """Run one staged Direct EXECUTE attempt exactly once."""
 
+    repository = preflight_direct_execute(attempt)
+
     if attempt.command == MERCHANT_CREATE_COMMAND:
-        return _execute_reserved_create(attempt)
+        return _execute_reserved_create(attempt, repository)
 
     return _execute_scoped_write(attempt)

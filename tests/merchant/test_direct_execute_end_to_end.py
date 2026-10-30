@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import uuid
 from io import StringIO
@@ -63,6 +64,11 @@ PANE = "cp12h3-pane"
 # The tmux pane the harness recorded for merchant-manager. Every other
 # pane session runs in a different tmux pane.
 PANE_TMUX = "%7"
+# The psmux server that owns the teammate pane and the harness lead process.
+# Unit tests replace only the OS evidence (harness_team_identity's
+# _os_pane_server); the harness record and TMUX_PANE checks stay real.
+LEAD_PID = 4242
+PANE_SERVER = 7000
 TMUX_BY_PANE = {PANE: PANE_TMUX}
 TEAMMATE = "merchant-manager"
 PROJECT_ID = "00000000-0000-0000-0000-000000000001"
@@ -142,6 +148,14 @@ def isolated(tmp_path, monkeypatch):
     teams = tmp_path / "harness_teams"
     write_harness_team(teams, PANE_TMUX)
     monkeypatch.setenv(harness_team_identity.TEAMS_DIR_ENV_VAR, str(teams))
+    monkeypatch.setattr(
+        harness_team_identity,
+        "_os_pane_server",
+        lambda tmux_pane, lead_pid: (
+            PANE_SERVER if lead_pid == LEAD_PID else None
+        ),
+        raising=False,
+    )
 
     # Item 10: no test may even construct a non-test repository.
     original_init = MerchantRepository.__init__
@@ -173,17 +187,28 @@ def fake_runtime_handler(monkeypatch):
         "build_write_commands",
         lambda database: MerchantWriteCommands({"project update": handler}),
     )
+    # Runtime Direct EXECUTE ships disabled; these lifecycle tests reach
+    # only the in-memory handler above.
+    monkeypatch.setattr(
+        merchant_direct_handoff,
+        "RUNTIME_DIRECT_EXECUTE_ENABLED",
+        True,
+        raising=False,
+    )
 
     return calls, behaviour
 
 
-def submit(request, *, argv=None, confirmed=True, operations=()):
+def submit(request, *, argv=None, confirmed=True, operations=(), target=None):
     prefix = "/solve --confirm" if confirmed else "/solve"
     scope = (
         f" --merchant-scope {json.dumps(argv)}"
         if argv is not None
         else ""
     )
+
+    if target is not None:
+        scope = f" --merchant-target {target}{scope}"
 
     return intent_gate.run(
         {
@@ -218,6 +243,10 @@ def write_harness_team(teams_dir, tmux_pane):
         json.dumps(
             {
                 "leadSessionId": LEAD,
+                "leadProcess": {
+                    "pid": LEAD_PID,
+                    "pidSpace": socket.gethostname(),
+                },
                 "members": [
                     {
                         "name": TEAMMATE,
@@ -267,7 +296,12 @@ def send(message, *, pane=PANE, tool_use_id="send", tmux=None):
 
 
 def execute_request(
-    argv, *, pane=PANE, operation="merchant_execute", tmux=None
+    argv,
+    *,
+    pane=PANE,
+    operation="merchant_execute",
+    tmux=None,
+    target="runtime",
 ):
     return send(
         MERCHANT_EXECUTE_REQUEST_MARKER
@@ -276,7 +310,7 @@ def execute_request(
             {
                 "contract_version": 1,
                 "operation": operation,
-                "database_target": "runtime",
+                "database_target": target,
                 "arguments": list(argv),
             }
         ),
@@ -840,15 +874,16 @@ def _cleanup_create(merchant_id, operation_key):
     not TEST_DB_CONFIGURED,
     reason="Merchant test database not configured",
 )
-def test_scoped_merchant_create_commits_and_releases(monkeypatch):
-    monkeypatch.setattr(
-        merchant_direct_handoff, "DIRECT_CREATE_DATABASE", "test"
-    )
-
+def test_scoped_merchant_create_commits_and_releases():
     code = "E2E" + uuid.uuid4().hex[:12].upper()
     argv = ["merchant", "create", "--code", code, "--name", "CP12H3 E2E"]
 
-    submit(f"Create merchant CP12H3 E2E with code {code}", argv=argv)
+    # The user selects the test target; nothing is patched.
+    submit(
+        f"Create merchant CP12H3 E2E with code {code}",
+        argv=argv,
+        target="test",
+    )
     assert run_state()["operations"] == ["merchant_execute"]
     assert dispatch() is None
 
@@ -856,7 +891,7 @@ def test_scoped_merchant_create_commits_and_releases(monkeypatch):
     merchant_id = None
 
     try:
-        assert execute_request(argv) == 0
+        assert execute_request(argv, target="test") == 0
 
         writes = record()["direct_writes"]
         assert len(writes) == 1
@@ -869,10 +904,17 @@ def test_scoped_merchant_create_commits_and_releases(monkeypatch):
         assert run_state()[HANDOFF_STATE_KEY]["status"] == HANDOFF_SUCCESS
 
         # Duplicate execute requests never reach PostgreSQL again.
-        assert execute_request(argv) == 0
+        assert execute_request(argv, target="test") == 0
         assert len(record()["direct_writes"]) == 1
 
-        assert report("EXECUTE_SUCCESS", command="merchant create") == 0
+        assert (
+            report(
+                "EXECUTE_SUCCESS",
+                command="merchant create",
+                database_target="test",
+            )
+            == 0
+        )
         assert idle() == 0
 
         current = record()

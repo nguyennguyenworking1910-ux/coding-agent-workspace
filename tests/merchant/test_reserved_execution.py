@@ -108,7 +108,10 @@ def env(monkeypatch, tmp_path):
     )
 
     repo = SimpleNamespace(
-        config=SimpleNamespace(database="coding_agent_merchant_test")
+        config=SimpleNamespace(
+            database="coding_agent_merchant_test",
+            user="merchant_test",
+        )
     )
 
     return state, repo, calls

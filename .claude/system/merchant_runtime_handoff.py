@@ -82,19 +82,33 @@ _UUID_TOKEN = re.compile(
 
 
 MERCHANT_SCOPE_STATE_KEY = "merchant_scope"
+# Targets a user may select for one scope. The physical database and role
+# for each are pinned by merchant_reserved_execution.DATABASE_IDENTITIES.
+DIRECT_DATABASE_TARGETS = frozenset({RUNTIME_DATABASE_TARGET, "test"})
 DIRECT_SCOPE_FORBIDDEN_TOKENS = frozenset(
     {"--apply", "--propose", "--execute", "--proposal-hash"}
 )
 
 
-def validate_direct_scope(argv: Sequence[str]) -> dict[str, Any]:
+def validate_direct_scope(
+    argv: Sequence[str],
+    database_target: str = RUNTIME_DATABASE_TARGET,
+) -> dict[str, Any]:
     """Validate one exact user-typed Merchant write and derive its scope.
 
-    The scope is the exact argv the user authorized. It must name one
-    allowlisted write on the runtime target, with no mode, proposal hash or
-    database override, and every entity identifier must be an exact UUID.
-    Names are rejected so an ambiguous target cannot become authority.
+    The scope is the exact argv the user authorized plus the database target
+    the user selected with the request (``runtime`` unless the user typed
+    ``--merchant-target test``). The argv must name one allowlisted write,
+    with no mode, proposal hash or database override, and every entity
+    identifier must be an exact UUID. Names are rejected so an ambiguous
+    target cannot become authority. The target is bound into the scope hash
+    and the confirmation hash, so it cannot change after authorization.
     """
+
+    if database_target not in DIRECT_DATABASE_TARGETS:
+        raise MerchantRuntimeHandoffError(
+            "Direct Merchant scope database target is not approved"
+        )
 
     if isinstance(argv, (str, bytes, bytearray)) or not isinstance(
         argv, Sequence
@@ -167,15 +181,15 @@ def validate_direct_scope(argv: Sequence[str]) -> dict[str, Any]:
 
     envelope = build_confirmation_envelope(
         command,
-        RUNTIME_DATABASE_TARGET,
+        database_target,
         payload,
     )
 
     return {
         "argv": tokens,
         "command": command,
-        "database_target": RUNTIME_DATABASE_TARGET,
-        "scope_hash": _direct_scope_hash(tokens),
+        "database_target": database_target,
+        "scope_hash": _direct_scope_hash(tokens, database_target),
         "confirmation": envelope.to_dict(),
         "confirmation_hash": envelope.confirmation_hash,
         "proposal_hash": envelope.proposal_hash,
@@ -218,9 +232,9 @@ def completeness_evidence(
     }
 
 
-def _direct_scope_hash(tokens: Sequence[str]) -> str:
+def _direct_scope_hash(tokens: Sequence[str], database_target: str) -> str:
     canonical = json.dumps(
-        list(tokens),
+        {"argv": list(tokens), "database_target": database_target},
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -291,7 +305,7 @@ def _validated_direct_state(
             "User-authorized scope is malformed"
         )
 
-    recomputed = validate_direct_scope(tokens)
+    recomputed = validate_direct_scope(tokens, scope.get("database_target"))
 
     if scope.get("scope_hash") != recomputed["scope_hash"]:
         raise MerchantRuntimeHandoffError(
@@ -445,6 +459,7 @@ def _verify_staged_handoff(
         or handoff.get("task_id") != task_id
         or handoff.get("teammate_name") != teammate_name
         or handoff.get("confirmation_hash") != scope["confirmation_hash"]
+        or handoff.get("database_target") != scope["database_target"]
     ):
         raise MerchantRuntimeHandoffError(
             "No trusted staged execute request matches this task"
@@ -557,6 +572,7 @@ def reserve_direct_scope_authorization(
                     "task_id": task_id,
                     "teammate_name": teammate_name,
                     "command": scope["command"],
+                    "database_target": scope["database_target"],
                     "scope_hash": scope["scope_hash"],
                     "confirmation_hash": scope["confirmation_hash"],
                     "reservation_kind": kind,
@@ -603,6 +619,7 @@ def spent_authority_matches(
     task_id: str,
     reservation_kind: str,
     reservation_id: str,
+    database_target: str,
 ) -> bool:
     """True only if this run's authority was spent for this reservation."""
 
@@ -623,6 +640,7 @@ def spent_authority_matches(
         and authority.get("teammate_name") == teammate_name
         and authority.get("reservation_kind") == reservation_kind
         and authority.get("reservation_id") == reservation_id
+        and authority.get("database_target") == database_target
     )
 
 
@@ -677,6 +695,7 @@ def invoke_authorized_scope_apply(
             task_id=task_id,
             reservation_kind="scope",
             reservation_id=execution_attempt_id,
+            database_target=scope["database_target"],
         ):
             raise MerchantRuntimeHandoffError(
                 "Spent authority does not match this reservation"

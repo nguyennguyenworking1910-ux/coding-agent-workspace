@@ -70,6 +70,10 @@ CONTROLLED_COMMANDS = ("solve", "schedule-agent")
 CONFIRM_FLAG = "--confirm"
 MERCHANT_CONFIRM_FLAG = "--merchant-confirmation"
 MERCHANT_SCOPE_FLAG = "--merchant-scope"
+# User-typed, before the scope: `--merchant-target test --merchant-scope [...]`.
+# Only the test target can be named; runtime is the default.
+MERCHANT_TARGET_FLAG = "--merchant-target"
+MERCHANT_TEST_TARGET = "test"
 
 MERCHANT_EXECUTE_OPERATION = "merchant_execute"
 LEGACY_MERCHANT_OPERATIONS = frozenset(
@@ -431,6 +435,25 @@ def run(
         )
 
     merchant_scope = None
+    merchant_target = "runtime"
+
+    if request == MERCHANT_TARGET_FLAG or request.startswith(
+        MERCHANT_TARGET_FLAG + " "
+    ):
+        target, _, request = (
+            request[len(MERCHANT_TARGET_FLAG):].lstrip().partition(" ")
+        )
+        request = request.lstrip()
+
+        if target != MERCHANT_TEST_TARGET or not request.startswith(
+            MERCHANT_SCOPE_FLAG + " "
+        ):
+            return block(
+                "--merchant-target accepts only `test` and must be followed "
+                "by --merchant-scope [...]. Nothing was dispatched."
+            )
+
+        merchant_target = MERCHANT_TEST_TARGET
 
     if (
         request == MERCHANT_SCOPE_FLAG
@@ -453,7 +476,10 @@ def run(
             )
 
             scope_argv, request = split_merchant_scope(request)
-            validated_scope = validate_direct_scope(scope_argv)
+            validated_scope = validate_direct_scope(
+                scope_argv,
+                merchant_target,
+            )
 
             merchant_scope = {
                 "argv": list(validated_scope["argv"]),

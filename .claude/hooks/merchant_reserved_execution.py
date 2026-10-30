@@ -21,6 +21,72 @@ DATABASE_NAMES = {
     "runtime": "coding_agent_merchant",
 }
 
+# Logical target -> (repository role, PostgreSQL user). The test target can
+# only ever build the test role, which reads only the test credentials.
+DATABASE_ROLES = {
+    "test": ("test", "merchant_test"),
+    "runtime": ("app", "merchant_app"),
+}
+
+INVALID_CONFIGURATION = "INVALID_CONFIGURATION"
+DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
+
+
+class DatabasePreflightError(PermissionError):
+    """The target database cannot be used; nothing was attempted."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def repository_for_target(database: str) -> Any:
+    """Build the repository for one logical target, pinned to its identity.
+
+    Raises DatabasePreflightError(INVALID_CONFIGURATION) for an unknown
+    target or a configuration naming another database or user.
+    """
+
+    from claude.clients.merchant.repository import MerchantRepository
+
+    if database not in DATABASE_ROLES:
+        raise DatabasePreflightError(INVALID_CONFIGURATION)
+
+    role, user = DATABASE_ROLES[database]
+
+    try:
+        repository = MerchantRepository(role=role)
+    except ValueError as exc:
+        raise DatabasePreflightError(INVALID_CONFIGURATION) from exc
+
+    config = repository.config
+
+    if config.database != DATABASE_NAMES[database] or config.user != user:
+        raise DatabasePreflightError(INVALID_CONFIGURATION)
+
+    return repository
+
+
+def preflight_database_identity(repository: Any, database: str) -> None:
+    """Read-only check of the effective database and user before any spend."""
+
+    import psycopg
+
+    try:
+        with repository.connection(read_only=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT current_database(), current_user")
+                row = cursor.fetchone()
+    except psycopg.OperationalError as exc:
+        raise DatabasePreflightError(DATABASE_UNAVAILABLE) from exc
+    except psycopg.Error as exc:
+        raise DatabasePreflightError(INVALID_CONFIGURATION) from exc
+
+    values = list(row.values()) if isinstance(row, Mapping) else list(row or ())
+
+    if values != [DATABASE_NAMES[database], DATABASE_ROLES[database][1]]:
+        raise DatabasePreflightError(INVALID_CONFIGURATION)
+
 
 def execute_reserved_merchant_create(
     *,
@@ -45,7 +111,10 @@ def execute_reserved_merchant_create(
 
     config = getattr(repository, "config", None)
 
-    if getattr(config, "database", None) != DATABASE_NAMES[database]:
+    if (
+        getattr(config, "database", None) != DATABASE_NAMES[database]
+        or getattr(config, "user", None) != DATABASE_ROLES[database][1]
+    ):
         raise ReservedExecutionError("Repository database mismatch")
 
     if not isinstance(payload, Mapping):
@@ -170,6 +239,7 @@ def execute_reserved_merchant_create(
             task_id=task_id,
             reservation_kind="create",
             reservation_id=write_id,
+            database_target=database,
         ):
             raise ReservedExecutionError(
                 "No spent user authority matches this reservation"

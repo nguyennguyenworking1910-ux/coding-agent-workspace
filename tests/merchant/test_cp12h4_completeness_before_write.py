@@ -67,7 +67,10 @@ def _stage():
             teammate_name=TEAMMATE,
             run_id=current["current_run_id"],
             task_id=current["current_task_id"],
-            candidate={"arguments": tuple(UPDATE_ARGV)},
+            candidate={
+                "arguments": tuple(UPDATE_ARGV),
+                "database_target": "runtime",
+            },
         )
 
     assert attempt is not None, reason
@@ -120,7 +123,7 @@ def test_incomplete_persisted_scope_never_writes(monkeypatch):
             argv=list(BLANK_REASON_ARGV),
             command="merchant activate",
             scope_hash=merchant_runtime_handoff._direct_scope_hash(
-                BLANK_REASON_ARGV
+                BLANK_REASON_ARGV, "runtime"
             ),
         )
         state["merchant_dispatch"]["confirmation_hash"] = (

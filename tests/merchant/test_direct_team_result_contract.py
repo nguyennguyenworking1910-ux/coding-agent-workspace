@@ -35,7 +35,9 @@ def test_execute_failure_parses():
 
 
 @pytest.mark.parametrize("changes", [
-    {"database_target": "test"},
+    # "test" is an approved declared target since CP12H.5B; whether it is
+    # the run's trusted target is checked where trusted state is available.
+    {"database_target": "production"},
     {"operation": "merchant_apply"},
     {"proposal_emitted": True},
     {"command": ""},

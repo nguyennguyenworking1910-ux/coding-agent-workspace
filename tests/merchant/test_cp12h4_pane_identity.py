@@ -16,6 +16,7 @@ from claude.hooks import harness_team_identity, team_lifecycle
 from tests.merchant.test_direct_execute_end_to_end import (  # noqa: F401
     LEAD,
     PANE,
+    PANE_SERVER,
     PANE_TMUX,
     PROJECT_ID,
     TEAMMATE,
@@ -79,7 +80,7 @@ def test_rogue_pane_arriving_first_cannot_bind_or_write(fake_runtime_handler):
     assert execute_request(UPDATE_ARGV) == 0
     assert len(calls) == 1
     assert record()["trusted_pane_session_id"] == PANE
-    assert record()["trusted_tmux_pane_id"] == PANE_TMUX
+    assert record()["trusted_tmux_pane_id"] == f"{PANE_SERVER}:{PANE_TMUX}"
 
 
 def test_self_declared_identity_without_pane_is_rejected(fake_runtime_handler):

@@ -18,6 +18,18 @@ step. The only runtime-write authority is an explicitly confirmed exact scope ty
 - Merchant Manager sends one `MERCHANT_EXECUTE_REQUEST_JSON:` request to `team-lead`.
 - Trusted orchestration records execution evidence, then executes the persisted scope once.
 - The agent must never invoke the runtime handoff directly.
+
+Runtime (production) Direct EXECUTE is disabled in code (`RUNTIME_DIRECT_EXECUTE_ENABLED =
+False` in `merchant_direct_handoff.py`) until separately approved: a runtime-scoped request is
+refused before any reservation or spend. To validate the real path, the user may type
+`--merchant-target test` immediately before `--merchant-scope`:
+
+`/solve --confirm --merchant-target test --merchant-scope ["merchant","create","--code","<CODE>","--name","<NAME>"] Create test merchant <CODE>`
+
+Test mode runs only `merchant create`, connects only to `coding_agent_merchant_test` as
+`merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
+confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
+CLI argument, environment variable or payload can select or change it.
 - `merchant_propose`, `merchant_apply`, and `--merchant-confirmation` are removed and rejected.
 - A `merchant_execute` run without a scope can read and check completeness only; it ends with
   `REQUIRES_CLARIFICATION` or `BLOCKED`. Never infer runtime-write permission from natural
@@ -299,7 +311,8 @@ The team lead authorizes the Merchant operation but does not author Merchant CLI
 When dispatching `merchant-manager`:
 
 - preserve the user's semantic objective and raw request;
-- preserve `operation: merchant_execute` (or `merchant_read`) and `database_target: runtime`;
+- preserve `operation: merchant_execute` (or `merchant_read`) and the persisted scope's
+  `database_target` (`runtime`, or `test` only when the user typed `--merchant-target test`);
 - for a scoped run, quote the exact persisted `merchant_scope.argv` unchanged; it is the only
   write the teammate may request;
 - for an unscoped run, do not invent, reconstruct, translate, or guess a concrete Merchant CLI
@@ -322,6 +335,9 @@ MERCHANT_EXECUTE_REQUEST_JSON:
 {"contract_version":1,"operation":"merchant_execute","database_target":"runtime","arguments":["<exact scope token 1>","<exact scope token 2>"]}
 ```
 
+Its `database_target` must equal the persisted scope's target; a mismatch is rejected before
+anything is spent.
+
 The request carries no authority. The hook re-derives the command and binding from the persisted
 scope, binds the executing pane on first use, persists execution evidence in team state, spends
 the one-use authorization, and executes at most once:
@@ -335,8 +351,8 @@ retried. The lead never executes the handoff, the Merchant CLI, or a fallback mu
 ### Merchant terminal result contract
 
 For every `merchant_execute` assignment the teammate's final `SendMessage` contains exactly one
-`TEAM_RESULT_JSON` block with `operation: merchant_execute`, `database_target: runtime`, and
-`proposal_emitted: false`. Allowed outcomes are `EXECUTE_SUCCESS`, `EXECUTE_FAILED`,
+`TEAM_RESULT_JSON` block with `operation: merchant_execute`, the scope's `database_target`
+(`runtime` unless the user selected `test`), and `proposal_emitted: false`. Allowed outcomes are `EXECUTE_SUCCESS`, `EXECUTE_FAILED`,
 `REQUIRES_CLARIFICATION`, `BLOCKED`, and `FAILED`.
 
 The report describes the outcome; it is never execution authority. `TeammateIdle` releases the
@@ -357,7 +373,8 @@ Merchant dispatch and obtain the missing information through the deterministic M
 
 Every Merchant assignment must explicitly declare all of these fields in its prompt:
 
-- `database_target: runtime`;
+- `database_target: runtime` (or `database_target: test` only when the user typed
+  `--merchant-target test`; always the persisted scope's target);
 - `operation: merchant_read` or `operation: merchant_execute`;
 - the semantic Merchant objective and the identifiers or filters actually supplied by the
   request;

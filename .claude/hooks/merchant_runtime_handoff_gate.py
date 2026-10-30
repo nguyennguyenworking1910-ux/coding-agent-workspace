@@ -79,6 +79,8 @@ class PreparedRuntimeHandoff:
     scope_hash: str
     arguments: tuple[str, ...]
     arguments_hash: str
+    # From the trusted user scope only; never from the teammate request.
+    database_target: str
 
 
 def contains_handoff_marker(
@@ -165,7 +167,7 @@ def handoff_candidate_from_message(
         candidate.get("operation")
         != MERCHANT_EXECUTE_OPERATION
         or candidate.get("database_target")
-        != RUNTIME_DATABASE_TARGET
+        not in EXECUTION_DATABASES
     ):
         return None
 
@@ -207,7 +209,9 @@ def handoff_candidate_from_message(
     return {
         "contract_version": HANDOFF_CONTRACT_VERSION,
         "operation": MERCHANT_EXECUTE_OPERATION,
-        "database_target": RUNTIME_DATABASE_TARGET,
+        # Declared by the teammate; staging requires it to equal the
+        # trusted scope target and never uses it to choose a database.
+        "database_target": candidate["database_target"],
         "arguments": tuple(normalized_arguments),
     }
 
@@ -331,7 +335,8 @@ def stage_runtime_handoff_attempt(
 
     try:
         trusted_scope = validate_direct_scope(
-            direct_scope.get("argv")
+            direct_scope.get("argv"),
+            direct_scope.get("database_target"),
         )
     except (ValueError, TypeError, RuntimeError):
         return None, "trusted direct scope validation failed"
@@ -345,10 +350,13 @@ def stage_runtime_handoff_attempt(
         != trusted_scope.get("scope_hash")
         or direct_scope.get("command")
         != trusted_scope.get("command")
-        or direct_scope.get("database_target") != RUNTIME_DATABASE_TARGET
-        or trusted_scope.get("database_target") != RUNTIME_DATABASE_TARGET
+        or direct_scope.get("database_target")
+        != trusted_scope.get("database_target")
     ):
         return None, "direct scope does not match trusted run"
+
+    if candidate.get("database_target") != trusted_scope["database_target"]:
+        return None, "execute database target does not match direct scope"
 
     raw_arguments = candidate.get("arguments")
 
@@ -384,6 +392,7 @@ def stage_runtime_handoff_attempt(
         "task_id": task_id,
         "teammate_name": teammate_name,
         "confirmation_hash": confirmation_hash,
+        "database_target": trusted_scope["database_target"],
         "arguments_hash": digest,
         # Trusted completeness of the exact payload, re-verified where
         # authority is spent.
@@ -405,6 +414,7 @@ def stage_runtime_handoff_attempt(
             scope_hash=trusted_scope["scope_hash"],
             arguments=raw_arguments,
             arguments_hash=digest,
+            database_target=trusted_scope["database_target"],
         ),
         "",
     )
@@ -455,7 +465,7 @@ def bounded_runtime_apply_result(
         candidate.get("success") is not True
         or candidate.get("mode") != "EXECUTE"
         or candidate.get("command") != attempt.command
-        or candidate.get("database") not in EXECUTION_DATABASES
+        or candidate.get("database") != attempt.database_target
         or "result" not in candidate
     ):
         return None
@@ -546,6 +556,7 @@ def record_runtime_handoff_result(
         "task_id": attempt.task_id,
         "teammate_name": attempt.teammate_name,
         "confirmation_hash": attempt.confirmation_hash,
+        "database_target": attempt.database_target,
         "arguments_hash": attempt.arguments_hash,
     }
 
@@ -567,7 +578,7 @@ def record_runtime_handoff_result(
             runtime_result.get("success") is not True
             or runtime_result.get("mode") != "EXECUTE"
             or runtime_result.get("command") != attempt.command
-            or runtime_result.get("database") not in EXECUTION_DATABASES
+            or runtime_result.get("database") != attempt.database_target
             or not isinstance(result_sha256, str)
             or _SHA256_PATTERN.fullmatch(result_sha256) is None
         ):

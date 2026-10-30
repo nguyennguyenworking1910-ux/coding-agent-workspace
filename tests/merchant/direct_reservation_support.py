@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from claude.hooks import runtime_state, team_lifecycle
+from claude.hooks import harness_team_identity, runtime_state, team_lifecycle
 from claude.hooks.merchant_runtime_handoff_gate import (
     HANDOFF_STATE_KEY,
     arguments_hash,
@@ -29,6 +29,21 @@ PANE = "direct-pane"
 
 def isolate_team_state(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("CLAUDE_TEAM_STATE_DIR", str(tmp_path / "team"))
+
+
+def trust_teammate_pane(monkeypatch, pane: str = "7000:%7") -> None:
+    """Every hook process is the teammate's verified pane.
+
+    Only for tests whose subject is not pane identity. Pane identity itself
+    is covered against the real harness record in test_cp12h5b_* and
+    test_cp12h4_pane_identity.
+    """
+
+    monkeypatch.setattr(
+        harness_team_identity,
+        "verified_teammate_pane",
+        lambda owner_session_id, teammate_name: pane,
+    )
 
 
 def reserve_scoped_write(
@@ -51,7 +66,10 @@ def reserve_scoped_write(
         return kwargs
 
     try:
-        scope = validate_direct_scope(state["merchant_scope"]["argv"])
+        scope = validate_direct_scope(
+            state["merchant_scope"]["argv"],
+            state["merchant_scope"].get("database_target", "runtime"),
+        )
     except Exception:  # noqa: BLE001 - a broken scope is the test subject
         return kwargs
 
@@ -67,6 +85,7 @@ def reserve_scoped_write(
                 "task_id": task_id,
                 "teammate_name": TEAMMATE,
                 "confirmation_hash": scope["confirmation_hash"],
+                "database_target": scope["database_target"],
                 "arguments_hash": arguments_hash(tuple(scope["argv"])),
                 "completeness": completeness_evidence(
                     scope, run_id=run_id, task_id=task_id
@@ -104,6 +123,7 @@ def record_create_authority(
     task_id: str,
     write_id: str,
     teammate_name: str = TEAMMATE,
+    database_target: str = "test",
 ) -> None:
     """Record the spent user authority a reserved Create executor requires."""
 
@@ -116,5 +136,6 @@ def record_create_authority(
         "teammate_name": teammate_name,
         "reservation_kind": "create",
         "reservation_id": write_id,
+        "database_target": database_target,
     }
     runtime_state.save_state(session_id, state)

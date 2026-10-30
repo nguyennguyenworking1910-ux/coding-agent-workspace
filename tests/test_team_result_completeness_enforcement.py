@@ -36,6 +36,14 @@ sys.path.insert(
 )
 
 import policy_gate  # noqa: E402
+from tests.merchant.direct_reservation_support import trust_teammate_pane
+
+
+@pytest.fixture(autouse=True)
+def _trusted_teammate_pane(monkeypatch):
+    # Subject here is completion, not pane identity (see test_cp12h5b_*).
+    trust_teammate_pane(monkeypatch)
+
 
 
 MERCHANT_MANAGER = "merchant-manager"

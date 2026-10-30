@@ -494,6 +494,16 @@ def handle_teammate_idle(
                         str(pending_result.get("message") or "")
                     )
 
+                    # The declared target must be the user-selected one.
+                    with locked_state(owner_session_id) as owner_run:
+                        owner_scope = (owner_run or {}).get("merchant_scope")
+
+                    trusted_target = (
+                        owner_scope.get("database_target")
+                        if isinstance(owner_scope, dict)
+                        else "runtime"
+                    )
+
                     outcome = str(
                         (task_result or {}).get("outcome") or ""
                     ).strip()
@@ -511,7 +521,7 @@ def handle_teammate_idle(
                         or str(
                             task_result.get("database_target") or ""
                         ).strip()
-                        != "runtime"
+                        != trusted_target
                     ):
                         return bounded_terminal_result_failure(
                             owner_session_id=owner_session_id,

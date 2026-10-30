@@ -146,7 +146,7 @@ def task_result_candidate_from_message(
     }:
         if (
             operation != "merchant_execute"
-            or database_target != "runtime"
+            or database_target not in {"runtime", "test"}
             or proposal_emitted is not False
         ):
             return None

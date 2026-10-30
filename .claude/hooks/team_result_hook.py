@@ -800,22 +800,19 @@ def _reconcile_direct_merchant_writes(
     task_id: str,
 ) -> bool:
     """Trusted database reconciliation, never agent-provided data."""
-    from claude.clients.merchant.repository import MerchantRepository
     from claude.hooks.merchant_direct_completion import (
         reconcile_all_direct_writes,
     )
-
-    def repository_factory(database: str):
-        if database not in {"test", "runtime"}:
-            raise ValueError("Unapproved database target")
-        return MerchantRepository(role=database)
+    from claude.hooks.merchant_reserved_execution import (
+        repository_for_target,
+    )
 
     return reconcile_all_direct_writes(
         owner_session_id=owner_session_id,
         teammate_name=teammate_name,
         run_id=run_id,
         task_id=task_id,
-        repository_factory=repository_factory,
+        repository_factory=repository_for_target,
     )
 
 
@@ -938,6 +935,7 @@ def _dispatcher_dependencies(
     """Bind current hook symbols to dispatcher dependencies."""
 
     from claude.hooks.merchant_direct_handoff import (
+        DirectPreflightRefused,
         invoke_direct_merchant_execute,
     )
 
@@ -947,6 +945,9 @@ def _dispatcher_dependencies(
         ),
         MerchantRuntimeHandoffStageError=(
             MerchantRuntimeHandoffStageError
+        ),
+        DirectPreflightRefused=(
+            DirectPreflightRefused
         ),
         bounded_runtime_apply_failure=(
             bounded_runtime_apply_failure

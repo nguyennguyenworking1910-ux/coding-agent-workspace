@@ -81,7 +81,9 @@ python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments
 
 The adapter fixes every operational assignment to the `runtime` target. It does not accept a
 `--database` argument. Do not substitute the test target, even if a runtime operation fails.
-The test target is reserved for explicit development tests, not user operations.
+The test target is reserved for explicit development tests, not user operations. The only
+exception is a Direct EXECUTE scope the user typed with `--merchant-target test`; trusted
+orchestration, not you, then routes that one write to the test database.
 
 The CLI returns JSON and exits non-zero on failure. Treat that JSON and exit status as the only
 evidence that an operation succeeded. Never claim a read completed or a change was executed
@@ -356,8 +358,10 @@ MERCHANT_EXECUTE_REQUEST_JSON:
 ```
 
 The JSON object contains exactly `contract_version` (`1`), `operation`
-(`"merchant_execute"`), `database_target` (`"runtime"`), and `arguments` (the exact
-user-authorized scope array, unchanged). Do not add a mode flag, proposal hash, confirmation
+(`"merchant_execute"`), `database_target` (the assignment's `database_target`: `"runtime"`,
+or `"test"` only when the assignment says the user selected the test target), and `arguments`
+(the exact user-authorized scope array, unchanged). A target that differs from the user's
+scope is rejected before anything is spent; you can never choose or change the target. Do not add a mode flag, proposal hash, confirmation
 hash, token, session, run, task, or credential. No prose before the marker or after the JSON.
 
 The request carries no authority. The PostToolUse hook re-derives everything from the
@@ -418,6 +422,9 @@ The object uses contract version 1 and describes what actually happened. Allowed
 - `REQUIRES_CLARIFICATION` — no write was attempted;
 - `BLOCKED` — no write was attempted;
 - `FAILED` — no write was attempted.
+
+Every result's `database_target` is the assignment's `database_target` (`runtime` in the
+examples below; `test` only for a user-selected test-target scope).
 
 Execution outcomes:
 

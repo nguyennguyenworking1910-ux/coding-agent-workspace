@@ -42,6 +42,14 @@ from team_lifecycle import (  # noqa: E402
 from tmux_result_receipt import (  # noqa: E402
     load_pending_result,
 )
+from tests.merchant.direct_reservation_support import trust_teammate_pane
+
+
+@pytest.fixture(autouse=True)
+def _trusted_teammate_pane(monkeypatch):
+    # Subject here is completion, not pane identity (see test_cp12h5b_*).
+    trust_teammate_pane(monkeypatch)
+
 
 @pytest.fixture
 def isolated_runtime(monkeypatch, tmp_path):

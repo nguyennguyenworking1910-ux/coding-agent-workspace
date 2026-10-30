@@ -26,6 +26,14 @@ from claude.hooks.merchant_direct_write_state import (
 )
 from claude.hooks.runtime_state import STATE_DIR_ENV_VAR
 from claude.hooks.tmux_result_receipt import load_pending_result
+from tests.merchant.direct_reservation_support import trust_teammate_pane
+
+
+@pytest.fixture(autouse=True)
+def _trusted_teammate_pane(monkeypatch):
+    # Subject here is completion, not pane identity (see test_cp12h5b_*).
+    trust_teammate_pane(monkeypatch)
+
 
 
 TEAMMATE = "merchant-manager"

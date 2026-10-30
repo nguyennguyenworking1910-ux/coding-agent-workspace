@@ -2250,15 +2250,26 @@ def direct_pane_identity_status(
 ) -> str:
     """Classify a TeammateIdle event for a Direct EXECUTE task.
 
-    - ``MATCH``: no binding yet, or the bound pane and session;
-    - ``IGNORE``: the event cannot come from a pane bound to this task
-      (unverified identity): no state change and no feedback, so a foreign
-      pane can neither settle the task nor loop;
+    - ``MATCH``: the event comes from the teammate's verified pane and
+      session for this task. A task not yet bound is bound here, from the
+      verified pane only; absence of a conflict is never enough;
+    - ``IGNORE``: the event cannot be attributed to this task's verified
+      pane (foreign, stale or unverifiable pane, or another run/task): no
+      state change and no feedback, so it can neither settle the task nor
+      loop;
     - ``CONFLICT``: the teammate's verified pane presents a different
       session for a bound task: the task ended FAILED with evidence kept.
     """
 
     from claude.hooks.harness_team_identity import verified_teammate_pane
+
+    pane_id = str(pane_session_id or "").strip()
+
+    # Resolved before the lock: it inspects processes, never team state.
+    tmux_pane = verified_teammate_pane(session_id, teammate_name)
+
+    if tmux_pane is None or not pane_id:
+        return "IGNORE"
 
     with locked_team_state(session_id) as state:
         record = (state or {}).get("teammates", {}).get(teammate_name)
@@ -2267,18 +2278,24 @@ def direct_pane_identity_status(
             not isinstance(record, dict)
             or record.get("current_run_id") != run_id
             or record.get("current_task_id") != task_id
-            or record.get("trusted_pane_task_id") != task_id
         ):
-            return "MATCH"
-
-        tmux_pane = verified_teammate_pane(session_id, teammate_name)
-
-        if tmux_pane is None or tmux_pane != record.get("trusted_tmux_pane_id"):
             return "IGNORE"
 
-        if record.get("trusted_pane_session_id") == str(
-            pane_session_id or ""
-        ).strip():
+        if record.get("trusted_pane_task_id") != task_id:
+            if record.get("status") != TeammateLifecycleStatus.RUNNING.value:
+                return "IGNORE"
+
+            # A stale binding from a previous task is replaced only by the
+            # pane the harness records now, verified from the process tree.
+            record["trusted_pane_session_id"] = pane_id
+            record["trusted_tmux_pane_id"] = tmux_pane
+            record["trusted_pane_task_id"] = task_id
+            return "MATCH"
+
+        if tmux_pane != record.get("trusted_tmux_pane_id"):
+            return "IGNORE"
+
+        if record.get("trusted_pane_session_id") == pane_id:
             return "MATCH"
 
         if record.get("status") == TeammateLifecycleStatus.RUNNING.value:
