@@ -67,7 +67,7 @@ def test_policy_accepts_scoped_dispatch_without_agent_block():
             "max_run_budget_usd": 2.0,
         },
         confirmed=True,
-        operations=["merchant_apply"],
+        operations=["merchant_execute"],
         run_id="scope-run",
         merchant_scope={
             "argv": list(scope["argv"]),
@@ -112,7 +112,7 @@ def test_policy_refuses_scoped_dispatch_carrying_agent_block():
             "max_run_budget_usd": 2.0,
         },
         confirmed=True,
-        operations=["merchant_apply"],
+        operations=["merchant_execute"],
         run_id="scope-run",
         merchant_scope={
             "argv": list(scope["argv"]),

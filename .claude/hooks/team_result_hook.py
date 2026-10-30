@@ -16,16 +16,14 @@ Updates both run state (result ledger) and team state (lifecycle status).
 When result is received, marks team state REPORT_RECEIVED.
 When TeammateIdle fires after result received, marks team state IDLE_REUSABLE.
 
-Gate 11I:
-- exact Merchant proposal JSON is taken from the Merchant CLI PostToolUse
-  response, never reconstructed from the teammate's SendMessage;
-- exact CLI output is staged only after the current lead run authorizes
-  exactly merchant_propose + merchant-manager;
+Merchant Direct EXECUTE:
 - tmux PostToolUse role information is only a hint;
 - TeammateIdle supplies the trusted canonical teammate identity;
-- owner session + teammate + run + task must match before proposal capture;
-- the raw confirmation token exists only in transient pending proposal state
-  and is cleared after successful lifecycle reconciliation.
+- owner session + teammate + run + task must match before release;
+- a merchant_execute task releases only with committed PostgreSQL evidence
+  for every reserved write, or a trusted no-write terminal marker when team
+  state shows no write footprint for the exact task;
+- TEAM_RESULT_JSON describes the outcome and is never execution authority.
 
 Stop hook clears run state only.
 SessionEnd hook clears run state and session team state.
@@ -47,7 +45,6 @@ from pathlib import Path
 from typing import Any
 from claude.system.merchant_runtime_handoff import (
     MerchantRuntimeHandoffStageError,
-    invoke_trusted_merchant_session_apply,
 )
 
 if __package__ in (None, ""):
@@ -101,14 +98,11 @@ if __package__ in (None, ""):
         MerchantRuntimeDependencies,
         _project_resolve_invocation as _runtime_project_resolve_invocation,
         bound_merchant_completeness_receipt as _runtime_bound_merchant_completeness_receipt,
-        capture_merchant_proposal_from_message as _runtime_capture_merchant_proposal_from_message,
-        handle_merchant_proposal_receipt as _runtime_handle_merchant_proposal_receipt,
         prepare_merchant_runtime_handoff as _runtime_prepare_merchant_runtime_handoff,
     )
     from merchant_staging import (
         MerchantStagingDependencies,
         _stage_exact_tmux_merchant_completeness as _merchant_stage_completeness,
-        _stage_exact_tmux_merchant_proposal as _merchant_stage_proposal,
         _stage_exact_tmux_merchant_resolution as _merchant_stage_resolution,
         _trusted_tmux_merchant_stage_context as _merchant_stage_context,
     )
@@ -119,19 +113,11 @@ if __package__ in (None, ""):
         _stage_exact_tmux_step_resolution as _resolution_stage_step,
     )
     from team_result_contract import (
-        MERCHANT_APPLY_FAILED_OUTCOME,
-        MERCHANT_APPLY_SUCCESS_OUTCOME,
-        MERCHANT_PROPOSAL_READY_OUTCOME,
         MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
         task_result_candidate_from_message,
     )
-    from merchant_result_contract import (
-        merchant_proposal_candidate_from_message,
-        merchant_report_sender,
-    )
     from merchant_tool_result_contract import (
         merchant_completeness_from_tool_response,
-        merchant_proposal_from_tool_response,
     )
     from team_lifecycle import (
         find_unique_active_teammate_owner,
@@ -139,25 +125,18 @@ if __package__ in (None, ""):
         mark_bound_report_received,
         mark_report_received,
         release_reported_teammate_to_idle,
-        bind_reported_teammate_pane_session,
-        trusted_teammate_pane_session_matches,
+        bind_running_teammate_pane_session,
+        direct_pane_identity_status,
+        fail_spent_direct_execution,
+        terminate_legacy_merchant_task,
     )
-    from merchant_confirmation_preferences import (
+    from merchant_staging import (
         MERCHANT_MANAGER_AGENT,
-        MERCHANT_PROPOSE_OPERATION,
-        capture_proposal_receipt,
-        proposal_requires_local_auto_receipt,
     )
     from tmux_result_receipt import (
         clear_pending_result,
         load_pending_result,
         stage_pending_result,
-    )
-    from tmux_merchant_proposal import (
-        clear_pending_merchant_proposal,
-        load_pending_merchant_proposal,
-        pending_merchant_proposal_matches,
-        stage_pending_merchant_proposal,
     )
     from tmux_merchant_completeness import (
         clear_pending_merchant_completeness,
@@ -199,8 +178,6 @@ if __package__ in (None, ""):
         record_runtime_handoff_result,
         stage_runtime_handoff_attempt,
         bounded_runtime_apply_result,
-        failed_runtime_handoff_matches,
-        successful_runtime_handoff_matches,
         bounded_runtime_apply_failure,
     )
 
@@ -248,14 +225,11 @@ else:
         MerchantRuntimeDependencies,
         _project_resolve_invocation as _runtime_project_resolve_invocation,
         bound_merchant_completeness_receipt as _runtime_bound_merchant_completeness_receipt,
-        capture_merchant_proposal_from_message as _runtime_capture_merchant_proposal_from_message,
-        handle_merchant_proposal_receipt as _runtime_handle_merchant_proposal_receipt,
         prepare_merchant_runtime_handoff as _runtime_prepare_merchant_runtime_handoff,
     )
     from .merchant_staging import (
         MerchantStagingDependencies,
         _stage_exact_tmux_merchant_completeness as _merchant_stage_completeness,
-        _stage_exact_tmux_merchant_proposal as _merchant_stage_proposal,
         _stage_exact_tmux_merchant_resolution as _merchant_stage_resolution,
         _trusted_tmux_merchant_stage_context as _merchant_stage_context,
     )
@@ -266,19 +240,11 @@ else:
         _stage_exact_tmux_step_resolution as _resolution_stage_step,
     )
     from .team_result_contract import (
-        MERCHANT_APPLY_FAILED_OUTCOME,
-        MERCHANT_APPLY_SUCCESS_OUTCOME,
-        MERCHANT_PROPOSAL_READY_OUTCOME,
         MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
         task_result_candidate_from_message,
     )
-    from .merchant_result_contract import (
-        merchant_proposal_candidate_from_message,
-        merchant_report_sender,
-    )
     from .merchant_tool_result_contract import (
         merchant_completeness_from_tool_response,
-        merchant_proposal_from_tool_response,
     )
     from .team_lifecycle import (
         find_unique_active_teammate_owner,
@@ -286,25 +252,18 @@ else:
         mark_bound_report_received,
         mark_report_received,
         release_reported_teammate_to_idle,
-        bind_reported_teammate_pane_session,
-        trusted_teammate_pane_session_matches,
+        bind_running_teammate_pane_session,
+        direct_pane_identity_status,
+        fail_spent_direct_execution,
+        terminate_legacy_merchant_task,
     )
-    from .merchant_confirmation_preferences import (
+    from .merchant_staging import (
         MERCHANT_MANAGER_AGENT,
-        MERCHANT_PROPOSE_OPERATION,
-        capture_proposal_receipt,
-        proposal_requires_local_auto_receipt,
     )
     from .tmux_result_receipt import (
         clear_pending_result,
         load_pending_result,
         stage_pending_result,
-    )
-    from .tmux_merchant_proposal import (
-        clear_pending_merchant_proposal,
-        load_pending_merchant_proposal,
-        pending_merchant_proposal_matches,
-        stage_pending_merchant_proposal,
     )
     from .tmux_merchant_completeness import (
         clear_pending_merchant_completeness,
@@ -346,8 +305,6 @@ else:
         record_runtime_handoff_result,
         stage_runtime_handoff_attempt,
         bounded_runtime_apply_result,
-        failed_runtime_handoff_matches,
-        successful_runtime_handoff_matches,
         bounded_runtime_apply_failure,
     )
 
@@ -359,8 +316,7 @@ HOOK_EVENT_NAMES = (
 MERCHANT_RESOLUTION_OPERATIONS = frozenset(
     {
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     }
 )
 
@@ -562,9 +518,6 @@ def _merchant_staging_dependencies(
         stage_pending_merchant_resolution=(
             stage_pending_merchant_resolution
         ),
-        stage_pending_merchant_proposal=(
-            stage_pending_merchant_proposal
-        ),
         stage_pending_merchant_completeness=(
             stage_pending_merchant_completeness
         ),
@@ -605,23 +558,6 @@ def _trusted_tmux_merchant_stage_context(
     return _merchant_stage_context(
         payload=payload,
         session_id=session_id,
-        dependencies=(
-            _merchant_staging_dependencies()
-        ),
-    )
-
-
-def _stage_exact_tmux_merchant_proposal(
-    payload: dict[str, Any],
-    session_id: Any,
-    proposal: dict[str, Any],
-) -> bool:
-    """Compatibility adapter for Merchant proposal staging."""
-
-    return _merchant_stage_proposal(
-        payload,
-        session_id,
-        proposal,
         dependencies=(
             _merchant_staging_dependencies()
         ),
@@ -670,17 +606,8 @@ def _merchant_runtime_dependencies(
         MERCHANT_MANAGER_AGENT=(
             MERCHANT_MANAGER_AGENT
         ),
-        MERCHANT_PROPOSE_OPERATION=(
-            MERCHANT_PROPOSE_OPERATION
-        ),
         _coalesced_text=(
             _coalesced_text
-        ),
-        capture_merchant_proposal_from_message=(
-            capture_merchant_proposal_from_message
-        ),
-        capture_proposal_receipt=(
-            capture_proposal_receipt
         ),
         contains_handoff_marker=(
             contains_handoff_marker
@@ -697,12 +624,6 @@ def _merchant_runtime_dependencies(
         locked_state=(
             locked_state
         ),
-        merchant_proposal_candidate_from_message=(
-            merchant_proposal_candidate_from_message
-        ),
-        merchant_report_sender=(
-            merchant_report_sender
-        ),
         pending_merchant_completeness_matches=(
             pending_merchant_completeness_matches
         ),
@@ -718,8 +639,8 @@ def _merchant_runtime_dependencies(
         trusted_post_tool_sender=(
             trusted_post_tool_sender
         ),
-        trusted_teammate_pane_session_matches=(
-            trusted_teammate_pane_session_matches
+        bind_running_teammate_pane_session=(
+            bind_running_teammate_pane_session
         ),
     )
 
@@ -777,46 +698,6 @@ def bound_merchant_completeness_receipt(
     )
 
 
-def capture_merchant_proposal_from_message(
-    state: dict[str, Any],
-    session_id: Any,
-    teammate_name: str,
-    message: str,
-) -> bool:
-    """Compatibility adapter for extracted Merchant runtime orchestration."""
-
-    return _runtime_capture_merchant_proposal_from_message(
-        state=state,
-        session_id=session_id,
-        teammate_name=teammate_name,
-        message=message,
-        dependencies=(
-            _merchant_runtime_dependencies()
-        ),
-    )
-
-
-def handle_merchant_proposal_receipt(
-    state: dict[str, Any],
-    payload: dict[str, Any],
-    session_id: Any = None,
-) -> bool:
-    """Compatibility adapter for extracted Merchant runtime orchestration."""
-
-    return _runtime_handle_merchant_proposal_receipt(
-        state=state,
-        payload=payload,
-        session_id=session_id,
-        dependencies=(
-            _merchant_runtime_dependencies()
-        ),
-    )
-
-
-
-
-
-
 from claude.hooks.merchant_tool_result_contract import (
     merchant_execute_from_tool_response,
 )
@@ -832,9 +713,6 @@ def _post_tool_dependencies(
         MERCHANT_MANAGER_AGENT=(
             MERCHANT_MANAGER_AGENT
         ),
-        MERCHANT_PROPOSE_OPERATION=(
-            MERCHANT_PROPOSE_OPERATION
-        ),
         _coalesced_text=(
             _coalesced_text
         ),
@@ -843,9 +721,6 @@ def _post_tool_dependencies(
         ),
         _stage_exact_tmux_merchant_completeness=(
             _stage_exact_tmux_merchant_completeness
-        ),
-        _stage_exact_tmux_merchant_proposal=(
-            _stage_exact_tmux_merchant_proposal
         ),
         _stage_exact_tmux_merchant_resolution=(
             _stage_exact_tmux_merchant_resolution
@@ -870,9 +745,6 @@ def _post_tool_dependencies(
         ),
         merchant_completeness_from_tool_response=(
             merchant_completeness_from_tool_response
-        ),
-        merchant_proposal_from_tool_response=(
-            merchant_proposal_from_tool_response
         ),
         merchant_execute_from_tool_response=(
             merchant_execute_from_tool_response
@@ -951,24 +823,32 @@ def _teammate_idle_dependencies(
 ) -> TeammateIdleDependencies:
     """Bind current hook symbols to TeammateIdle dependencies."""
 
+    from claude.hooks.merchant_direct_completion import (
+        direct_task_is_write_free,
+        establish_no_write_terminal,
+    )
+
     return TeammateIdleDependencies(
         reconcile_direct_writes=(
             _reconcile_direct_merchant_writes
         ),
-        MERCHANT_APPLY_FAILED_OUTCOME=(
-            MERCHANT_APPLY_FAILED_OUTCOME
+        terminate_legacy_merchant_task=(
+            terminate_legacy_merchant_task
         ),
-        MERCHANT_APPLY_SUCCESS_OUTCOME=(
-            MERCHANT_APPLY_SUCCESS_OUTCOME
+        fail_spent_direct_execution=(
+            fail_spent_direct_execution
+        ),
+        direct_pane_identity_status=(
+            direct_pane_identity_status
+        ),
+        direct_task_is_write_free=(
+            direct_task_is_write_free
+        ),
+        establish_no_write_terminal=(
+            establish_no_write_terminal
         ),
         MERCHANT_MANAGER_AGENT=(
             MERCHANT_MANAGER_AGENT
-        ),
-        MERCHANT_PROPOSAL_READY_OUTCOME=(
-            MERCHANT_PROPOSAL_READY_OUTCOME
-        ),
-        MERCHANT_PROPOSE_OPERATION=(
-            MERCHANT_PROPOSE_OPERATION
         ),
         MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES=(
             MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES
@@ -985,35 +865,20 @@ def _teammate_idle_dependencies(
         active_task_id=(
             active_task_id
         ),
-        bind_reported_teammate_pane_session=(
-            bind_reported_teammate_pane_session
-        ),
         bound_merchant_completeness_receipt=(
             bound_merchant_completeness_receipt
         ),
         bounded_terminal_result_failure=(
             bounded_terminal_result_failure
         ),
-        capture_proposal_receipt=(
-            capture_proposal_receipt
-        ),
         clear_pending_merchant_completeness=(
             clear_pending_merchant_completeness
-        ),
-        clear_pending_merchant_proposal=(
-            clear_pending_merchant_proposal
         ),
         clear_pending_result=(
             clear_pending_result
         ),
-        failed_runtime_handoff_matches=(
-            failed_runtime_handoff_matches
-        ),
         find_unique_active_teammate_owner=(
             find_unique_active_teammate_owner
-        ),
-        load_pending_merchant_proposal=(
-            load_pending_merchant_proposal
         ),
         load_pending_result=(
             load_pending_result
@@ -1033,26 +898,17 @@ def _teammate_idle_dependencies(
         mark_report_received=(
             mark_report_received
         ),
-        pending_merchant_proposal_matches=(
-            pending_merchant_proposal_matches
-        ),
         record_teammate_result=(
             record_teammate_result
         ),
         release_reported_teammate_to_idle=(
             release_reported_teammate_to_idle
         ),
-        successful_runtime_handoff_matches=(
-            successful_runtime_handoff_matches
-        ),
         task_result_candidate_from_message=(
             task_result_candidate_from_message
         ),
         validate_completeness_receipt_for_outcome=(
             validate_completeness_receipt_for_outcome
-        ),
-        proposal_requires_local_auto_receipt=(
-            proposal_requires_local_auto_receipt
         ),
     )
 
@@ -1081,6 +937,10 @@ def _dispatcher_dependencies(
 ) -> DispatcherDependencies:
     """Bind current hook symbols to dispatcher dependencies."""
 
+    from claude.hooks.merchant_direct_handoff import (
+        invoke_direct_merchant_execute,
+    )
+
     return DispatcherDependencies(
         HOOK_EVENT_NAMES=(
             HOOK_EVENT_NAMES
@@ -1097,9 +957,6 @@ def _dispatcher_dependencies(
         emit_post_tool_context=(
             emit_post_tool_context
         ),
-        handle_merchant_proposal_receipt=(
-            handle_merchant_proposal_receipt
-        ),
         handle_post_tool_use=(
             handle_post_tool_use
         ),
@@ -1107,8 +964,8 @@ def _dispatcher_dependencies(
             handle_teammate_idle
         ),
 
-        invoke_trusted_merchant_session_apply=(
-            invoke_trusted_merchant_session_apply
+        invoke_direct_merchant_execute=(
+            invoke_direct_merchant_execute
         ),
 
         io=(

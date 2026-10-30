@@ -81,21 +81,19 @@ def _assert_exclusive_merchant_routing(result):
     assert "merchant" in result.domains
 
 
-def test_schema_exposes_three_merchant_operations_and_domain():
+def test_schema_exposes_read_and_execute_merchant_operations_only():
     assert Operation.MERCHANT_READ.value == "merchant_read"
-    assert Operation.MERCHANT_PROPOSE.value == "merchant_propose"
-    assert Operation.MERCHANT_APPLY.value == "merchant_apply"
+    assert Operation.MERCHANT_EXECUTE.value == "merchant_execute"
+    assert not hasattr(Operation, "MERCHANT_PROPOSE")
+    assert not hasattr(Operation, "MERCHANT_APPLY")
     assert Domain.MERCHANT.value == "merchant"
 
 
 def test_prompt_defines_merchant_modes_and_code_boundary():
-    assert "merchant_read, merchant_propose, merchant_apply" in (
-        INTENT_SYSTEM_PROMPT
-    )
-    assert "merchant_propose" in INTENT_SYSTEM_PROMPT
-    assert "does not apply a change and is read_only" in (
-        INTENT_SYSTEM_PROMPT
-    )
+    assert "merchant_read, merchant_execute" in INTENT_SYSTEM_PROMPT
+    assert "merchant_propose" not in INTENT_SYSTEM_PROMPT
+    assert "merchant_apply" not in INTENT_SYSTEM_PROMPT
+    assert "There is no proposal or apply step" in INTENT_SYSTEM_PROMPT
     assert "Merchant source code" in INTENT_SYSTEM_PROMPT
 
 
@@ -114,7 +112,7 @@ def test_model_merchant_read_routes_only_to_merchant_manager():
     _assert_exclusive_merchant_routing(result)
 
 
-def test_merchant_proposal_is_normalized_to_non_mutating_risk():
+def test_merchant_proposal_request_is_read_only_preview():
     result = _parse(
         "Prepare a Merchant project update proposal with --propose",
         _decision(
@@ -124,22 +122,22 @@ def test_merchant_proposal_is_normalized_to_non_mutating_risk():
         ),
     )
 
-    assert result.operations == ["merchant_propose"]
+    assert result.operations == ["merchant_read"]
     assert result.risk_level == RiskLevel.READ_ONLY
     assert result.requires_confirmation is False
     _assert_exclusive_merchant_routing(result)
 
 
-def test_merchant_apply_is_external_write_and_requires_confirmation():
+def test_merchant_execute_is_external_write_and_requires_confirmation():
     result = _parse(
         "Apply the prior Merchant proposal with --apply",
         _decision(
-            operations=[Operation.MERCHANT_APPLY],
+            operations=[Operation.MERCHANT_EXECUTE],
             domains=[Domain.MERCHANT],
         ),
     )
 
-    assert result.operations == ["merchant_apply"]
+    assert result.operations == ["merchant_execute"]
     assert result.risk_level == RiskLevel.EXTERNAL_WRITE
     assert result.requires_confirmation is True
     _assert_exclusive_merchant_routing(result)
@@ -152,15 +150,14 @@ def test_highest_merchant_mode_wins_and_remains_exclusive():
             operations=[
                 Operation.BUILD,
                 Operation.MERCHANT_READ,
-                Operation.MERCHANT_PROPOSE,
-                Operation.MERCHANT_APPLY,
+                Operation.MERCHANT_EXECUTE,
             ],
             domains=[Domain.CODE, Domain.MERCHANT],
             task_class=TaskClass.COMPLEX,
         ),
     )
 
-    assert result.operations == ["merchant_apply"]
+    assert result.operations == ["merchant_execute"]
     assert result.candidate_agents == ["merchant-manager"]
     assert result.selected_agents == ["merchant-manager"]
 
@@ -191,7 +188,7 @@ def test_local_guardrail_corrects_misclassified_vietnamese_read():
     _assert_exclusive_merchant_routing(result)
 
 
-def test_unconfirmed_merchant_write_defaults_to_proposal():
+def test_merchant_write_is_direct_execute_requiring_confirmation():
     result = _parse(
         "Update the Merchant project payment period",
         _decision(
@@ -201,13 +198,13 @@ def test_unconfirmed_merchant_write_defaults_to_proposal():
         ),
     )
 
-    assert result.operations == ["merchant_propose"]
-    assert result.risk_level == RiskLevel.READ_ONLY
-    assert result.requires_confirmation is False
+    assert result.operations == ["merchant_execute"]
+    assert result.risk_level == RiskLevel.EXTERNAL_WRITE
+    assert result.requires_confirmation is True
     _assert_exclusive_merchant_routing(result)
 
 
-def test_vietnamese_merchant_write_defaults_to_proposal():
+def test_vietnamese_merchant_proposal_request_is_read_only_preview():
     result = _parse(
         "Đề xuất cập nhật trạng thái dự án của đối tác",
         _decision(
@@ -217,7 +214,7 @@ def test_vietnamese_merchant_write_defaults_to_proposal():
         ),
     )
 
-    assert result.operations == ["merchant_propose"]
+    assert result.operations == ["merchant_read"]
     assert result.risk_level == RiskLevel.READ_ONLY
     _assert_exclusive_merchant_routing(result)
 
@@ -226,12 +223,12 @@ def test_vietnamese_apply_is_detected_conservatively():
     result = _parse(
         "Xác nhận và áp dụng đề xuất của đối tác trước đó",
         _decision(
-            operations=[Operation.MERCHANT_PROPOSE],
+            operations=[Operation.MERCHANT_READ],
             domains=[Domain.MERCHANT],
         ),
     )
 
-    assert result.operations == ["merchant_apply"]
+    assert result.operations == ["merchant_execute"]
     assert result.risk_level == RiskLevel.EXTERNAL_WRITE
     assert result.requires_confirmation is True
     _assert_exclusive_merchant_routing(result)
@@ -255,7 +252,7 @@ def test_destructive_merchant_request_is_never_downgraded():
     result = _parse(
         "Apply the Merchant proposal and drop table production",
         _decision(
-            operations=[Operation.MERCHANT_APPLY],
+            operations=[Operation.MERCHANT_EXECUTE],
             domains=[Domain.MERCHANT],
         ),
     )
@@ -379,7 +376,7 @@ def test_explicit_merchant_operation_still_overrides_code_operation():
         _decision(
             operations=[
                 Operation.FIX,
-                Operation.MERCHANT_APPLY,
+                Operation.MERCHANT_EXECUTE,
             ],
             domains=[
                 Domain.CODE,
@@ -389,7 +386,7 @@ def test_explicit_merchant_operation_still_overrides_code_operation():
         ),
     )
 
-    assert result.operations == ["merchant_apply"]
+    assert result.operations == ["merchant_execute"]
     assert result.candidate_agents == ["merchant-manager"]
     assert result.selected_agents == ["merchant-manager"]
     assert result.risk_level == RiskLevel.EXTERNAL_WRITE
@@ -409,7 +406,7 @@ def test_merchant_apply_history_in_source_code_diagnosis_routes_to_diagnostician
     result = _parse(
         request,
         _decision(
-            operations=[Operation.MERCHANT_APPLY],
+            operations=[Operation.MERCHANT_EXECUTE],
             domains=[Domain.MERCHANT],
             risk_level=RiskLevel.EXTERNAL_WRITE,
         ),
@@ -443,17 +440,17 @@ def test_historical_apply_words_do_not_override_read_only_diagnostic_boundary():
     )
 
 
-def test_real_merchant_apply_still_routes_to_merchant_manager():
+def test_real_merchant_execute_still_routes_to_merchant_manager():
     result = _parse(
         "Apply the prior Merchant proposal with --apply",
         _decision(
-            operations=[Operation.MERCHANT_APPLY],
+            operations=[Operation.MERCHANT_EXECUTE],
             domains=[Domain.MERCHANT],
             risk_level=RiskLevel.EXTERNAL_WRITE,
         ),
     )
 
-    assert result.operations == ["merchant_apply"]
+    assert result.operations == ["merchant_execute"]
     assert result.selected_agents == ["merchant-manager"]
 
 
@@ -492,16 +489,17 @@ def test_read_only_negative_apply_request_skips_apply_confirmation():
     assert result.requires_confirmation is False
 
 
-def test_create_request_routes_to_proposal_without_apply():
+def test_create_request_routes_to_direct_execute():
     result = _parse(
         "Create a Merchant project for merchant CGV.",
         _decision(
-            operations=[Operation.MERCHANT_PROPOSE],
+            operations=[Operation.MERCHANT_READ],
             domains=[Domain.MERCHANT],
             risk_level=RiskLevel.READ_ONLY,
         ),
     )
 
-    assert result.operations == ["merchant_propose"]
+    assert result.operations == ["merchant_execute"]
     assert result.selected_agents == ["merchant-manager"]
-    assert "merchant_apply" not in result.operations
+    assert result.risk_level == RiskLevel.EXTERNAL_WRITE
+    assert result.requires_confirmation is True

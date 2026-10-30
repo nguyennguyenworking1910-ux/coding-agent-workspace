@@ -1,11 +1,14 @@
 """Exact identity snapshots for verified Merchant direct writes.
 
+Also validates the no-write terminal marker for clean direct tasks.
+
 Pure validation utilities. This module does not authenticate callers,
 verify PostgreSQL evidence, or grant lifecycle authority.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 
@@ -172,3 +175,195 @@ def receipt_matches_state(
     current = build_completion_receipt(record)
 
     return current is not None and current == receipt
+
+
+# Non-success outcomes that may finalize a task without a write.
+NO_WRITE_TERMINAL_OUTCOMES = frozenset(
+    {
+        "REQUIRES_CLARIFICATION",
+        "BLOCKED",
+        "FAILED",
+    }
+)
+
+NO_WRITE_TERMINAL_FIELDS = frozenset(
+    {"version", "run_id", "task_id", "outcome"}
+)
+
+
+def has_direct_write_footprint(record: dict[str, Any]) -> bool:
+    """True unless trusted state proves no write exists for this task.
+
+    Reservations are the only path to a PostgreSQL claim, and they are
+    persisted before execution. Any reservation, receipt, or archived
+    history for the current run/task is therefore a write footprint.
+    Malformed state is treated as a footprint (fail closed).
+    """
+    if not isinstance(record, dict):
+        return True
+
+    if "direct_writes" in record and record["direct_writes"] != {}:
+        return True
+
+    if record.get("direct_completion_receipt") is not None:
+        return True
+
+    # A scoped execution record exists from before authorization is spent.
+    if "direct_scope_execution" in record:
+        return True
+
+    current = (
+        record.get("current_run_id"),
+        record.get("current_task_id"),
+    )
+
+    history = record.get("completed_direct_write_history", [])
+
+    if not isinstance(history, list):
+        return True
+
+    for item in history:
+        if not valid_historical_receipt(item):
+            return True
+
+        if (item["run_id"], item["task_id"]) == current:
+            return True
+
+    scope_history = record.get("completed_scope_execution_history", [])
+
+    if not isinstance(scope_history, list):
+        return True
+
+    for item in scope_history:
+        if (
+            not valid_scope_execution(item)
+            or item["status"] != SCOPE_EXECUTION_SUCCEEDED
+        ):
+            return True
+
+        if (item["run_id"], item["task_id"]) == current:
+            return True
+
+    return False
+
+
+# Scoped Direct EXECUTE of a non-Create command. Persisted EXECUTING in
+# trusted team state before the one-use runtime authorization is spent.
+SCOPE_EXECUTION_EXECUTING = "EXECUTING"
+SCOPE_EXECUTION_SUCCEEDED = "SUCCEEDED"
+SCOPE_EXECUTION_FAILED = "FAILED"
+SCOPE_EXECUTION_UNCERTAIN = "UNCERTAIN"
+
+SCOPE_EXECUTION_STATUSES = frozenset(
+    {
+        SCOPE_EXECUTION_EXECUTING,
+        SCOPE_EXECUTION_SUCCEEDED,
+        SCOPE_EXECUTION_FAILED,
+        SCOPE_EXECUTION_UNCERTAIN,
+    }
+)
+
+SCOPE_EXECUTION_FIELDS = frozenset(
+    {
+        "version",
+        "run_id",
+        "task_id",
+        "command",
+        "scope_hash",
+        "confirmation_hash",
+        "execution_attempt_id",
+        "status",
+    }
+)
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def valid_scope_execution(value: Any) -> bool:
+    """Validate a scoped execution record without granting authority."""
+    if not isinstance(value, dict) or set(value) != SCOPE_EXECUTION_FIELDS:
+        return False
+
+    try:
+        attempt = str(uuid.UUID(str(value["execution_attempt_id"])))
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+    return (
+        type(value["version"]) is int
+        and value["version"] == 1
+        and all(
+            isinstance(value[field], str) and value[field]
+            for field in ("run_id", "task_id", "command")
+        )
+        and value["command"] != "merchant create"
+        and _is_sha256(value["scope_hash"])
+        and _is_sha256(value["confirmation_hash"])
+        and attempt == value["execution_attempt_id"]
+        and value["status"] in SCOPE_EXECUTION_STATUSES
+    )
+
+
+def scope_execution_succeeded(record: dict[str, Any]) -> bool:
+    """Require an exact SUCCEEDED scoped execution for the current task."""
+    if not isinstance(record, dict):
+        return False
+
+    execution = record.get("direct_scope_execution")
+
+    if (
+        not valid_scope_execution(execution)
+        or execution["status"] != SCOPE_EXECUTION_SUCCEEDED
+        or execution["run_id"] != record.get("current_run_id")
+        or execution["task_id"] != record.get("current_task_id")
+        or record.get("authorized_operations") != ["merchant_execute"]
+    ):
+        return False
+
+    # A scoped execution never coexists with Create or no-write evidence.
+    return (
+        record.get("direct_writes", {}) == {}
+        and record.get("direct_completion_receipt") is None
+        and "direct_no_write_terminal" not in record
+    )
+
+
+def no_write_terminal_matches_state(record: dict[str, Any]) -> bool:
+    """Require an exact no-write marker for the current clean task."""
+    if not isinstance(record, dict):
+        return False
+
+    marker = record.get("direct_no_write_terminal")
+
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != NO_WRITE_TERMINAL_FIELDS
+        or type(marker["version"]) is not int
+        or marker["version"] != 1
+        or marker["outcome"] not in NO_WRITE_TERMINAL_OUTCOMES
+    ):
+        return False
+
+    run_id = record.get("current_run_id")
+    task_id = record.get("current_task_id")
+
+    if (
+        not isinstance(run_id, str)
+        or not run_id
+        or not isinstance(task_id, str)
+        or not task_id
+        or marker["run_id"] != run_id
+        or marker["task_id"] != task_id
+    ):
+        return False
+
+    if record.get("authorized_operations") != ["merchant_execute"]:
+        return False
+
+    return not has_direct_write_footprint(record)

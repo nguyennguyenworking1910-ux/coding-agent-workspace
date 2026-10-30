@@ -453,17 +453,7 @@ def test_session_end_clears_intent_envelope(
         lambda _session_id: None,
     )
 
-    monkeypatch.setattr(
-        cleanup_state,
-        "clear_preferences",
-        lambda _session_id: True,
-    )
 
-    monkeypatch.setattr(
-        cleanup_state,
-        "load_preferences",
-        lambda _session_id: None,
-    )
 
     monkeypatch.setattr(
         sys,

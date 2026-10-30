@@ -13,9 +13,8 @@ except ImportError:
     )
 
 
-MERCHANT_PROPOSE_OPERATION = "merchant_propose"
+MERCHANT_EXECUTE_OPERATION = "merchant_execute"
 
-PROPOSAL_READY = "PROPOSAL_READY"
 REQUIRES_CLARIFICATION = "REQUIRES_CLARIFICATION"
 BLOCKED = "BLOCKED"
 FAILED = "FAILED"
@@ -34,7 +33,11 @@ def validate_completeness_receipt_for_outcome(
     outcome: dict[str, Any],
     receipt: dict[str, Any] | None,
 ) -> CompletenessGateDecision:
-    """Bind one structured Merchant outcome to exact completeness evidence."""
+    """Bind one no-write Merchant outcome to exact completeness evidence.
+
+    Completeness evidence never authorizes a write. Execution outcomes
+    are verified from committed PostgreSQL evidence instead.
+    """
 
     if not isinstance(outcome, dict):
         return _reject(
@@ -46,10 +49,10 @@ def validate_completeness_receipt_for_outcome(
             outcome.get("operation")
             or ""
         ).strip()
-        != MERCHANT_PROPOSE_OPERATION
+        != MERCHANT_EXECUTE_OPERATION
     ):
         return _reject(
-            "Completeness gate applies only to merchant_propose"
+            "Completeness gate applies only to merchant_execute"
         )
 
     outcome_name = str(
@@ -183,44 +186,8 @@ def validate_completeness_receipt_for_outcome(
             ),
         )
 
-    if outcome_name == PROPOSAL_READY:
-        result = _receipt_result(
-            receipt
-        )
-
-        if result is None:
-            return _reject(
-                "PROPOSAL_READY requires an exact completeness receipt",
-                requires_receipt=True,
-            )
-
-        if result.get("complete") is not True:
-            return _reject(
-                "PROPOSAL_READY requires complete=true",
-                requires_receipt=True,
-            )
-
-        if (
-            result.get("missing_fields") != []
-            or result.get("missing_one_of") != []
-            or result.get("clarification") is not None
-        ):
-            return _reject(
-                "Complete receipt contains inconsistent "
-                "missing-field evidence",
-                requires_receipt=True,
-            )
-
-        return CompletenessGateDecision(
-            accepted=True,
-            requires_receipt=True,
-            reason=(
-                "Proposal outcome has exact complete=true evidence"
-            ),
-        )
-
     return _reject(
-        f"Unsupported merchant_propose outcome: {outcome_name}"
+        f"Unsupported no-write Merchant outcome: {outcome_name}"
     )
 
 

@@ -16,6 +16,21 @@ class DirectWriteReservationError(PermissionError):
     """Write reservation does not match active lifecycle authority."""
 
 
+def create_payload_hash(payload: Mapping[str, Any]) -> str:
+    """Hash a Create payload with the exact canonical atomic_create contract."""
+
+    return _canonical_hash(
+        {
+            "command": "merchant create",
+            "merchant_id": payload.get("merchant_id"),
+            "code": payload["code"],
+            "name": payload["name"],
+            "region_code": payload.get("region_code"),
+            "created_by": payload.get("created_by"),
+        }
+    )
+
+
 def reserve_merchant_create(
     *,
     owner_session_id: str,
@@ -82,17 +97,7 @@ def reserve_merchant_create(
             "Invalid optional Merchant field"
         )
 
-    # Use the exact canonical payload contract of atomic_create.
-    canonical_payload = {
-        "command": "merchant create",
-        "merchant_id": payload.get("merchant_id"),
-        "code": payload["code"],
-        "name": payload["name"],
-        "region_code": payload.get("region_code"),
-        "created_by": payload.get("created_by"),
-    }
-
-    payload_hash = _canonical_hash(canonical_payload)
+    payload_hash = create_payload_hash(payload)
 
     # Initial authentication. A second check occurs below
     # while the team-state lock is held.
@@ -152,6 +157,12 @@ def reserve_merchant_create(
         ]:
             raise DirectWriteReservationError(
                 "Teammate authority mismatch"
+            )
+
+        # A no-write terminal outcome already ended this task.
+        if "direct_no_write_terminal" in record:
+            raise DirectWriteReservationError(
+                "Task already finalized without a write"
             )
 
         if not isinstance(write_id, str) or not write_id.strip():

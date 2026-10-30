@@ -5,6 +5,10 @@ import pytest
 
 from claude.clients.merchant.atomic_create import _canonical_hash
 from claude.hooks import merchant_reserved_execution as module
+from claude.hooks import runtime_state
+from tests.merchant.direct_reservation_support import (
+    record_create_authority,
+)
 
 
 PAYLOAD = {
@@ -27,7 +31,16 @@ KEY = "merchant-direct:v1:" + "a" * 64
 
 def test_reassignment_between_validation_and_write(
     monkeypatch,
+    tmp_path,
 ):
+    # Trusted orchestration spent the user's scope for this reservation.
+    monkeypatch.setenv(
+        runtime_state.STATE_DIR_ENV_VAR, str(tmp_path / "run_state")
+    )
+    record_create_authority(
+        "owner-1", run_id="run-1", task_id="task-1", write_id="write-1"
+    )
+
     payload_hash = _canonical_hash({
         "command": "merchant create",
         "merchant_id": None,

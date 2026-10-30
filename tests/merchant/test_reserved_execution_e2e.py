@@ -15,6 +15,10 @@ from claude.hooks.merchant_direct_recovery import (
     reconcile_committed_merchant_create,
 )
 from claude.clients.merchant.repository import MerchantRepository
+from claude.hooks import runtime_state
+from tests.merchant.direct_reservation_support import (
+    record_create_authority,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -48,6 +52,17 @@ def environment(tmp_path, monkeypatch):
         "write_id": write_id,
         "database": "test",
     }
+
+    # Trusted orchestration spent the user's scope for this reservation.
+    monkeypatch.setenv(
+        runtime_state.STATE_DIR_ENV_VAR, str(tmp_path / "run_state")
+    )
+    record_create_authority(
+        owner,
+        run_id=run_id,
+        task_id=task_id,
+        write_id=write_id,
+    )
 
     with team_lifecycle.locked_team_state(owner) as state:
         state.setdefault("teammates", {})[
@@ -403,9 +418,6 @@ def test_committed_write_releases_through_idle_hook(
             record_teammate_result=lambda *a, **k: None,
             clear_pending_result=lambda *a, **k: None,
             clear_pending_merchant_completeness=(
-                lambda *a, **k: None
-            ),
-            clear_pending_merchant_proposal=(
                 lambda *a, **k: None
             ),
             _clear_merchant_resolution_after_release=(

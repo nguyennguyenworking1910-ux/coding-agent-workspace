@@ -88,7 +88,6 @@ def build_environment(
         record_teammate_result=record_result,
         clear_pending_result=clear,
         clear_pending_merchant_completeness=clear,
-        clear_pending_merchant_proposal=clear,
         _clear_merchant_resolution_after_release=clear,
     )
 

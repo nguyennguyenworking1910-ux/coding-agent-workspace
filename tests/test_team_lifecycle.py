@@ -904,7 +904,7 @@ def _setup_terminal_failed_teammate(
             run_id,
             task_id,
             operations=[
-                "merchant_apply",
+                "merchant_read",
             ],
             selected_agents=[
                 teammate_name,
@@ -1224,7 +1224,7 @@ def test_failed_recovery_rejects_when_authority_is_still_bound(
         record[
             "authorized_operations"
         ] = [
-            "merchant_apply",
+            "merchant_read",
         ]
 
         record[

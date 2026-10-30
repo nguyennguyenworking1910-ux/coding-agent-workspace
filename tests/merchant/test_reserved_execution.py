@@ -6,6 +6,10 @@ import pytest
 
 from claude.clients.merchant.atomic_create import _canonical_hash
 from claude.hooks import merchant_reserved_execution as module
+from claude.hooks import runtime_state
+from tests.merchant.direct_reservation_support import (
+    record_create_authority,
+)
 
 
 PAYLOAD = {
@@ -38,7 +42,18 @@ def canonical_hash(payload):
 
 
 @pytest.fixture
-def env(monkeypatch):
+def env(monkeypatch, tmp_path):
+    # Trusted orchestration spent the user's scope for this reservation.
+    monkeypatch.setenv(
+        runtime_state.STATE_DIR_ENV_VAR, str(tmp_path / "run_state")
+    )
+    record_create_authority(
+        "owner-1",
+        run_id="run-1",
+        task_id="task-1",
+        write_id="write-1",
+    )
+
     state = {
         "teammates": {
             "merchant-manager": {
@@ -230,3 +245,33 @@ def test_execution_attempt_identity_is_persisted_and_forwarded(env):
     assert str(parsed_attempt) == persisted_attempt
 
     assert calls[0]["execution_attempt_id"] == parsed_attempt
+
+def test_reservation_without_spent_user_authority_never_executes(env):
+    """A reservation alone is never write authority (CP12H.4A)."""
+
+    state, repo, calls = env
+
+    saved = runtime_state.load_state("owner-1")
+    saved.pop("merchant_runtime_authorization")
+    runtime_state.save_state("owner-1", saved)
+
+    with pytest.raises(module.ReservedExecutionError, match="authority"):
+        run(repo)
+
+    assert calls == []
+    assert state["teammates"]["merchant-manager"]["direct_writes"][
+        "write-1"
+    ]["status"] == "RESERVED"
+
+
+def test_authority_spent_for_another_write_never_executes(env, tmp_path):
+    state, repo, calls = env
+
+    record_create_authority(
+        "owner-1", run_id="run-1", task_id="task-1", write_id="write-other"
+    )
+
+    with pytest.raises(module.ReservedExecutionError, match="authority"):
+        run(repo)
+
+    assert calls == []

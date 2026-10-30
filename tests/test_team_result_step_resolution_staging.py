@@ -409,8 +409,7 @@ def test_exact_step_resolution_stages(
     "operation",
     [
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     ],
 )
 def test_all_merchant_operations_stage(
@@ -740,7 +739,7 @@ def test_mixed_operations_block(
             _payload(),
             operations=(
                 "merchant_read",
-                "merchant_propose",
+                "merchant_execute",
             ),
         )
         is False
@@ -977,11 +976,6 @@ def test_handle_post_tool_use_wires_step_staging(
         lambda payload: None,
     )
 
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: None,
-    )
 
     monkeypatch.setattr(
         team_result_hook,
@@ -1055,11 +1049,6 @@ def test_handle_post_tool_use_does_not_wire_entity_staging_for_non_bash(
         lambda payload: None,
     )
 
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: None,
-    )
 
     def fake_context(
         **kwargs,

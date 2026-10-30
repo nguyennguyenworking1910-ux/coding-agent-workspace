@@ -514,12 +514,12 @@ class IntentParserTest(unittest.TestCase):
             msg="Local WRITE does not require confirmation",
         )
 
-    def test_explicit_proposal_only_overrides_model_apply(self):
+    def test_explicit_proposal_only_overrides_model_execute(self):
         decision = make_decision(
             task_class=TaskClass.SMALL,
             risk_level=RiskLevel.EXTERNAL_WRITE,
             operations=[
-                Operation.MERCHANT_APPLY,
+                Operation.MERCHANT_EXECUTE,
             ],
             domains=[
                 Domain.MERCHANT,
@@ -537,9 +537,10 @@ class IntentParserTest(unittest.TestCase):
             decision
         ).parse(request)
 
+        # Proposals no longer exist: a preview carries no write authority.
         self.assertEqual(
             result.operations,
-            ["merchant_propose"],
+            ["merchant_read"],
         )
 
         self.assertEqual(
@@ -557,12 +558,12 @@ class IntentParserTest(unittest.TestCase):
         )
 
 
-    def test_explicit_apply_still_remains_apply(self):
+    def test_explicit_apply_wording_becomes_merchant_execute(self):
         decision = make_decision(
             task_class=TaskClass.SMALL,
             risk_level=RiskLevel.READ_ONLY,
             operations=[
-                Operation.MERCHANT_PROPOSE,
+                Operation.MERCHANT_READ,
             ],
             domains=[
                 Domain.MERCHANT,
@@ -578,7 +579,7 @@ class IntentParserTest(unittest.TestCase):
 
         self.assertEqual(
             result.operations,
-            ["merchant_apply"],
+            ["merchant_execute"],
         )
 
         self.assertEqual(
@@ -598,7 +599,7 @@ class IntentParserTest(unittest.TestCase):
             task_class=TaskClass.SMALL,
             risk_level=RiskLevel.EXTERNAL_WRITE,
             operations=[
-                Operation.MERCHANT_APPLY,
+                Operation.MERCHANT_EXECUTE,
             ],
             domains=[
                 Domain.MERCHANT,
@@ -614,7 +615,7 @@ class IntentParserTest(unittest.TestCase):
 
         self.assertEqual(
             result.operations,
-            ["merchant_propose"],
+            ["merchant_read"],
         )
 
         self.assertEqual(
@@ -626,7 +627,7 @@ class IntentParserTest(unittest.TestCase):
             result.requires_confirmation
         )
 
-    def test_negated_write_words_do_not_upgrade_merchant_read_to_propose(
+    def test_negated_write_words_do_not_upgrade_merchant_read_to_execute(
         self,
     ):
         """Forbidden write verbs must not become positive write intent."""
@@ -635,7 +636,7 @@ class IntentParserTest(unittest.TestCase):
             task_class=TaskClass.SMALL,
             risk_level=RiskLevel.READ_ONLY,
             operations=[
-                Operation.MERCHANT_PROPOSE,
+                Operation.MERCHANT_EXECUTE,
             ],
             domains=[
                 Domain.MERCHANT,
@@ -674,10 +675,10 @@ class IntentParserTest(unittest.TestCase):
             result.requires_confirmation
         )
 
-    def test_positive_update_with_negated_apply_remains_merchant_propose(
+    def test_positive_update_with_forbidden_persistence_is_read_only(
         self,
     ):
-        """A real write request remains a proposal when apply is forbidden."""
+        """A write request that forbids persisting it carries no authority."""
 
         decision = make_decision(
             task_class=TaskClass.SMALL,
@@ -700,7 +701,7 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(
             result.operations,
             [
-                "merchant_propose",
+                "merchant_read",
             ],
         )
 
@@ -756,12 +757,10 @@ def test_development_operations_override_merchant_routing():
     }
 
     cases = [
-        (["build", "merchant_propose"], ["coder"]),
         (["fix", "merchant_read"], ["bug-fixer"]),
-        (["test", "merchant_propose"], ["reviewer"]),
-        (["merchant_propose"], ["merchant-manager"]),
+        (["test", "merchant_read"], ["reviewer"]),
         (["merchant_read"], ["merchant-manager"]),
-        (["merchant_apply"], ["merchant-manager"]),
+        (["merchant_execute"], ["merchant-manager"]),
     ]
 
     for operations, expected in cases:
@@ -777,9 +776,9 @@ def test_development_operations_override_merchant_routing():
 
     with pytest.raises(
         IntentParserConfigError,
-        match="Mixed Merchant apply and development intents",
+        match="Mixed Merchant execution and development intents",
     ):
         parser._candidate_agents(
-            ["build", "merchant_apply"],
+            ["build", "merchant_execute"],
             ["merchant"],
         )

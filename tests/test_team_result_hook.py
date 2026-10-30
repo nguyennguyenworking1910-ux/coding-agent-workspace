@@ -327,29 +327,6 @@ class TeamResultHookTests(unittest.TestCase):
         with locked_state(self.session_id) as state:
             self.assertEqual(state.get("result_ledger", {}), {})
 
-    def test_merchant_sender_requires_harness_identity(self):
-        """Merchant proposal capture trusts agent_id plus agent_type only."""
-        self.assertEqual(
-            team_result_hook.merchant_report_sender(
-                {
-                    "agent_id": "agent-merchant-1",
-                    "agent_type": "merchant-manager",
-                    "tool_input": {"from_teammate": "reviewer"},
-                }
-            ),
-            "merchant-manager",
-        )
-        self.assertEqual(
-            team_result_hook.merchant_report_sender(
-                {
-                    "tool_input": {
-                        "from_teammate": "merchant-manager",
-                    }
-                }
-            ),
-            "",
-        )
-
     def test_recovery_sent_prevents_duplicates(self):
         """recovery_sent flag prevents multiple recovery requests."""
         with locked_state(self.session_id) as state:

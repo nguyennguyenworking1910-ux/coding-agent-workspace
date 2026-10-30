@@ -1,7 +1,7 @@
 """Merchant runtime orchestration extracted from team_result_hook.
 
-The functions in this module preserve the existing fail-closed runtime
-handoff, proposal capture, completeness binding, and parsing behavior.
+The functions in this module preserve the existing fail-closed Direct
+EXECUTE handoff staging, completeness binding, and parsing behavior.
 
 External hook dependencies are supplied explicitly so historical monkeypatch
 and dependency-injection seams remain available through thin adapters.
@@ -17,14 +17,10 @@ try:
     from team_result_dependency_protocols import (
         CoalescedTextFn,
         HandoffCandidateFromMessageFn,
-        MerchantReportSenderFn,
-        MessageCandidateFn,
         SendMessageBodyFn,
-        CaptureMerchantProposalFromMessageFn,
         LoadPendingMerchantCompletenessFn,
         ContainsHandoffMarkerFn,
         PendingMerchantCompletenessMatchesFn,
-        CaptureProposalReceiptFn,
         StageRuntimeHandoffAttemptFn,
         FindUniqueActiveTeammateOwnerFn,
         LockedStateFn,
@@ -35,14 +31,10 @@ except ImportError:
     from .team_result_dependency_protocols import (
         CoalescedTextFn,
         HandoffCandidateFromMessageFn,
-        MerchantReportSenderFn,
-        MessageCandidateFn,
         SendMessageBodyFn,
-        CaptureMerchantProposalFromMessageFn,
         LoadPendingMerchantCompletenessFn,
         ContainsHandoffMarkerFn,
         PendingMerchantCompletenessMatchesFn,
-        CaptureProposalReceiptFn,
         StageRuntimeHandoffAttemptFn,
         FindUniqueActiveTeammateOwnerFn,
         LockedStateFn,
@@ -58,23 +50,18 @@ class MerchantRuntimeDependencies:
     """Explicit dependencies required by Merchant runtime orchestration."""
 
     MERCHANT_MANAGER_AGENT: str
-    MERCHANT_PROPOSE_OPERATION: str
     _coalesced_text: CoalescedTextFn
-    capture_merchant_proposal_from_message: CaptureMerchantProposalFromMessageFn
-    capture_proposal_receipt: CaptureProposalReceiptFn
+    bind_running_teammate_pane_session: TrustedTeammatePaneSessionMatchesFn
     contains_handoff_marker: ContainsHandoffMarkerFn
     find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
     handoff_candidate_from_message: HandoffCandidateFromMessageFn
     load_pending_merchant_completeness: LoadPendingMerchantCompletenessFn
     locked_state: LockedStateFn
-    merchant_proposal_candidate_from_message: MessageCandidateFn
-    merchant_report_sender: MerchantReportSenderFn
     pending_merchant_completeness_matches: PendingMerchantCompletenessMatchesFn
     send_message_body: SendMessageBodyFn
     shlex: Any
     stage_runtime_handoff_attempt: StageRuntimeHandoffAttemptFn
     trusted_post_tool_sender: TrustedPostToolSenderFn
-    trusted_teammate_pane_session_matches: TrustedTeammatePaneSessionMatchesFn
 
 
 def _project_resolve_invocation(
@@ -411,8 +398,8 @@ def prepare_merchant_runtime_handoff(
         dependencies.trusted_post_tool_sender
     )
 
-    trusted_teammate_pane_session_matches = (
-        dependencies.trusted_teammate_pane_session_matches
+    bind_running_teammate_pane_session = (
+        dependencies.bind_running_teammate_pane_session
     )
 
     tool_name = str(
@@ -481,7 +468,7 @@ def prepare_merchant_runtime_handoff(
         return (
             True,
             None,
-            "MERCHANT_APPLY_HANDOFF_REQUEST_JSON is malformed",
+            "MERCHANT_EXECUTE_REQUEST_JSON is malformed",
         )
 
     authenticated_sender = (
@@ -608,7 +595,7 @@ def prepare_merchant_runtime_handoff(
     if (
         owner_operations
         != [
-            "merchant_apply"
+            "merchant_execute"
         ]
         or owner_selected_agents
         != [
@@ -618,42 +605,43 @@ def prepare_merchant_runtime_handoff(
         return (
             True,
             None,
-            "merchant-manager lifecycle authority is not exact merchant_apply",
+            "merchant-manager lifecycle authority is not exact merchant_execute",
         )
 
-    if not authenticated_sender:
-        pane_session_id = str(
-            payload.get(
-                "session_id"
-            )
-            or ""
-        ).strip()
-
-        (
-            trusted_pane,
-            pane_reason,
-        ) = (
-            trusted_teammate_pane_session_matches(
-                owner_session_id,
-                teammate_name,
-                pane_session_id,
-                owner_run_id,
-                owner_task_id,
-                required_operation=(
-                    "merchant_apply"
-                ),
-            )
+    # The executing pane is bound on first use and must match afterwards.
+    # A reservation for Merchant Create is bound to this exact pane.
+    pane_session_id = str(
+        payload.get(
+            "session_id"
         )
+        or ""
+    ).strip()
 
-        if not trusted_pane:
-            return (
-                True,
-                None,
-                (
-                    "handoff sender pane is not trusted for "
-                    f"this merchant_apply task: {pane_reason}"
-                ),
-            )
+    (
+        trusted_pane,
+        pane_reason,
+    ) = (
+        bind_running_teammate_pane_session(
+            owner_session_id,
+            teammate_name,
+            pane_session_id,
+            owner_run_id,
+            owner_task_id,
+            required_operation=(
+                "merchant_execute"
+            ),
+        )
+    )
+
+    if not trusted_pane:
+        return (
+            True,
+            None,
+            (
+                "execute sender pane is not trusted for "
+                f"this merchant_execute task: {pane_reason}"
+            ),
+        )
 
     supplied_task_id = str(
         tool_input.get(
@@ -769,206 +757,3 @@ def bound_merchant_completeness_receipt(
         return None
 
     return receipt
-
-
-def capture_merchant_proposal_from_message(
-    state: dict[str, Any],
-    session_id: Any,
-    teammate_name: str,
-    message: str,
-    dependencies: MerchantRuntimeDependencies | None = None,
-) -> bool:
-    """Capture proposal from an authenticated direct teammate report."""
-
-    if dependencies is None:
-        raise RuntimeError(
-            "Merchant runtime dependencies are required"
-        )
-
-    MERCHANT_MANAGER_AGENT = (
-        dependencies.MERCHANT_MANAGER_AGENT
-    )
-
-    MERCHANT_PROPOSE_OPERATION = (
-        dependencies.MERCHANT_PROPOSE_OPERATION
-    )
-
-    capture_proposal_receipt = (
-        dependencies.capture_proposal_receipt
-    )
-
-    merchant_proposal_candidate_from_message = (
-        dependencies.merchant_proposal_candidate_from_message
-    )
-    if (
-        teammate_name
-        != MERCHANT_MANAGER_AGENT
-    ):
-        return False
-
-    operations = [
-        str(
-            operation
-        )
-        for operation in (
-            state.get(
-                "operations"
-            )
-            or []
-        )
-    ]
-
-    selected_agents = [
-        str(
-            agent
-        )
-        for agent in (
-            state.get(
-                "selected_agents"
-            )
-            or []
-        )
-    ]
-
-    if (
-        operations
-        != [
-            MERCHANT_PROPOSE_OPERATION
-        ]
-    ):
-        return False
-
-    if (
-        selected_agents
-        != [
-            MERCHANT_MANAGER_AGENT
-        ]
-    ):
-        return False
-
-    report = str(
-        message or ""
-    ).strip()
-
-    if not report:
-        return False
-
-    candidate = (
-        merchant_proposal_candidate_from_message(
-            message
-        )
-    )
-
-    if (
-        candidate
-        is None
-    ):
-        return False
-
-    return (
-        capture_proposal_receipt(
-            session_id,
-            candidate,
-        ).accepted
-    )
-
-
-def handle_merchant_proposal_receipt(
-    state: dict[str, Any],
-    payload: dict[str, Any],
-    session_id: Any = None,
-    dependencies: MerchantRuntimeDependencies | None = None,
-) -> bool:
-    """Compatibility path for authenticated direct merchant-manager reports.
-
-    Pane-backed tmux Merchant proposal authority is handled by Gate 11I exact
-    CLI staging + trusted TeammateIdle reconciliation instead.
-    """
-
-    if dependencies is None:
-        raise RuntimeError(
-            "Merchant runtime dependencies are required"
-        )
-
-    MERCHANT_MANAGER_AGENT = (
-        dependencies.MERCHANT_MANAGER_AGENT
-    )
-
-    _coalesced_text = (
-        dependencies._coalesced_text
-    )
-
-    capture_merchant_proposal_from_message = (
-        dependencies.capture_merchant_proposal_from_message
-    )
-
-    merchant_report_sender = (
-        dependencies.merchant_report_sender
-    )
-
-    send_message_body = (
-        dependencies.send_message_body
-    )
-    if (
-        str(
-            payload.get(
-                "tool_name"
-            )
-            or ""
-        ).strip()
-        != "SendMessage"
-    ):
-        return False
-
-    tool_input = (
-        payload.get(
-            "tool_input"
-        )
-    )
-
-    if not isinstance(
-        tool_input,
-        dict,
-    ):
-        return False
-
-    if (
-        _coalesced_text(
-            tool_input,
-            "recipient",
-            "to",
-        )
-        != "team-lead"
-    ):
-        return False
-
-    teammate_name = (
-        merchant_report_sender(
-            payload
-        )
-    )
-
-    if (
-        teammate_name
-        != MERCHANT_MANAGER_AGENT
-    ):
-        return False
-
-    # Gate 11H: content/message are not aliases.
-    message = (
-        send_message_body(
-            tool_input
-        )
-    )
-
-    if not message:
-        return False
-
-    return (
-        capture_merchant_proposal_from_message(
-            state,
-            session_id,
-            teammate_name,
-            message,
-        )
-    )

@@ -17,11 +17,16 @@ SESSION = "cp6-direct-boundary"
 PROJECT_ID = "00000000-0000-0000-0000-000000000001"
 OTHER_PROJECT_ID = "00000000-0000-0000-0000-000000000099"
 ARGV = ["project", "update", PROJECT_ID, "--status", "IN_PROGRESS", "--expected-version", "3"]
+from tests.merchant.direct_reservation_support import (
+    isolate_team_state,
+    reserve_scoped_write,
+)
 
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv(runtime_state.STATE_DIR_ENV_VAR, str(tmp_path))
+    isolate_team_state(monkeypatch, tmp_path)
 
 
 def authorized_state():
@@ -34,7 +39,7 @@ def authorized_state():
         selected_agents=["merchant-manager"],
         limits={"max_members": 1, "max_tool_rounds": 1, "max_total_tool_calls": 10, "max_run_budget_usd": 1.0},
         confirmed=True,
-        operations=["merchant_apply"],
+        operations=["merchant_execute"],
         run_id=run_id,
         merchant_scope={
             "argv": list(scope["argv"]),
@@ -46,7 +51,7 @@ def authorized_state():
     )
     state["merchant_dispatch_spent"] = True
     state["merchant_dispatch"] = {
-        "operation": "merchant_apply",
+        "operation": "merchant_execute",
         "subagent_type": "merchant-manager",
         "teammate_name": "merchant-manager",
         "confirmation_hash": scope["confirmation_hash"],
@@ -62,6 +67,7 @@ def invoke(argv, calls):
         SESSION,
         argv,
         write_command_factory=lambda database: commands,
+        **reserve_scoped_write(SESSION),
     )
 
 
@@ -71,7 +77,7 @@ def invoke(argv, calls):
     lambda state: state.update(risk_level="read_only"),
     lambda state: state.update(merchant_dispatch_spent=False),
     lambda state: state["merchant_dispatch"].update(confirmation_hash="0" * 64),
-    lambda state: state.update(merchant_confirmation={"operation": "merchant_apply"}),
+    lambda state: state.update(merchant_confirmation={"operation": "merchant_execute"}),
 ], ids=["wrong-operation", "wrong-agent", "read-only-risk", "unaccepted-dispatch", "wrong-dispatch-hash", "proposal-confirmation-mixing"])
 def test_direct_scope_rejects_non_direct_authority(mutation):
     state = authorized_state()

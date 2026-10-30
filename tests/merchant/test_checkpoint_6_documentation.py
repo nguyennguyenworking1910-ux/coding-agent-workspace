@@ -25,7 +25,7 @@ def test_claude_instructions_include_merchant_boundary():
     assert "eight reusable specialist agent definitions" in content
     assert "## Merchant Manager boundary" in content
     assert "agent_cli.py" in content
-    assert "Checkpoint 6 deliberately denies runtime `--apply`" in content
+    assert "Merchant writes use Direct EXECUTE only" in content
     assert "only through the teammate's final `SendMessage`" in content
 
 

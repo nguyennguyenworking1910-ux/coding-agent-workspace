@@ -133,7 +133,7 @@
           "complex_task": 4.0
         }
       },
-      "description": "Manages Merchant data through existing CLI and repository commands; supports trusted Direct Scope execution and legacy proposal compatibility",
+      "description": "Manages Merchant data through existing CLI and repository commands; writes only through trusted Direct EXECUTE of an exact user-authorized scope",
       "enabled": true,
       "type": "merchant_manager",
       "definition": ".claude/agents/merchant-manager.md",
@@ -167,8 +167,8 @@
         "checkpoint_6_write_mode": "direct_scope_execute",
         "runtime_apply": "trusted_in_process_handoff_only",
         "runtime_handoff": ".claude/system/merchant_runtime_handoff.py",
-        "runtime_handoff_method": "invoke_authorized_scope_apply",
-        "note": "The teammate invokes the checked-in agent CLI through Bash without reading or passing database credentials; that ordinary CLI remains read/propose-only. Controlled orchestration may reserve one accepted persisted session and perform one exact confirmed apply only through the opaque in-process handoff. PostgreSQL is authoritative for current state."
+        "runtime_handoff_method": "invoke_direct_merchant_execute",
+        "note": "The teammate invokes the checked-in agent CLI through Bash without reading or passing database credentials; that ordinary CLI is read-only for runtime. Controlled orchestration executes one exact user-authorized scope only through the trusted in-process Direct EXECUTE handoff. PostgreSQL is authoritative for current state."
       }
     },
     {
@@ -273,7 +273,7 @@
     {
       "id": "merchant_cli",
       "name": "Merchant Manager CLI",
-      "description": "Credential-safe operational adapter that fixes the Merchant target to runtime, permits reads and redacted write proposals, and denies runtime apply",
+      "description": "Credential-safe operational adapter that fixes the Merchant target to runtime, permits reads and completeness checks, and denies runtime writes",
       "type": "operational_data_access",
       "enabled": true,
       "module": "claude.agents.tools.merchant.agent_cli",

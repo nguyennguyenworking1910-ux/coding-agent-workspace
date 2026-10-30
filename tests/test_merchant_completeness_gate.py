@@ -1,3 +1,5 @@
+import pytest
+
 from claude.hooks.merchant_completeness_gate import (
     validate_completeness_receipt_for_outcome,
 )
@@ -63,7 +65,7 @@ def clarification_outcome():
     return {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -76,16 +78,6 @@ def clarification_outcome():
             "Please provide project_id, "
             "document_type, and content_hash."
         ),
-    }
-
-
-def proposal_outcome():
-    return {
-        "contract_version": 1,
-        "outcome": "PROPOSAL_READY",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "proposal_emitted": True,
     }
 
 
@@ -146,23 +138,49 @@ def test_clarification_missing_fields_must_match_exactly():
     assert decision.accepted is False
 
 
-def test_proposal_ready_requires_complete_receipt():
+@pytest.mark.parametrize(
+    "outcome_name",
+    ["PROPOSAL_READY", "EXECUTE_SUCCESS", "EXECUTE_FAILED"],
+)
+def test_execution_and_legacy_outcomes_are_not_completeness_outcomes(
+    outcome_name,
+):
+    outcome = clarification_outcome()
+    outcome["outcome"] = outcome_name
+
     decision = (
         validate_completeness_receipt_for_outcome(
-            proposal_outcome(),
+            outcome,
             complete_receipt(),
         )
     )
 
-    assert decision.accepted is True
-    assert decision.requires_receipt is True
+    assert decision.accepted is False
 
 
-def test_proposal_ready_rejects_incomplete_receipt():
+@pytest.mark.parametrize(
+    "operation",
+    ["merchant_propose", "merchant_apply", "merchant_read", ""],
+)
+def test_non_direct_operation_is_rejected(operation):
+    outcome = clarification_outcome()
+    outcome["operation"] = operation
+
     decision = (
         validate_completeness_receipt_for_outcome(
-            proposal_outcome(),
+            outcome,
             incomplete_receipt(),
+        )
+    )
+
+    assert decision.accepted is False
+
+
+def test_clarification_rejects_complete_receipt():
+    decision = (
+        validate_completeness_receipt_for_outcome(
+            clarification_outcome(),
+            complete_receipt(),
         )
     )
 
@@ -173,7 +191,7 @@ def test_action_semantics_clarification_does_not_require_receipt():
     outcome = {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -204,7 +222,7 @@ def test_blocked_and_failed_do_not_require_receipt():
         outcome = {
             "contract_version": 1,
             "outcome": outcome_name,
-            "operation": "merchant_propose",
+            "operation": "merchant_execute",
             "database_target": "runtime",
             "proposal_emitted": False,
         }

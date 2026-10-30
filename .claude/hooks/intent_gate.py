@@ -28,8 +28,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import (  # noqa: E402
         CLAUDE_DIR,
-        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
-        MERCHANT_CONFIRMATION_MODE_MANUAL,
         load_state,
         new_state,
         redact_secrets,
@@ -38,10 +36,6 @@ if __package__ in (None, ""):
     from team_lifecycle import (  # noqa: E402
         load_team_state,
     )
-    from merchant_confirmation_preferences import (  # noqa: E402
-        authorize_local_auto_apply,
-        handle_toggle_command,
-    )
     from intent_envelope_bridge import (
         load_intent_envelope,
         save_intent_envelope,
@@ -49,8 +43,6 @@ if __package__ in (None, ""):
 else:
     from .runtime_state import (
         CLAUDE_DIR,
-        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
-        MERCHANT_CONFIRMATION_MODE_MANUAL,
         load_state,
         new_state,
         redact_secrets,
@@ -58,10 +50,6 @@ else:
     )
     from .team_lifecycle import (
         load_team_state,
-    )
-    from .merchant_confirmation_preferences import (
-        authorize_local_auto_apply,
-        handle_toggle_command,
     )
     from .intent_envelope_bridge import (
         load_intent_envelope,
@@ -82,6 +70,11 @@ CONTROLLED_COMMANDS = ("solve", "schedule-agent")
 CONFIRM_FLAG = "--confirm"
 MERCHANT_CONFIRM_FLAG = "--merchant-confirmation"
 MERCHANT_SCOPE_FLAG = "--merchant-scope"
+
+MERCHANT_EXECUTE_OPERATION = "merchant_execute"
+LEGACY_MERCHANT_OPERATIONS = frozenset(
+    {"merchant_propose", "merchant_apply"}
+)
 
 
 def split_merchant_scope(request: str) -> tuple[list[str], str]:
@@ -272,23 +265,6 @@ def build_parser() -> Any:
     return IntentParser()
 
 
-def load_merchant_confirmation(token: str) -> dict[str, Any]:
-    """Validate a Merchant confirmation without importing it at hook startup."""
-
-    merchant_tools_dir = (
-        CLAUDE_DIR / "agents" / "tools" / "merchant"
-    )
-
-    if str(merchant_tools_dir) not in sys.path:
-        sys.path.insert(0, str(merchant_tools_dir))
-
-    from cli_contract import (  # type: ignore  # noqa: PLC0415
-        parse_confirmation_token,
-    )
-
-    return parse_confirmation_token(token).to_dict()
-
-
 def build_team_state_snapshot(
     session_id: Any,
     selected_agents: list[str],
@@ -415,18 +391,14 @@ def run(
     if not isinstance(prompt, str):
         return {}
 
-    # `/merchant-confirmation` is a session-local preference switch. It never
-    # reaches the intent parser, never creates a team, and never touches
-    # Merchant data: the hook applies it and reports the outcome instead of
-    # letting the prompt run.
-    toggle_report = handle_toggle_command(
-        prompt,
-        payload.get("session_id"),
-        dict(environment),
-    )
-
-    if toggle_report is not None:
-        return block(toggle_report)
+    # The proposal-confirmation preference switch was removed with the
+    # proposal workflow. Reject it explicitly instead of passing it on.
+    if re.match(r"^\s*/merchant-confirmation(?:\s|$)", prompt):
+        return block(
+            "/merchant-confirmation has been removed: Merchant writes use "
+            "Direct EXECUTE with /solve --confirm --merchant-scope [...]. "
+            "Nothing was changed."
+        )
 
     try:
         parsed = parse_prompt(prompt)
@@ -656,12 +628,15 @@ def run(
         str(agent)
         for agent in envelope_payload.get("selected_agents") or []
     ]
-    merchant_apply = "merchant_apply" in operations
-    merchant_confirmation_mode = MERCHANT_CONFIRMATION_MODE_MANUAL
+    if operations & LEGACY_MERCHANT_OPERATIONS:
+        return block(
+            "Merchant proposal/apply operations have been removed. "
+            "Nothing was dispatched."
+        )
 
     if merchant_scope is not None:
         if (
-            operations != {"merchant_apply"}
+            operations != {MERCHANT_EXECUTE_OPERATION}
             or selected_for_confirmation != ["merchant-manager"]
             or envelope_payload.get("risk_level")
             not in {"external_write", "destructive"}
@@ -671,93 +646,14 @@ def run(
                 "Nothing was dispatched."
             )
 
+    # Proposal confirmation tokens no longer authorize anything. Direct
+    # EXECUTE authority is the exact user-typed --merchant-scope.
     if merchant_confirmation_token is not None:
-        if not merchant_confirmation_token:
-            return block(
-                f"{MERCHANT_CONFIRM_FLAG} requires the exact token emitted "
-                "by a Merchant proposal. Nothing was dispatched."
-            )
-
-        try:
-            merchant_confirmation = load_merchant_confirmation(
-                merchant_confirmation_token
-            )
-        except Exception:  # noqa: BLE001 - token errors fail closed and stay redacted
-            return block(
-                "Merchant confirmation is malformed or its binding does not "
-                "match. Nothing was dispatched; generate a fresh proposal."
-            )
-
-        if not merchant_apply:
-            return block(
-                "A Merchant confirmation token can authorize only a "
-                "merchant_apply intent. Nothing was dispatched."
-            )
-
-        if merchant_confirmation.get("database_target") != "runtime":
-            return block(
-                "Operational Merchant confirmation must target runtime. "
-                "Nothing was dispatched."
-            )
-
-        if selected_for_confirmation != ["merchant-manager"]:
-            return block(
-                "Merchant confirmation requires exclusive merchant-manager "
-                "authority. Nothing was dispatched."
-            )
-
-        if envelope_payload.get("risk_level") not in {
-            "external_write",
-            "destructive",
-        }:
-            return block(
-                "Merchant apply confirmation requires an external_write or "
-                "destructive envelope. Nothing was dispatched."
-            )
-
-        confirmed = True
-        envelope_payload["merchant_confirmation"] = (
-            merchant_confirmation
-        )
-        envelope_payload["merchant_confirmation_mode"] = (
-            MERCHANT_CONFIRMATION_MODE_MANUAL
-        )
-    elif merchant_apply and merchant_scope is None:
-        if confirmed:
-            return block(
-                f"{CONFIRM_FLAG} is not sufficient for Merchant apply. "
-                f"Use {MERCHANT_CONFIRM_FLAG} with the exact token emitted "
-                "by the proposal. Nothing was dispatched."
-            )
-
-        # Local development may disable manual token entry for a narrow set of
-        # commands. The receipt supplies exactly the confirmation metadata a
-        # pasted token would have supplied; nothing downstream is relaxed.
-        local_auto = authorize_local_auto_apply(
-            payload.get("session_id"),
-            request,
-            envelope_payload,
-            dict(environment),
-        )
-
-        if not local_auto.authorized:
-            return block(
-                "Merchant apply requires the exact confirmation token "
-                f"emitted by a prior proposal. Resubmit with "
-                f"{MERCHANT_CONFIRM_FLAG}. Local auto-confirm did not "
-                f"authorize this apply: {local_auto.reason}. Nothing was "
-                "dispatched."
-            )
-
-        confirmed = True
-        merchant_confirmation_mode = (
-            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
-        )
-        envelope_payload["merchant_confirmation"] = (
-            local_auto.confirmation
-        )
-        envelope_payload["merchant_confirmation_mode"] = (
-            MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
+        return block(
+            f"{MERCHANT_CONFIRM_FLAG} is no longer supported: Merchant "
+            "proposal confirmation has been removed. Resubmit as "
+            f"`/solve {CONFIRM_FLAG} {MERCHANT_SCOPE_FLAG} [...] "
+            "<description>`. Nothing was dispatched."
         )
 
     if envelope_payload.get("requires_confirmation") and not confirmed:
@@ -799,10 +695,6 @@ def run(
                     "operations"
                 ) or []
             ],
-            merchant_confirmation=envelope_payload.get(
-                "merchant_confirmation"
-            ),
-            merchant_confirmation_mode=merchant_confirmation_mode,
             run_id=run_id,
             merchant_scope=merchant_scope,
         ),

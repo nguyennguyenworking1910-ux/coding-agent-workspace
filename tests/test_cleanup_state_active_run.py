@@ -23,13 +23,6 @@ from claude.hooks.team_lifecycle import (
     mark_teammate_running,
 )
 
-from claude.hooks.merchant_confirmation_preferences import (
-    MODE_LOCAL_AUTO,
-    load_preferences,
-    new_preferences,
-    save_preferences,
-)
-
 from claude.hooks.team_lifecycle import (
     TeammateAllocationDecision,
     allocate_teammate,
@@ -65,26 +58,6 @@ def isolated_state(
         ),
     )
 
-    monkeypatch.setenv(
-        "CLAUDE_MERCHANT_PREFERENCES_DIR",
-        str(
-            tmp_path
-            / "preferences"
-        ),
-    )
-
-def _create_confirmation_preference():
-    document = new_preferences(
-        SESSION_ID
-    )
-
-    document["mode"] = MODE_LOCAL_AUTO
-
-    save_preferences(
-        SESSION_ID,
-        document,
-    )
-
 
 def _create_run():
     state = new_state(
@@ -95,7 +68,7 @@ def _create_run():
             "merchant-manager",
         ],
         operations=[
-            "merchant_apply",
+            "merchant_execute",
         ],
         limits={
             "max_members": 1,
@@ -139,7 +112,7 @@ def _create_running_teammate():
             RUN_ID,
             TASK_ID,
             operations=[
-                "merchant_apply",
+                "merchant_execute",
             ],
             selected_agents=[
                 "merchant-manager",
@@ -321,7 +294,6 @@ def test_session_end_clears_all_session_scoped_state(
 ):
     _create_run()
     _create_running_teammate()
-    _create_confirmation_preference()
 
     assert load_state(
         SESSION_ID
@@ -331,9 +303,6 @@ def test_session_end_clears_all_session_scoped_state(
         SESSION_ID
     ) is not None
 
-    assert load_preferences(
-        SESSION_ID
-    ) is not None
 
     _run_cleanup(
         monkeypatch,
@@ -348,9 +317,6 @@ def test_session_end_clears_all_session_scoped_state(
         SESSION_ID
     ) is None
 
-    assert load_preferences(
-        SESSION_ID
-    ) is None
 
 def test_session_end_reports_incomplete_cleanup(
     isolated_state,

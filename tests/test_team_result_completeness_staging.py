@@ -49,7 +49,7 @@ def completeness_result():
     }
 
 
-def _start_merchant_propose(
+def _start_merchant_execute(
     lead_session,
 ):
     teammate = "merchant-manager"
@@ -77,7 +77,7 @@ def _start_merchant_propose(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_execute",
         ],
         selected_agents=[
             teammate,
@@ -114,7 +114,7 @@ def test_post_tool_use_stages_exact_completeness_receipt(
     )
 
     run_id, task_id = (
-        _start_merchant_propose(
+        _start_merchant_execute(
             lead_session
         )
     )
@@ -201,7 +201,7 @@ def test_non_completeness_stdout_is_not_staged(
         ),
     )
 
-    _start_merchant_propose(
+    _start_merchant_execute(
         lead_session
     )
 
@@ -261,7 +261,7 @@ def test_non_merchant_role_cannot_stage_completeness(
         ),
     )
 
-    _start_merchant_propose(
+    _start_merchant_execute(
         lead_session
     )
 
@@ -373,3 +373,56 @@ def test_merchant_read_run_cannot_stage_write_completeness(
         )
         is None
     )
+
+def test_legacy_propose_run_cannot_stage_completeness(
+    monkeypatch,
+    tmp_path,
+):
+    lead_session = "lead-legacy"
+    pane_session = "pane-legacy"
+    teammate = "merchant-manager"
+
+    monkeypatch.setenv(
+        "CLAUDE_TEAM_STATE_DIR",
+        str(tmp_path / "team_state"),
+    )
+    monkeypatch.setenv(
+        "CLAUDE_RUNTIME_DIR",
+        str(tmp_path / "runtime"),
+    )
+
+    decision, name = allocate_teammate(
+        lead_session,
+        teammate,
+        teammate,
+    )
+
+    assert decision == TeammateAllocationDecision.CREATE
+
+    # Legacy tasks can no longer start; simulate a stale persisted one.
+    from claude.hooks.team_lifecycle import locked_team_state
+
+    with locked_team_state(lead_session) as state:
+        state["teammates"][name].update(
+            status="RUNNING",
+            current_run_id="run-legacy",
+            current_task_id="run-legacy:merchant-manager",
+            authorized_operations=["merchant_propose"],
+            authorized_selected_agents=[teammate],
+        )
+
+    team_result_hook.handle_post_tool_use(
+        None,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": pane_session,
+            "agent_type": teammate,
+            "tool_name": "Bash",
+            "tool_response": {
+                "stdout": json.dumps(completeness_result()),
+            },
+        },
+        pane_session,
+    )
+
+    assert load_pending_merchant_completeness(pane_session) is None

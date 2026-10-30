@@ -263,8 +263,7 @@ def test_exact_project_resolution_stages(monkeypatch):
     "operation",
     [
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     ],
 )
 def test_all_merchant_operation_scopes_can_stage(
@@ -420,7 +419,7 @@ def test_mixed_operations_do_not_stage(
         _payload(),
         operations=(
             "merchant_read",
-            "merchant_propose",
+            "merchant_execute",
         ),
     ) is False
 

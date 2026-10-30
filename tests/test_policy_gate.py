@@ -635,11 +635,12 @@ def test_new_run_can_reuse_previously_completed_teammate(
     )
 
 
-def test_merchant_propose_agent_assignment_rejects_concrete_cli():
+def test_unscoped_execute_agent_assignment_rejects_concrete_cli():
     state = {
-        "operations": ["merchant_propose"],
+        "operations": ["merchant_execute"],
         "selected_agents": ["merchant-manager"],
-        "merchant_confirmation": None,
+        "risk_level": "external_write",
+        "confirmed": True,
     }
 
     decision = policy_gate._check_merchant_dispatch(
@@ -666,11 +667,12 @@ def test_merchant_propose_agent_assignment_rejects_concrete_cli():
     ]
 
 
-def test_merchant_propose_reuse_assignment_rejects_concrete_cli():
+def test_unscoped_execute_reuse_assignment_rejects_concrete_cli():
     state = {
-        "operations": ["merchant_propose"],
+        "operations": ["merchant_execute"],
         "selected_agents": ["merchant-manager"],
-        "merchant_confirmation": None,
+        "risk_level": "external_write",
+        "confirmed": True,
     }
 
     decision = policy_gate._check_merchant_dispatch(
@@ -696,11 +698,12 @@ def test_merchant_propose_reuse_assignment_rejects_concrete_cli():
     ]
 
 
-def test_merchant_propose_semantic_assignment_is_allowed():
+def test_unscoped_execute_semantic_assignment_is_allowed():
     state = {
-        "operations": ["merchant_propose"],
+        "operations": ["merchant_execute"],
         "selected_agents": ["merchant-manager"],
-        "merchant_confirmation": None,
+        "risk_level": "external_write",
+        "confirmed": True,
     }
 
     decision = policy_gate._check_merchant_dispatch(
@@ -709,17 +712,16 @@ def test_merchant_propose_semantic_assignment_is_allowed():
         "merchant-manager",
         {
             "prompt": (
-                "Objective: prepare a proposal to create a new "
+                "Objective: create a new "
                 "cinema-opening project for AEON Beta.\n"
-                "Operation: merchant_propose\n"
+                "Operation: merchant_execute\n"
                 "Database target: runtime\n"
-                "Authorized mode: PROPOSE\n"
                 "Resolve authoritative Merchant and Project state "
                 "through registered reads.\n"
                 "Resolve the normalized write command from the "
                 "registered Merchant contract.\n"
-                "Run deterministic completeness before proposing.\n"
-                "Do not apply any mutation."
+                "Run deterministic completeness first.\n"
+                "No user scope exists, so no runtime write is possible."
             )
         },
     )
@@ -732,9 +734,10 @@ def test_reuse_path_validates_before_lifecycle_reservation(
 ):
     state = {
         "run_id": "run-command-authority",
-        "operations": ["merchant_propose"],
+        "operations": ["merchant_execute"],
         "selected_agents": ["merchant-manager"],
-        "merchant_confirmation": None,
+        "risk_level": "external_write",
+        "confirmed": True,
         "members_used": [],
         "limits": {
             "max_members": 1,
@@ -801,7 +804,7 @@ def test_merchant_manager_cannot_bash_runtime_handoff_directly():
         == "deny"
     )
     assert (
-        "MERCHANT_APPLY_HANDOFF_REQUEST_JSON:"
+        "MERCHANT_EXECUTE_REQUEST_JSON:"
         in decision["hookSpecificOutput"][
             "permissionDecisionReason"
         ]

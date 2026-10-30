@@ -157,6 +157,24 @@ def execute_reserved_merchant_create(
         ):
             raise ReservedExecutionError("Invalid reserved operation key")
 
+        # The user's one-use scope must have been spent for exactly this
+        # reservation. A reservation alone is never write authority.
+        from claude.system.merchant_runtime_handoff import (
+            spent_authority_matches,
+        )
+
+        if not spent_authority_matches(
+            owner_session_id,
+            teammate_name=teammate_name,
+            run_id=run_id,
+            task_id=task_id,
+            reservation_kind="create",
+            reservation_id=write_id,
+        ):
+            raise ReservedExecutionError(
+                "No spent user authority matches this reservation"
+            )
+
         # Atomic claim under the same exclusive team-state lock.
         # All lifecycle ownership mutations must honor EXECUTING.
         # The enclosing locked_team_state context persists this

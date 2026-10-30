@@ -17,7 +17,7 @@ from claude.agents.tools.merchant.write_commands import (
 )
 from claude.system import merchant_runtime_handoff
 from claude.system.merchant_runtime_handoff import (
-    invoke_trusted_merchant_session_apply,
+    invoke_authorized_scope_apply,
 )
 
 
@@ -89,7 +89,7 @@ def test_ordinary_agent_cli_still_rejects_apply_before_factory():
 
 def test_handoff_has_no_cli_main_environment_or_boolean_authority():
     source = inspect.getsource(merchant_runtime_handoff)
-    signature = inspect.signature(invoke_trusted_merchant_session_apply)
+    signature = inspect.signature(invoke_authorized_scope_apply)
 
     assert "if __name__" not in source
     assert "os.environ" not in source

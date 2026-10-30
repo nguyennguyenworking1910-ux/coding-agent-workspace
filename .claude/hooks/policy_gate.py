@@ -16,8 +16,6 @@ top-level `decision` field, which PreToolUse no longer reads.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import re
 import sys
@@ -35,14 +33,7 @@ if __package__ in (None, ""):
     )
 
     from runtime_state import (  # noqa: E402
-        MERCHANT_CONFIRMATION_MODE_FIELD,
-        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
-        MERCHANT_CONFIRMATION_MODE_MANUAL,
         locked_state,
-    )
-
-    from merchant_confirmation_preferences import (  # noqa: E402
-        reserve_receipt,
     )
 
     from team_lifecycle import (  # noqa: E402
@@ -94,14 +85,7 @@ if __package__ in (None, ""):
 
 else:
     from .runtime_state import (
-        MERCHANT_CONFIRMATION_MODE_FIELD,
-        MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO,
-        MERCHANT_CONFIRMATION_MODE_MANUAL,
         locked_state,
-    )
-
-    from .merchant_confirmation_preferences import (
-        reserve_receipt,
     )
 
     from .team_lifecycle import (
@@ -170,7 +154,11 @@ RISK_DESTRUCTIVE = "destructive"
 
 MERCHANT_MANAGER_AGENT = "merchant-manager"
 MERCHANT_OPERATIONS = frozenset(
-    {"merchant_read", "merchant_propose", "merchant_apply"}
+    {"merchant_read", "merchant_execute"}
+)
+# Removed workflows; never authorized for a new dispatch.
+LEGACY_MERCHANT_OPERATIONS = frozenset(
+    {"merchant_propose", "merchant_apply"}
 )
 MERCHANT_WRITE_COMMANDS = frozenset(
     {
@@ -187,50 +175,18 @@ MERCHANT_WRITE_COMMANDS = frozenset(
         "step update",
     }
 )
-MERCHANT_APPLY_OPERATION = "merchant_apply"
-MERCHANT_PROPOSE_OPERATION = "merchant_propose"
+MERCHANT_EXECUTE_OPERATION = "merchant_execute"
+# Removed proposal-apply authority block. Its presence is always rejected.
 MERCHANT_DISPATCH_MARKER = (
     "MERCHANT_DISPATCH_AUTHORIZATION_JSON"
 )
-MERCHANT_DISPATCH_MODE = (
-    "CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY"
-)
-MERCHANT_CONFIRMATION_FIELDS = frozenset(
-    {
-        "contract_version",
-        "confirmation_version",
-        "operation",
-        "command",
-        "database_target",
-        "expected_version",
-        "payload_hash",
-        "proposal_hash",
-        "confirmation_hash",
-    }
-)
-MERCHANT_DISPATCH_FIELDS = (
-    MERCHANT_CONFIRMATION_FIELDS | {"authorized_mode"}
-)
-MERCHANT_HASH_FIELDS = (
-    "payload_hash",
-    "proposal_hash",
-    "confirmation_hash",
-)
-
-_MERCHANT_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_MERCHANT_DISPATCH_BLOCK_PATTERN = re.compile(
-    r"(?ms)^MERCHANT_DISPATCH_AUTHORIZATION_JSON[ \t]*\r?\n"
-    r"```json[ \t]*\r?\n"
-    r"(?P<payload>\{.*?\})\r?\n"
-    r"```[ \t]*$"
-)
 
 
-# A merchant_propose assignment carries semantic intent only. Concrete CLI
-# spelling belongs to merchant-manager's registered contract, not to the lead
-# prompt. This catches command-shaped text without blocking ordinary prose
-# such as "run completeness before --propose".
-_MERCHANT_PROPOSE_ASSIGNMENT_CLI_PATTERN = re.compile(
+# An unscoped merchant_execute assignment carries semantic intent only.
+# Concrete CLI spelling belongs to merchant-manager's registered contract,
+# not to the lead prompt. This catches command-shaped text without blocking
+# ordinary prose such as "run completeness before executing".
+_MERCHANT_ASSIGNMENT_CLI_PATTERN = re.compile(
     r"""(?ix)
     \b(
         merchant\s+(?:list|resolve|activate(?:-all)?|create)
@@ -2781,10 +2737,10 @@ def _merchant_assignment_text(
     return prompt_text or message_text
 
 
-def _merchant_propose_assignment_error(
+def _merchant_assignment_cli_error(
     assignment: str,
 ) -> str | None:
-    """Reject lead-authored concrete Merchant CLI syntax for PROPOSE."""
+    """Reject lead-authored concrete Merchant CLI syntax without a scope."""
 
     if not isinstance(assignment, str):
         return "assignment text is unavailable"
@@ -2810,7 +2766,7 @@ def _merchant_propose_assignment_error(
         )
 
     if (
-        _MERCHANT_PROPOSE_ASSIGNMENT_CLI_PATTERN.search(
+        _MERCHANT_ASSIGNMENT_CLI_PATTERN.search(
             text
         )
         is not None
@@ -2858,96 +2814,47 @@ def _validated_merchant_direct_dispatch_scope(state):
     return validated
 
 
-def _record_merchant_apply_dispatch(
+def _record_merchant_execute_dispatch(
     state: dict[str, Any],
     session_id: str | None,
     subagent_type: str,
     teammate_name: str,
 ) -> dict[str, Any] | None:
-    """Reserve LOCAL_AUTO receipt and persist one accepted apply dispatch."""
+    """Persist one accepted scoped Direct EXECUTE dispatch.
+
+    Only a user-authorized --merchant-scope produces runtime authority. An
+    unscoped merchant_execute dispatch records nothing and can never reach
+    the runtime handoff.
+    """
 
     operations = {
         str(operation)
         for operation in state.get("operations") or []
     }
 
-    if MERCHANT_APPLY_OPERATION not in operations:
+    if MERCHANT_EXECUTE_OPERATION not in operations:
         return None
 
-    if state.get("merchant_scope") is not None:
-        try:
-            direct_scope = _validated_merchant_direct_dispatch_scope(state)
-        except (ValueError, TypeError, RuntimeError) as exc:
-            return deny(
-                f"Blocked: invalid trusted Merchant scope ({exc})."
-            )
-
-        if direct_scope is None:
-            return deny("Blocked: missing trusted Merchant scope")
-
-        state["merchant_dispatch_spent"] = True
-        state["merchant_dispatch"] = {
-            "operation": MERCHANT_APPLY_OPERATION,
-            "subagent_type": subagent_type,
-            "teammate_name": teammate_name,
-            "confirmation_hash": direct_scope["confirmation_hash"],
-        }
+    if state.get("merchant_scope") is None:
         return None
 
-    confirmation = state.get(
-        "merchant_confirmation"
-    )
-
-    if not isinstance(
-        confirmation,
-        dict,
-    ):
+    try:
+        direct_scope = _validated_merchant_direct_dispatch_scope(state)
+    except (ValueError, TypeError, RuntimeError) as exc:
         return deny(
-            "Blocked: Merchant apply dispatch has no validated confirmation. "
-            "Nothing was dispatched."
+            f"Blocked: invalid trusted Merchant scope ({exc})."
         )
 
-    if (
-        str(
-            state.get(
-                MERCHANT_CONFIRMATION_MODE_FIELD
-            )
-            or MERCHANT_CONFIRMATION_MODE_MANUAL
-        )
-        == MERCHANT_CONFIRMATION_MODE_LOCAL_AUTO
-    ):
-        if not session_id:
-            return deny(
-                "Blocked: LOCAL_AUTO Merchant apply dispatch requires "
-                "a valid session id. Nothing was dispatched."
-            )
-
-        reservation = reserve_receipt(
-            session_id,
-            confirmation.get(
-                "confirmation_hash"
-            ),
-        )
-
-        if not reservation.accepted:
-            return deny(
-                "Blocked: the local auto-confirm proposal receipt could "
-                f"not be reserved ({reservation.reason}). Nothing was "
-                "dispatched; generate a fresh proposal, or switch back "
-                "to manual confirmation with "
-                "`/merchant-confirmation on`."
-            )
+    if direct_scope is None:
+        return deny("Blocked: missing trusted Merchant scope")
 
     state["merchant_dispatch_spent"] = True
     state["merchant_dispatch"] = {
-        "operation": MERCHANT_APPLY_OPERATION,
+        "operation": MERCHANT_EXECUTE_OPERATION,
         "subagent_type": subagent_type,
         "teammate_name": teammate_name,
-        "confirmation_hash": confirmation[
-            "confirmation_hash"
-        ],
+        "confirmation_hash": direct_scope["confirmation_hash"],
     }
-
     return None
 
 
@@ -3171,8 +3078,8 @@ def _check_teammate_message(
             f"(status={prior_status}). Do not create a suffixed replacement."
         )
 
-    merchant_apply_decision = (
-        _record_merchant_apply_dispatch(
+    merchant_execute_decision = (
+        _record_merchant_execute_dispatch(
             state,
             session_id,
             recipient,
@@ -3180,8 +3087,8 @@ def _check_teammate_message(
         )
     )
 
-    if merchant_apply_decision is not None:
-        return merchant_apply_decision
+    if merchant_execute_decision is not None:
+        return merchant_execute_decision
 
     if recipient not in members_used:
         members_used.append(recipient)
@@ -3346,8 +3253,8 @@ def _check_agent_dispatch(
         members_used.append(requested_teammate_name)
         state["members_used"] = members_used
 
-    merchant_apply_decision = (
-        _record_merchant_apply_dispatch(
+    merchant_execute_decision = (
+        _record_merchant_execute_dispatch(
             state,
             session_id,
             subagent_type,
@@ -3355,8 +3262,8 @@ def _check_agent_dispatch(
         )
     )
 
-    if merchant_apply_decision is not None:
-        return merchant_apply_decision
+    if merchant_execute_decision is not None:
+        return merchant_execute_decision
 
     return None
 
@@ -3369,10 +3276,9 @@ def _check_merchant_dispatch(
 ) -> dict[str, Any] | None:
     """Bind Merchant operational dispatch to the classified operation.
 
-    A confirmed apply carries hashes rather than raw payload. Gate 7.4 will
-    compare those hashes with the actual in-process CLI payload before it can
-    authorize a runtime mutation; this gate only authorizes the one teammate
-    dispatch that may receive that future handoff.
+    Direct EXECUTE runtime authority comes only from the user-typed
+    --merchant-scope persisted in run state. No Agent-authored confirmation
+    or dispatch block can carry authority.
     """
 
     operations = {
@@ -3380,23 +3286,26 @@ def _check_merchant_dispatch(
         for operation in state.get("operations") or []
     }
     merchant_operations = operations & MERCHANT_OPERATIONS
-    confirmation = state.get("merchant_confirmation")
     assignment = _merchant_assignment_text(
         tool_input
     )
-    has_dispatch_marker = (
-        MERCHANT_DISPATCH_MARKER
-        in assignment
-    )
+
+    if operations & LEGACY_MERCHANT_OPERATIONS:
+        return deny(
+            "Blocked: merchant_propose and merchant_apply have been removed. "
+            "Request a fresh merchant_execute envelope and stop."
+        )
+
+    if (
+        state.get("merchant_confirmation") is not None
+        or MERCHANT_DISPATCH_MARKER in assignment
+    ):
+        return deny(
+            "Blocked: Merchant proposal confirmation and dispatch blocks "
+            "carry no authority. Request a fresh envelope and stop."
+        )
 
     if not merchant_operations:
-        if confirmation is not None or has_dispatch_marker:
-            return deny(
-                "Blocked: Merchant confirmation or dispatch authority appeared "
-                "outside a classified Merchant operation. Request a fresh "
-                "matching envelope and stop."
-            )
-
         return None
 
     if len(merchant_operations) != 1:
@@ -3434,35 +3343,11 @@ def _check_merchant_dispatch(
             "assignment. Nothing was dispatched."
         )
 
-    if merchant_operations == {MERCHANT_PROPOSE_OPERATION}:
-        if confirmation is not None or has_dispatch_marker:
+    if merchant_operations != {MERCHANT_EXECUTE_OPERATION}:
+        if state.get("merchant_scope") is not None:
             return deny(
-                "Blocked: proposal dispatches cannot carry Merchant "
-                "apply confirmation authority. Nothing was dispatched."
-            )
-
-        assignment_error = (
-            _merchant_propose_assignment_error(
-                assignment
-            )
-        )
-
-        if assignment_error is not None:
-            return deny(
-                "Blocked: merchant_propose assignments must be semantic-only; "
-                f"{assignment_error}. The lead must not author or copy "
-                "Merchant CLI resource/action/flag syntax into the teammate "
-                "assignment. Let merchant-manager resolve the registered "
-                "command contract itself."
-            )
-
-        return None
-
-    if merchant_operations != {MERCHANT_APPLY_OPERATION}:
-        if confirmation is not None or has_dispatch_marker:
-            return deny(
-                "Blocked: read dispatches cannot carry Merchant "
-                "apply confirmation authority. Nothing was dispatched."
+                "Blocked: a Merchant read cannot carry a direct write scope. "
+                "Nothing was dispatched."
             )
 
         return None
@@ -3472,176 +3357,52 @@ def _check_merchant_dispatch(
         RISK_DESTRUCTIVE,
     }:
         return deny(
-            "Blocked: Merchant apply dispatch requires an external_write or "
+            "Blocked: Merchant execute dispatch requires an external_write or "
             "destructive envelope. Nothing was dispatched."
         )
 
     if state.get("confirmed") is not True:
         return deny(
-            "Blocked: Merchant apply dispatch requires exact confirmed state. "
-            "Generate and confirm a fresh proposal."
+            "Blocked: Merchant execute dispatch requires exact confirmed "
+            "state. Nothing was dispatched."
         )
 
     if state.get("merchant_dispatch_spent") is True:
         return deny(
-            "Blocked: this Merchant confirmation has already authorized one "
-            "dispatch attempt. Generate and confirm a fresh proposal."
+            "Blocked: this Merchant scope has already authorized one "
+            "dispatch attempt. Request a fresh envelope."
         )
 
-    if state.get("merchant_scope") is not None:
-        if confirmation is not None or has_dispatch_marker:
-            return deny(
-                "Blocked: direct Merchant scope cannot carry an "
-                "Agent-authored proposal confirmation or dispatch block."
+    if state.get("merchant_scope") is None:
+        # Unscoped: the teammate may only read and check completeness.
+        # Concrete CLI syntax stays the teammate's own contract.
+        assignment_error = (
+            _merchant_assignment_cli_error(
+                assignment
             )
+        )
 
-        try:
-            direct_scope = _validated_merchant_direct_dispatch_scope(state)
-        except (ValueError, TypeError, RuntimeError) as exc:
+        if assignment_error is not None:
             return deny(
-                f"Blocked: invalid direct Merchant scope ({exc})."
+                "Blocked: unscoped merchant_execute assignments must be "
+                f"semantic-only; {assignment_error}. The lead must not author "
+                "or copy Merchant CLI resource/action/flag syntax into the "
+                "teammate assignment."
             )
-
-        if direct_scope is None:
-            return deny("Blocked: missing direct Merchant scope")
 
         return None
 
-    confirmation_error = _merchant_confirmation_error(
-        confirmation
-    )
-
-    if confirmation_error is not None:
-        return deny(
-            "Blocked: Merchant confirmation state is missing or malformed "
-            f"({confirmation_error}). Generate and confirm a fresh proposal."
-        )
-
-    dispatch, dispatch_error = _merchant_dispatch_payload(assignment)
-
-    if dispatch_error is not None:
-        return deny(
-            "Blocked: Merchant apply assignment has no exact dispatch binding "
-            f"({dispatch_error}). Nothing was dispatched."
-        )
-
-    expected_dispatch = dict(confirmation)
-    expected_dispatch["authorized_mode"] = (
-        MERCHANT_DISPATCH_MODE
-    )
-
-    if dispatch != expected_dispatch:
-        return deny(
-            "Blocked: Merchant apply assignment does not match the confirmed "
-            "command, target, payload hash, expected version, or proposal. "
-            "Nothing was dispatched; generate a fresh proposal if the action "
-            "changed."
-        )
-
-    return None
-
-
-def _merchant_confirmation_error(
-    confirmation: Any,
-) -> str | None:
-    if not isinstance(confirmation, dict):
-        return "confirmation object is absent"
-
-    if set(confirmation) != MERCHANT_CONFIRMATION_FIELDS:
-        return "confirmation fields are incomplete or unexpected"
-
-    if (
-        isinstance(confirmation.get("contract_version"), bool)
-        or confirmation.get("contract_version") != 1
-    ):
-        return "contract version is unsupported"
-
-    if (
-        isinstance(confirmation.get("confirmation_version"), bool)
-        or confirmation.get("confirmation_version") != 1
-    ):
-        return "confirmation version is unsupported"
-
-    if confirmation.get("operation") != MERCHANT_APPLY_OPERATION:
-        return "operation is not merchant_apply"
-
-    if confirmation.get("database_target") != "runtime":
-        return "database target is not runtime"
-
-    command = confirmation.get("command")
-
-    if (
-        not isinstance(command, str)
-        or command not in MERCHANT_WRITE_COMMANDS
-    ):
-        return "command is not an allowlisted normalized write"
-
-    expected_version = confirmation.get("expected_version")
-
-    if expected_version is not None and (
-        isinstance(expected_version, bool)
-        or not isinstance(expected_version, int)
-        or expected_version <= 0
-    ):
-        return "expected version is invalid"
-
-    for field in MERCHANT_HASH_FIELDS:
-        value = confirmation.get(field)
-
-        if (
-            not isinstance(value, str)
-            or _MERCHANT_HASH_PATTERN.fullmatch(value) is None
-        ):
-            return f"{field} is invalid"
-
-    canonical = json.dumps(
-        {
-            key: confirmation[key]
-            for key in MERCHANT_CONFIRMATION_FIELDS
-            if key != "confirmation_hash"
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    expected_confirmation_hash = hashlib.sha256(
-        canonical
-    ).hexdigest()
-
-    if not hmac.compare_digest(
-        confirmation["confirmation_hash"],
-        expected_confirmation_hash,
-    ):
-        return "confirmation hash does not match its binding"
-
-    return None
-
-
-def _merchant_dispatch_payload(
-    prompt: str,
-) -> tuple[dict[str, Any] | None, str | None]:
-    if prompt.count(MERCHANT_DISPATCH_MARKER) != 1:
-        return None, "authorization marker must appear exactly once"
-
-    matches = list(
-        _MERCHANT_DISPATCH_BLOCK_PATTERN.finditer(prompt)
-    )
-
-    if len(matches) != 1:
-        return None, "authorization block is missing or duplicated"
-
     try:
-        payload = json.loads(matches[0].group("payload"))
-    except (json.JSONDecodeError, ValueError):
-        return None, "authorization block is not valid JSON"
+        direct_scope = _validated_merchant_direct_dispatch_scope(state)
+    except (ValueError, TypeError, RuntimeError) as exc:
+        return deny(
+            f"Blocked: invalid direct Merchant scope ({exc})."
+        )
 
-    if not isinstance(payload, dict):
-        return None, "authorization block must be a JSON object"
+    if direct_scope is None:
+        return deny("Blocked: missing direct Merchant scope")
 
-    if set(payload) != MERCHANT_DISPATCH_FIELDS:
-        return None, "authorization fields are incomplete or unexpected"
-
-    return payload, None
+    return None
 
 
 def completed_teammate_tool_decision(
@@ -3723,15 +3484,137 @@ def completed_teammate_tool_decision(
     )
 
 
+# merchant-manager may execute nothing except one direct invocation of an
+# allowlisted read-only script. Every other execution or file-writing tool
+# is denied outright.
+MERCHANT_MANAGER_DENIED_TOOLS = frozenset(
+    {
+        "PowerShell",
+        "BashOutput",
+        "KillShell",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "mcp__ide__executeCode",
+    }
+)
+
+# Characters Bash treats literally outside quotes. Anything else outside
+# quotes (operators, expansions, globs, escapes, newlines) is rejected.
+_SHELL_LITERAL_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    " -_./:,=@%+"
+)
+
+# Characters with special meaning inside Bash double quotes.
+_DOUBLE_QUOTE_SPECIAL_CHARS = frozenset('$`\\!\n\r')
+
+
+def _shell_text_is_literal(text: str) -> bool:
+    """True when Bash would perform no expansion or chaining on ``text``.
+
+    Single-quoted text is literal except for newlines. Double-quoted text
+    must not contain expansion or escape characters. Unterminated quotes
+    are rejected.
+    """
+
+    quote = None
+
+    for char in text:
+        if quote == "'":
+            if char == "'":
+                quote = None
+            elif char in "\n\r":
+                return False
+        elif quote == '"':
+            if char == '"':
+                quote = None
+            elif char in _DOUBLE_QUOTE_SPECIAL_CHARS:
+                return False
+        elif char in "'\"":
+            quote = char
+        elif char not in _SHELL_LITERAL_CHARS:
+            return False
+
+    return quote is None
+
+
+# The only programs merchant-manager may run: its registered read-only
+# Merchant adapter and the read-only RAG search tool.
+MERCHANT_MANAGER_SCRIPTS = frozenset(
+    {
+        ".claude/agents/tools/merchant/agent_cli.py",
+        ".claude/rag_search.py",
+    }
+)
+
+_MERCHANT_MANAGER_INTERPRETERS = frozenset(
+    {
+        "python",
+        "python.exe",
+        "py",
+        "py.exe",
+        ".venv/scripts/python.exe",
+        "./.venv/scripts/python.exe",
+    }
+)
+
+
+def exact_merchant_manager_command(command: Any) -> tuple[str, ...] | None:
+    """Return argv only for one literal, direct allowlisted script call.
+
+    The interpreter takes no flags and no environment assignment precedes
+    it: the second token is exactly an allowlisted script path.
+    """
+
+    if not isinstance(command, str):
+        return None
+
+    text = command.strip()
+
+    if not text or len(text) > 8192 or not _shell_text_is_literal(text):
+        return None
+
+    try:
+        tokens = tuple(shlex.split(text, posix=True))
+    except ValueError:
+        return None
+
+    if len(tokens) < 3:
+        return None
+
+    if tokens[0].replace("\\", "/").lower() not in (
+        _MERCHANT_MANAGER_INTERPRETERS
+    ):
+        return None
+
+    script = tokens[1]
+
+    if script.startswith("./"):
+        script = script[2:]
+
+    if script not in MERCHANT_MANAGER_SCRIPTS:
+        return None
+
+    return tokens
+
+
 def merchant_runtime_bypass_decision(
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Block merchant-manager from bypassing trusted runtime orchestration.
+    """Allow merchant-manager exactly one direct agent_cli.py invocation.
 
-    Merchant runtime apply authority belongs to the trusted orchestration layer.
-    The merchant-manager teammate may request a runtime apply only through the
-    registered SendMessage handoff contract; it must never import, execute, or
-    wrap the internal runtime handoff directly.
+    This is an allowlist, not a denylist: any shell text that is not one
+    literal invocation of the registered read-only adapter is denied, as is
+    every other execution or file-writing tool. It is defense in depth; the
+    privileged write APIs independently require a durable reservation and
+    the spent user scope.
+
+    Trust boundary: the decision relies on the harness-reported
+    ``agent_type`` of the calling pane and on Bash parsing the approved
+    text literally. It does not sandbox the interpreter: agent_cli.py runs
+    with the user's OS privileges and file access.
     """
 
     sender_agent_type = str(
@@ -3749,45 +3632,35 @@ def merchant_runtime_bypass_decision(
         or ""
     ).strip()
 
-    # Only inspect executable shell surfaces.
-    # Ordinary prose mentioning the runtime module must remain harmless.
+    if tool_name in MERCHANT_MANAGER_DENIED_TOOLS:
+        return deny(
+            f"Blocked: merchant-manager may not use {tool_name}. Its only "
+            "executable surface is one direct agent_cli.py invocation; a "
+            "scoped merchant_execute is requested with exactly one "
+            "MERCHANT_EXECUTE_REQUEST_JSON: message to team-lead."
+        )
+
     if tool_name not in SHELL_TOOLS:
         return None
 
     tool_input = payload.get("tool_input")
 
-    if not isinstance(tool_input, dict):
-        return None
-
-    executable_text = command_text(tool_input)
-
-    if not executable_text:
-        return None
-
-    normalized = (
-        executable_text
-        .replace("\\", "/")
-        .lower()
+    command = (
+        tool_input.get("command")
+        if isinstance(tool_input, dict)
+        else None
     )
 
-    forbidden_runtime_references = (
-        "merchant_runtime_handoff.py",
-        "claude.system.merchant_runtime_handoff",
-        "invoke_confirmed_merchant_session_apply",
-        "invoke_authorized_scope_apply",
-        "invoke_confirmed_merchant_apply",
-        "issue_runtime_apply_authorization",
-    )
-
-    if any(
-        reference in normalized
-        for reference in forbidden_runtime_references
-    ):
+    if exact_merchant_manager_command(command) is None:
         return deny(
-            "Blocked: merchant-manager cannot invoke, import, wrap, or execute "
-            "the orchestration-only Merchant runtime handoff. For a confirmed "
-            "merchant_apply, send exactly one "
-            "MERCHANT_APPLY_HANDOFF_REQUEST_JSON: message to team-lead and let "
+            "Blocked: merchant-manager may run only one literal direct "
+            "invocation of python .claude/agents/tools/merchant/agent_cli.py "
+            "or python .claude/rag_search.py, "
+            "with no interpreter flags, environment assignments, chaining, "
+            "redirection, substitution or other scripts. It cannot invoke, "
+            "import, wrap, or execute the orchestration-only Merchant runtime "
+            "handoff. For a scoped merchant_execute, send exactly one "
+            "MERCHANT_EXECUTE_REQUEST_JSON: message to team-lead and let "
             "the registered trusted orchestration own runtime authorization."
         )
 

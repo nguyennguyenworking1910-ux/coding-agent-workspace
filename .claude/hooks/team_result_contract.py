@@ -1,4 +1,4 @@
-﻿"""Pure structured task-result contract parsing.
+"""Pure structured task-result contract parsing.
 
 This module validates machine-readable teammate outcomes only.
 It performs no state mutation, lifecycle transition, Merchant apply,
@@ -11,27 +11,11 @@ import json
 from typing import Any
 
 
-MERCHANT_PROPOSAL_RESULT_MARKER = (
-    "MERCHANT_PROPOSAL_RESULT_JSON:"
-)
-
 TEAM_RESULT_MARKER = (
     "TEAM_RESULT_JSON:"
 )
 
 TEAM_RESULT_CONTRACT_VERSION = 1
-
-MERCHANT_PROPOSAL_READY_OUTCOME = (
-    "PROPOSAL_READY"
-)
-
-MERCHANT_APPLY_SUCCESS_OUTCOME = (
-    "APPLY_SUCCESS"
-)
-
-MERCHANT_APPLY_FAILED_OUTCOME = (
-    "APPLY_FAILED"
-)
 
 MERCHANT_EXECUTE_SUCCESS_OUTCOME = "EXECUTE_SUCCESS"
 MERCHANT_EXECUTE_FAILED_OUTCOME = "EXECUTE_FAILED"
@@ -49,8 +33,8 @@ def task_result_candidate_from_message(
     """Parse one strict structured teammate task outcome.
 
     This result describes what actually happened during the task.
-    It is not authorization and does not grant Merchant proposal
-    or apply authority.
+    It is not authorization and never grants Merchant execution
+    authority; committed PostgreSQL evidence does.
     """
 
     report = str(
@@ -87,63 +71,9 @@ def task_result_candidate_from_message(
     except json.JSONDecodeError:
         return None
 
-    trailing_content = (
-        encoded[end:].strip()
-    )
-
-    has_proposal_delivery_block = False
-
-    if trailing_content:
-        if (
-            trailing_content.count(
-                MERCHANT_PROPOSAL_RESULT_MARKER
-            )
-            != 1
-        ):
-            return None
-
-        if not trailing_content.startswith(
-            MERCHANT_PROPOSAL_RESULT_MARKER
-        ):
-            return None
-
-        _, proposal_encoded = (
-            trailing_content.split(
-                MERCHANT_PROPOSAL_RESULT_MARKER,
-                1,
-            )
-        )
-
-        proposal_encoded = (
-            proposal_encoded.strip()
-        )
-
-        if not proposal_encoded:
-            return None
-
-        try:
-            proposal_candidate, proposal_end = (
-                json.JSONDecoder().raw_decode(
-                    proposal_encoded
-                )
-            )
-        except json.JSONDecodeError:
-            return None
-
-        if (
-            proposal_encoded[
-                proposal_end:
-            ].strip()
-        ):
-            return None
-
-        if not isinstance(
-            proposal_candidate,
-            dict,
-        ):
-            return None
-
-        has_proposal_delivery_block = True
+    # Direct-only: reject trailing legacy proposal data.
+    if encoded[end:].strip():
+        return None
 
     if not isinstance(
         candidate,
@@ -187,9 +117,6 @@ def task_result_candidate_from_message(
     )
 
     allowed_outcomes = {
-        MERCHANT_PROPOSAL_READY_OUTCOME,
-        MERCHANT_APPLY_SUCCESS_OUTCOME,
-        MERCHANT_APPLY_FAILED_OUTCOME,
         MERCHANT_EXECUTE_SUCCESS_OUTCOME,
         MERCHANT_EXECUTE_FAILED_OUTCOME,
         *MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES,
@@ -210,19 +137,8 @@ def task_result_candidate_from_message(
     ):
         return None
 
-    if (
-        outcome
-        == MERCHANT_PROPOSAL_READY_OUTCOME
-    ):
-        if proposal_emitted is not True:
-            return None
-
-    else:
-        if proposal_emitted is not False:
-            return None
-
-        if has_proposal_delivery_block:
-            return None
+    if proposal_emitted is not False:
+        return None
 
     if outcome in {
         MERCHANT_EXECUTE_SUCCESS_OUTCOME,
@@ -232,7 +148,6 @@ def task_result_candidate_from_message(
             operation != "merchant_execute"
             or database_target != "runtime"
             or proposal_emitted is not False
-            or has_proposal_delivery_block
         ):
             return None
 
@@ -250,44 +165,6 @@ def task_result_candidate_from_message(
         if "proposal_hash" in candidate:
             return None
 
-    if outcome in {
-        MERCHANT_APPLY_SUCCESS_OUTCOME,
-        MERCHANT_APPLY_FAILED_OUTCOME,
-    }:
-        if (
-            operation
-            != "merchant_apply"
-            or database_target
-            != "runtime"
-            or proposal_emitted
-            is not False
-            or has_proposal_delivery_block
-        ):
-            return None
-
-        confirmation_hash = (
-            candidate.get(
-                "confirmation_hash"
-            )
-        )
-
-        if (
-            not isinstance(
-                confirmation_hash,
-                str,
-            )
-            or len(
-                confirmation_hash
-            )
-            != 64
-            or any(
-                character
-                not in "0123456789abcdef"
-                for character
-                in confirmation_hash
-            )
-        ):
-            return None
 
     if (
         outcome

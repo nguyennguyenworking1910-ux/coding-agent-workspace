@@ -17,12 +17,11 @@ try:
         BoundedRuntimeApplyFailureFn,
         BoundedRuntimeApplyResultFn,
         EmitPostToolContextFn,
-        HandleMerchantProposalReceiptFn,
         HandlePostToolUseFn,
         HandleTeammateIdleFn,
         PrepareMerchantRuntimeHandoffFn,
         RecordRuntimeHandoffResultFn,
-        InvokeConfirmedMerchantSessionApplyFn,
+        InvokeDirectMerchantExecuteFn,
         LockedStateFn,
     )
 except ImportError:
@@ -30,12 +29,11 @@ except ImportError:
         BoundedRuntimeApplyFailureFn,
         BoundedRuntimeApplyResultFn,
         EmitPostToolContextFn,
-        HandleMerchantProposalReceiptFn,
         HandlePostToolUseFn,
         HandleTeammateIdleFn,
         PrepareMerchantRuntimeHandoffFn,
         RecordRuntimeHandoffResultFn,
-        InvokeConfirmedMerchantSessionApplyFn,
+        InvokeDirectMerchantExecuteFn,
         LockedStateFn,
     )
 
@@ -51,7 +49,6 @@ class DispatcherDependencies:
     bounded_runtime_apply_failure: BoundedRuntimeApplyFailureFn
     bounded_runtime_apply_result: BoundedRuntimeApplyResultFn
     emit_post_tool_context: EmitPostToolContextFn
-    handle_merchant_proposal_receipt: HandleMerchantProposalReceiptFn
     handle_post_tool_use: HandlePostToolUseFn
     handle_teammate_idle: HandleTeammateIdleFn
 
@@ -64,7 +61,7 @@ class DispatcherDependencies:
     redirect_stdout: Callable[..., Any]
     sys: Any
 
-    invoke_trusted_merchant_session_apply: InvokeConfirmedMerchantSessionApplyFn
+    invoke_direct_merchant_execute: InvokeDirectMerchantExecuteFn
 
 
 def main(
@@ -97,9 +94,6 @@ def main(
         dependencies.emit_post_tool_context
     )
 
-    handle_merchant_proposal_receipt = (
-        dependencies.handle_merchant_proposal_receipt
-    )
 
     handle_post_tool_use = (
         dependencies.handle_post_tool_use
@@ -111,8 +105,8 @@ def main(
 
 
 
-    invoke_trusted_merchant_session_apply = (
-        dependencies.invoke_trusted_merchant_session_apply
+    invoke_direct_merchant_execute = (
+        dependencies.invoke_direct_merchant_execute
     )
 
     io = (
@@ -214,10 +208,10 @@ def main(
         if handoff_recognized:
             if handoff_attempt is None:
                 emit_post_tool_context(
-                    "Gate 12H runtime handoff was rejected before execution. "
+                    "Gate 12H execute request was rejected before execution. "
                     f"Reason: {handoff_reason}. "
-                    "No Merchant runtime apply was executed. Do not retry this "
-                    "message by changing its authority fields."
+                    "No Merchant runtime write was executed. Do not retry this "
+                    "message by changing its fields."
                 )
 
                 return 0
@@ -250,11 +244,10 @@ def main(
                         runtime_stderr
                     ),
                 ):
-                    # Authorization selection happens only inside the
-                    # trusted runtime handoff, never in teammate input.
-                    exit_code = invoke_trusted_merchant_session_apply(
-                        handoff_attempt.owner_session_id,
-                        handoff_attempt.arguments,
+                    # Authority comes only from the staged, user-scoped
+                    # attempt, never from teammate input.
+                    exit_code = invoke_direct_merchant_execute(
+                        handoff_attempt,
                     )
 
                 if exit_code == 0:
@@ -330,11 +323,12 @@ def main(
                 and result_recorded
             ):
                 emit_post_tool_context(
-                    "Gate 7.4 trusted runtime handoff succeeded for the exact "
-                    "confirmed Merchant apply. The apply attempt is spent and "
-                    "must not be executed again. Continue only with allowlisted "
-                    "read-only runtime verification. Do not send another "
-                    "MERCHANT_APPLY_HANDOFF_REQUEST_JSON for this run/task."
+                    "Merchant Direct EXECUTE succeeded for the exact "
+                    "user-authorized scope. The attempt is spent and must not "
+                    "be executed again. Continue only with allowlisted "
+                    "read-only runtime verification, then report "
+                    "EXECUTE_SUCCESS. Do not send another "
+                    "MERCHANT_EXECUTE_REQUEST_JSON for this run/task."
                 )
 
                 return 0
@@ -346,12 +340,12 @@ def main(
                 )
 
                 emit_post_tool_context(
-                    "Gate 7.4 trusted runtime handoff was attempted but did "
-                    "not complete successfully. "
+                    "Merchant Direct EXECUTE was attempted but did not "
+                    "complete successfully. "
                     f"Failure: {bounded_failure}. "
-                    "The attempt is spent and is not retryable. "
-                    "Do not execute Merchant apply through Bash, Python, "
-                    "agent_cli --apply, or another handoff request."
+                    "The attempt is spent and is not retryable. Report "
+                    "EXECUTE_FAILED. Do not execute a Merchant write through "
+                    "Bash, Python, or another execute request."
                 )
 
                 return 0
@@ -360,7 +354,7 @@ def main(
             # final result is an uncertain outcome, therefore fail closed and
             # never retry.
             emit_post_tool_context(
-                "Gate 7.4 runtime handoff reached an uncertain terminal state: "
+                "Merchant Direct EXECUTE reached an uncertain terminal state: "
                 "the attempt had already been reserved, but the bounded result "
                 "could not be persisted. Treat the attempt as spent. Do not "
                 "retry or use another runtime mutation path."
@@ -390,15 +384,6 @@ def main(
             # Direct authenticated teammate compatibility path only.
             # tmux Gate 11I does not trust SendMessage as proposal-token
             # authority.
-            if (
-                state
-                is not None
-            ):
-                handle_merchant_proposal_receipt(
-                    state,
-                    payload,
-                    session_id,
-                )
 
         elif (
             hook_event

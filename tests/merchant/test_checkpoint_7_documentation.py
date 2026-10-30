@@ -21,24 +21,25 @@ def test_checkpoint_7_handoff_exists_and_is_indexed():
     assert HANDOFF_NAME in root_readme
 
 
-def test_top_level_docs_record_the_completed_runtime_boundary():
+def test_top_level_docs_record_the_direct_execute_boundary():
     claude = _read("CLAUDE.md")
     root_readme = _read("README.md")
     architecture = _read(".claude/documents/ARCHITECTURE.md")
 
-    assert "invoke_confirmed_merchant_session_apply" in claude
-    assert "The ordinary CLI remains read/propose-only" in root_readme
+    assert "Merchant writes use Direct EXECUTE only" in claude
+    assert "invoke_confirmed_merchant_session_apply" not in claude
+    assert "The ordinary CLI is read-only for runtime" in root_readme
     assert "merchant_runtime_handoff.py" in architecture
-    assert "One-use in-process confirmed Merchant apply bridge" in architecture
-    assert "Merchant Manager      (Merchant reads/proposals; trusted apply)" in architecture
+    assert "user-scoped Merchant Direct EXECUTE bridge" in architecture
+    assert "Merchant Manager      (Merchant reads; trusted Direct EXECUTE)" in architecture
 
 
-def test_agent_frontmatter_matches_checkpoint_7_role():
+def test_agent_frontmatter_matches_direct_execute_role():
     agent = _read(".claude/agents/merchant-manager.md")
 
-    assert "participates in exact confirmed applies" in agent
-    assert "The ordinary CLI remains read/propose-only" in agent
-    assert "invoke_confirmed_merchant_session_apply" in agent
+    assert "performs user-authorized Merchant writes through Direct EXECUTE" in agent
+    assert "the ordinary CLI is read-only for runtime" in agent
+    assert "invoke_confirmed_merchant_session_apply" not in agent
 
 
 def test_handoff_records_all_three_merchant_operations():

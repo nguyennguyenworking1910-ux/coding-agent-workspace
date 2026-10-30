@@ -11,16 +11,10 @@ import json
 from typing import Any
 
 try:
-    from merchant_confirmation_preferences import (
-        validate_proposal_result,
-    )
     from tmux_merchant_completeness import (
         validate_completeness_result,
     )
 except ModuleNotFoundError:
-    from .merchant_confirmation_preferences import (
-        validate_proposal_result,
-    )
     from .tmux_merchant_completeness import (
         validate_completeness_result,
     )
@@ -113,29 +107,6 @@ def _exact_json_object(
     if not isinstance(
         candidate,
         dict,
-    ):
-        return None
-
-    return candidate
-
-
-def merchant_proposal_from_tool_response(
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Extract one fully validated exact Merchant CLI proposal."""
-
-    candidate = _exact_json_object(
-        payload
-    )
-
-    if candidate is None:
-        return None
-
-    if (
-        validate_proposal_result(
-            candidate
-        )
-        is None
     ):
         return None
 

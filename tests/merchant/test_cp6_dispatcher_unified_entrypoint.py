@@ -19,9 +19,8 @@ def test_dispatcher_uses_unified_trusted_entrypoint_only():
     calls = []
     receipts = []
 
-    def trusted_apply(session_id, arguments):
-        assert session_id == owner
-        assert tuple(arguments) == argv
+    def trusted_apply(handoff):
+        assert handoff is attempt
         calls.append("trusted")
         print(json.dumps({"success": True}))
         return 0
@@ -43,11 +42,10 @@ def test_dispatcher_uses_unified_trusted_entrypoint_only():
             {"success": True} if json.loads(output).get("success") else None
         ),
         emit_post_tool_context=Mock(),
-        handle_merchant_proposal_receipt=Mock(),
         handle_post_tool_use=Mock(),
         handle_teammate_idle=Mock(),
 
-        invoke_trusted_merchant_session_apply=trusted_apply,
+        invoke_direct_merchant_execute=trusted_apply,
         io=io, json=json,
         locked_state=result_lock,
         prepare_merchant_runtime_handoff=lambda _: (True, attempt, ""),

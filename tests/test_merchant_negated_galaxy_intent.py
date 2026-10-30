@@ -25,17 +25,17 @@ def test_galaxy_read_only_negated_actions():
     assert classify(request) == "merchant_read"
 
 
-def test_positive_activation_proposal_remains_propose():
+def test_activation_proposal_request_is_read_only_preview():
     request = (
         "Prepare a Merchant activation proposal for GALAXY. "
         "Do not apply or execute the proposal."
     )
-    assert classify(request) == "merchant_propose"
+    assert classify(request) == "merchant_read"
 
 
-def test_confirmed_activation_remains_apply():
+def test_confirmed_activation_becomes_execute():
     request = (
         "Apply the previously confirmed Merchant activation proposal "
         "for GALAXY."
     )
-    assert classify(request) == "merchant_apply"
+    assert classify(request) == "merchant_execute"

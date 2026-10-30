@@ -23,9 +23,14 @@ DEPENDENCY_MODULES = (
 )
 
 
-EXPECTED_TOTAL_FIELDS = 101
+# CP12H.2C.7 removed 12 precise legacy proposal/apply TeammateIdle fields
+# and added 2 precise Direct EXECUTE no-write fields. CP12H.3 removed 9 more
+# precise proposal/apply fields and added 2 precise legacy-termination
+# fields. CP12H.4C added 1 precise pane-identity field. No field was
+# loosened.
+EXPECTED_TOTAL_FIELDS = 85
 
-MINIMUM_PRECISE_FIELDS = 85
+MINIMUM_PRECISE_FIELDS = 73
 
 
 ALLOWED_LOOSE_FIELDS = {
@@ -114,7 +119,7 @@ SECURITY_CRITICAL_FIELDS = {
     "capture_proposal_receipt",
     "stage_runtime_handoff_attempt",
     "validate_completeness_receipt_for_outcome",
-    "invoke_trusted_merchant_session_apply",
+    "invoke_direct_merchant_execute",
     "contains_handoff_marker",
     "pending_merchant_completeness_matches",
     "pending_merchant_proposal_matches",

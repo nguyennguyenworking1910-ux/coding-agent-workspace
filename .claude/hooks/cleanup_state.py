@@ -41,11 +41,6 @@ if __package__ in (None, ""):
         load_team_state,
     )
 
-    from merchant_confirmation_preferences import (  # noqa: E402
-        clear_preferences,
-        load_preferences,
-    )
-
     from intent_envelope_bridge import (  # noqa: E402
         clear_intent_envelope,
         load_intent_envelope,
@@ -61,11 +56,6 @@ else:
         GLOBAL_OWNER_STATUSES,
         clear_team_state,
         load_team_state,
-    )
-
-    from .merchant_confirmation_preferences import (
-        clear_preferences,
-        load_preferences,
     )
 
     from .intent_envelope_bridge import (
@@ -178,10 +168,6 @@ def main() -> int:
             session_id
         )
 
-        clear_preferences(
-            session_id
-        )
-
         clear_intent_envelope(
             session_id
         )
@@ -197,10 +183,6 @@ def main() -> int:
             )
             is not None
             or load_team_state(
-                session_id
-            )
-            is not None
-            or load_preferences(
                 session_id
             )
             is not None

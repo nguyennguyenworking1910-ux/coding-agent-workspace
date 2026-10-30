@@ -6,12 +6,15 @@ from copy import deepcopy
 from typing import Any, Callable
 
 from claude.hooks.team_lifecycle import (
+    direct_authority_spent_for_run,
     load_team_state,
     locked_team_state,
     has_unresolved_direct_writes,
 )
 from claude.hooks.merchant_completion_receipt import (
+    NO_WRITE_TERMINAL_OUTCOMES,
     build_completion_receipt,
+    has_direct_write_footprint,
     receipt_matches_state,
 )
 from claude.hooks.merchant_direct_recovery import (
@@ -25,6 +28,115 @@ from claude.hooks.merchant_diagnostics import (
 
 class DirectCompletionError(RuntimeError):
     """Direct write completion cannot be established safely."""
+
+
+def _exact_running_direct_record(
+    state: Any,
+    *,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(state, dict):
+        return None
+
+    record = state.get("teammates", {}).get(teammate_name)
+
+    if not isinstance(record, dict):
+        return None
+
+    if (
+        record.get("canonical_name") != teammate_name
+        or record.get("status") != "RUNNING"
+        or record.get("current_run_id") != run_id
+        or record.get("current_task_id") != task_id
+        or record.get("authorized_operations")
+        != ["merchant_execute"]
+        or record.get("authorized_selected_agents")
+        != [teammate_name]
+        or record.get("result_received") is True
+    ):
+        return None
+
+    return record
+
+
+def direct_task_is_write_free(
+    *,
+    owner_session_id: str,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> bool:
+    """Routing hint: True only for an exact task with no write footprint.
+
+    Not authority. establish_no_write_terminal() re-verifies under the
+    lock, and the report and release boundaries verify again.
+    """
+
+    record = _exact_running_direct_record(
+        load_team_state(owner_session_id),
+        teammate_name=teammate_name,
+        run_id=run_id,
+        task_id=task_id,
+    )
+
+    return (
+        record is not None
+        and not has_direct_write_footprint(record)
+        and not direct_authority_spent_for_run(owner_session_id, run_id)
+    )
+
+
+def establish_no_write_terminal(
+    *,
+    owner_session_id: str,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+    outcome: Any,
+) -> bool:
+    """Persist a run/task-bound no-write terminal marker.
+
+    The outcome is the teammate's structured claim and is never
+    authority by itself. The marker is written only when trusted state
+    shows no reservation, receipt, or archived write for this task.
+    Reservation is refused once the marker exists.
+    """
+
+    if outcome not in NO_WRITE_TERMINAL_OUTCOMES:
+        return False
+
+    marker = {
+        "version": 1,
+        "run_id": run_id,
+        "task_id": task_id,
+        "outcome": outcome,
+    }
+
+    with locked_team_state(owner_session_id) as state:
+        record = _exact_running_direct_record(
+            state,
+            teammate_name=teammate_name,
+            run_id=run_id,
+            task_id=task_id,
+        )
+
+        if record is None or has_direct_write_footprint(record):
+            return False
+
+        # Spent authority means a write may exist; never no-write.
+        if direct_authority_spent_for_run(owner_session_id, run_id):
+            return False
+
+        existing = record.get("direct_no_write_terminal")
+
+        if existing is not None and existing != marker:
+            return False
+
+        record["direct_no_write_terminal"] = marker
+
+    return True
 
 
 def reconcile_all_direct_writes(
@@ -62,6 +174,10 @@ def reconcile_all_direct_writes(
         or record.get("authorized_selected_agents")
         != [teammate_name]
     ):
+        return False
+
+    # A task declared write-free must never acquire write completion.
+    if "direct_no_write_terminal" in record:
         return False
 
     writes = record.get("direct_writes")

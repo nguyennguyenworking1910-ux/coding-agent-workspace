@@ -17,6 +17,10 @@ from claude.system.merchant_runtime_handoff import (
     invoke_authorized_scope_apply,
     validate_direct_scope,
 )
+from tests.merchant.direct_reservation_support import (
+    isolate_team_state,
+    reserve_scoped_write,
+)
 
 
 SESSION_ID = "direct-scope-session"
@@ -48,6 +52,7 @@ class RecordingHandler:
 @pytest.fixture(autouse=True)
 def isolated_runtime_state(tmp_path, monkeypatch):
     monkeypatch.setenv(runtime_state.STATE_DIR_ENV_VAR, str(tmp_path))
+    isolate_team_state(monkeypatch, tmp_path)
 
 
 def _trusted_state(argv=AUTHORIZED_ARGV, **changes):
@@ -66,7 +71,7 @@ def _trusted_state(argv=AUTHORIZED_ARGV, **changes):
             "max_run_budget_usd": 2.0,
         },
         confirmed=True,
-        operations=["merchant_apply"],
+        operations=["merchant_execute"],
         run_id=RUN_ID,
         merchant_scope={
             "argv": list(scope["argv"]),
@@ -78,7 +83,7 @@ def _trusted_state(argv=AUTHORIZED_ARGV, **changes):
     )
     state["merchant_dispatch_spent"] = True
     state["merchant_dispatch"] = {
-        "operation": "merchant_apply",
+        "operation": "merchant_execute",
         "subagent_type": "merchant-manager",
         "teammate_name": "merchant-manager",
         "confirmation_hash": scope["confirmation_hash"],
@@ -96,6 +101,7 @@ def _invoke(argv, handler, capsys=None):
         SESSION_ID,
         argv,
         write_command_factory=lambda database: _commands(handler),
+        **reserve_scoped_write(SESSION_ID),
     )
 
 
@@ -272,7 +278,7 @@ def test_missing_scope_is_rejected(capsys):
 
 def test_proposal_confirmation_cannot_mix_with_direct_scope(capsys):
     handler = RecordingHandler()
-    state = _trusted_state(merchant_confirmation={"operation": "merchant_apply"})
+    state = _trusted_state(merchant_confirmation={"operation": "merchant_execute"})
     runtime_state.save_state(SESSION_ID, state)
 
     with pytest.raises(MerchantRuntimeHandoffError):

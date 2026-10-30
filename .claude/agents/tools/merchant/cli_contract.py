@@ -23,7 +23,8 @@ from typing import Any
 
 CONTRACT_VERSION = 1
 CONFIRMATION_VERSION = 1
-CONFIRMATION_OPERATION = "merchant_apply"
+# Internal operation label sealed into every runtime binding hash.
+CONFIRMATION_OPERATION = "merchant_execute"
 REDACTED_VALUE = "[REDACTED]"
 PROPOSAL_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CONFIRMATION_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -133,6 +134,7 @@ class RuntimeApplyAuthorization:
         "_confirmation",
         "_consumed",
         "_expires_at",
+        "_guard",
         "_lock",
     )
 
@@ -148,6 +150,7 @@ class RuntimeApplyAuthorization:
         *,
         expires_at: float,
         clock: Callable[[], float],
+        execution_guard: Callable[[], None],
         issuer_seal: object,
     ) -> "RuntimeApplyAuthorization":
         if issuer_seal is not _RUNTIME_AUTHORIZATION_ISSUER_SEAL:
@@ -162,6 +165,7 @@ class RuntimeApplyAuthorization:
         )
         authority._consumed = False
         authority._expires_at = expires_at
+        authority._guard = execution_guard
         authority._lock = threading.Lock()
         return authority
 
@@ -260,6 +264,15 @@ class RuntimeApplyAuthorization:
                 raise RuntimeWriteDeniedError(
                     "Runtime apply does not match the confirmed proposal"
                 )
+
+            # The issuer's durable-evidence check runs at the mutation
+            # boundary itself, after the capability is spent.
+            try:
+                self._guard()
+            except Exception as error:
+                raise RuntimeWriteDeniedError(
+                    "Runtime execution reservation is no longer valid"
+                ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -752,7 +765,7 @@ def parse_confirmation_token(
 
     if payload["operation"] != CONFIRMATION_OPERATION:
         raise ConfirmationEnvelopeError(
-            "Merchant confirmation operation must be merchant_apply"
+            "Merchant confirmation operation must be merchant_execute"
         )
 
     normalized_command = normalize_command(payload["command"])
@@ -827,13 +840,23 @@ def issue_runtime_apply_authorization(
         DEFAULT_RUNTIME_AUTHORIZATION_TTL_SECONDS
     ),
     clock: Callable[[], float] | None = None,
+    execution_guard: Callable[[], None],
 ) -> RuntimeApplyAuthorization:
     """Issue one in-memory capability from an accepted policy dispatch.
 
     This function is for the trusted orchestration handoff only. The ordinary
     CLI and Merchant Manager command-line adapter never call it and expose no
     argument or environment-variable path to its result.
+
+    ``execution_guard`` is required. It is invoked when the capability is
+    consumed, immediately before the repository mutation, and must raise
+    unless the durable execution reservation is still valid.
     """
+
+    if not callable(execution_guard):
+        raise RuntimeWriteDeniedError(
+            "Runtime authorization requires an execution guard"
+        )
 
     envelope = _confirmation_from_mapping(confirmation)
 
@@ -877,6 +900,7 @@ def issue_runtime_apply_authorization(
         envelope.to_dict(),
         expires_at=issued_at + float(ttl_seconds),
         clock=selected_clock,
+        execution_guard=execution_guard,
         issuer_seal=_RUNTIME_AUTHORIZATION_ISSUER_SEAL,
     )
 

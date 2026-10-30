@@ -18,9 +18,6 @@ if TYPE_CHECKING:
     from claude.hooks.merchant_completeness_gate import (
         CompletenessGateDecision,
     )
-    from claude.hooks.merchant_confirmation_preferences import (
-        ReceiptOutcome,
-    )
     from claude.hooks.merchant_runtime_handoff_gate import (
         PreparedRuntimeHandoff,
     )
@@ -98,15 +95,6 @@ class ValidateMerchantResolutionResultFn(Protocol):
         ...
 
 
-class CaptureProposalReceiptFn(Protocol):
-    def __call__(
-        self,
-        session_id: Any,
-        result: Any,
-    ) -> ReceiptOutcome:
-        ...
-
-
 class StageRuntimeHandoffAttemptFn(Protocol):
     def __call__(
         self,
@@ -133,17 +121,6 @@ class ValidateCompletenessReceiptForOutcomeFn(Protocol):
         ...
 
 
-class InvokeConfirmedMerchantSessionApplyFn(Protocol):
-    def __call__(
-        self,
-        session_id: str,
-        arguments: Sequence[str],
-        *,
-        write_command_factory: WriteCommandFactory | None = None,
-    ) -> int:
-        ...
-
-
 class ContainsHandoffMarkerFn(Protocol):
     def __call__(
         self,
@@ -161,33 +138,6 @@ class PendingMerchantCompletenessMatchesFn(Protocol):
         teammate_name: str,
         run_id: str,
         task_id: str,
-    ) -> bool:
-        ...
-
-
-class PendingMerchantProposalMatchesFn(Protocol):
-    def __call__(
-        self,
-        payload: Any,
-        *,
-        owner_session_id: Any,
-        teammate_name: Any,
-        run_id: Any,
-        task_id: Any,
-    ) -> bool:
-        ...
-
-
-class RuntimeHandoffMatchesFn(Protocol):
-    def __call__(
-        self,
-        state: Mapping[str, Any],
-        *,
-        owner_session_id: str,
-        teammate_name: str,
-        run_id: str,
-        task_id: str,
-        confirmation_hash: str,
     ) -> bool:
         ...
 
@@ -220,36 +170,11 @@ class StagePendingResultFn(Protocol):
         ...
 
 
-class CaptureMerchantProposalFromMessageFn(Protocol):
-    def __call__(
-        self,
-        state: dict[str, Any],
-        session_id: Any,
-        teammate_name: str,
-        message: str,
-    ) -> bool:
-        ...
-
-
 class LoadPendingMerchantCompletenessFn(Protocol):
     def __call__(
         self,
         pane_session_id: str,
     ) -> dict[str, Any] | None:
-        ...
-
-
-class BindReportedTeammatePaneSessionFn(Protocol):
-    def __call__(
-        self,
-        session_id: Any,
-        teammate_name: str,
-        pane_session_id: Any,
-        run_id: str,
-        task_id: str,
-        *,
-        required_operation: str,
-    ) -> tuple[bool, str]:
         ...
 
 
@@ -380,14 +305,6 @@ class MessageCandidateFn(Protocol):
         ...
 
 
-class MerchantReportSenderFn(Protocol):
-    def __call__(
-        self,
-        payload: dict[str, Any],
-    ) -> str:
-        ...
-
-
 class BoundMerchantCompletenessReceiptFn(Protocol):
     def __call__(
         self,
@@ -430,16 +347,6 @@ class MerchantCompletenessStageFn(Protocol):
         payload: dict[str, Any],
         session_id: Any,
         result: dict[str, Any],
-    ) -> bool:
-        ...
-
-
-class MerchantProposalStageFn(Protocol):
-    def __call__(
-        self,
-        payload: dict[str, Any],
-        session_id: Any,
-        proposal: dict[str, Any],
     ) -> bool:
         ...
 
@@ -502,16 +409,6 @@ class EmitPostToolContextFn(Protocol):
         ...
 
 
-class HandleMerchantProposalReceiptFn(Protocol):
-    def __call__(
-        self,
-        state: dict[str, Any],
-        payload: dict[str, Any],
-        session_id: Any,
-    ) -> bool:
-        ...
-
-
 class HandlePostToolUseFn(Protocol):
     def __call__(
         self,
@@ -543,9 +440,9 @@ class PrepareMerchantRuntimeHandoffFn(Protocol):
     ]:
         ...
 
-class ProposalRequiresLocalAutoReceiptFn(Protocol):
+
+class InvokeDirectMerchantExecuteFn(Protocol):
     def __call__(
         self,
-        session_id: Any,
-        result: Any,
-    ) -> bool: ...
+        attempt: Any,
+    ) -> int: ...

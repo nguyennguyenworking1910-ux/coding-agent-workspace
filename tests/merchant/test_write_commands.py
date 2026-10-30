@@ -43,13 +43,14 @@ def _runtime_authorization(proposal):
     return issue_runtime_apply_authorization(
         confirmation,
         {
-            "operation": "merchant_apply",
+            "operation": "merchant_execute",
             "subagent_type": "merchant-manager",
             "teammate_name": "merchant-manager",
             "confirmation_hash": confirmation[
                 "confirmation_hash"
             ],
         },
+        execution_guard=lambda: None,
     )
 
 

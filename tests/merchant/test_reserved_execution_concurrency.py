@@ -10,6 +10,10 @@ import pytest
 from claude.clients.merchant.atomic_create import _canonical_hash
 from claude.hooks import team_lifecycle
 from claude.hooks import merchant_reserved_execution as execution
+from claude.hooks import runtime_state
+from tests.merchant.direct_reservation_support import (
+    record_create_authority,
+)
 
 
 PAYLOAD = {
@@ -50,6 +54,17 @@ def environment(tmp_path, monkeypatch):
         "write_id": "write-1",
         "database": "test",
     }
+
+    # Trusted orchestration spent the user's scope for this reservation.
+    monkeypatch.setenv(
+        runtime_state.STATE_DIR_ENV_VAR, str(tmp_path / "run_state")
+    )
+    record_create_authority(
+        owner,
+        run_id="run-1",
+        task_id="task-1",
+        write_id="write-1",
+    )
 
     with team_lifecycle.locked_team_state(owner) as state:
         state.setdefault("teammates", {})["merchant-manager"] = {

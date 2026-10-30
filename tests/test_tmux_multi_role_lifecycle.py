@@ -42,9 +42,6 @@ from team_lifecycle import (  # noqa: E402
 from tmux_result_receipt import (  # noqa: E402
     load_pending_result,
 )
-from tmux_merchant_proposal import (  # noqa: E402
-    load_pending_merchant_proposal,
-)
 
 @pytest.fixture
 def isolated_runtime(monkeypatch, tmp_path):
@@ -284,7 +281,7 @@ def test_tmux_ambiguous_owner_fails_closed(
         record[
             "authorized_operations"
         ] = [
-            "merchant_propose",
+            "merchant_read",
         ]
 
         record[
@@ -541,1289 +538,19 @@ def test_tmux_sendmessage_without_role_hint_is_not_staged(
     )
     assert record["result_received"] is False
 
-def test_tmux_merchant_proposal_is_captured_for_lead_session(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = (
-        "lead-merchant-session"
-    )
 
-    pane_session_id = (
-        "merchant-pane-session"
-    )
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request=(
-                "prepare merchant proposal"
-            ),
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id="run-merchant-1",
-        ),
-    )
-
-    decision, teammate_name = (
-        allocate_teammate(
-            lead_session_id,
-            "merchant-manager",
-            "merchant-manager",
-        )
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        "run-merchant-1",
-        "task-merchant-1",
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    captured = []
-
-    def fake_capture(
-        session_id,
-        proposal,
-    ):
-        captured.append(
-            (
-                session_id,
-                proposal,
-            )
-        )
-
-        return SimpleNamespace(
-            accepted=True,
-            reason="",
-        )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        fake_capture,
-    )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "proposal_requires_local_auto_receipt",
-        lambda session_id, proposal: True,
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": (
-            "exact-cli-token"
-        ),
-        "command": "project update",
-    }
-
-    # We test orchestration here.
-    # validate_proposal_result itself already has
-    # its own dedicated tests.
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: (
-            exact_proposal
-            if payload.get(
-                "tool_name"
-            )
-            == "PowerShell"
-            else None
-        ),
-    )
-
-    # -------------------------------------------------
-    # 1. Merchant CLI produces the exact proposal.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "PostToolUse"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "tool_name": (
-                "PowerShell"
-            ),
-            "tool_use_id": (
-                "merchant-cli-propose"
-            ),
-            "tool_response": {
-                "stdout": json.dumps(
-                    exact_proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    pending_proposal = (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-    )
-
-    assert (
-        pending_proposal
-        is not None
-    )
-
-    assert (
-        pending_proposal[
-            "proposal"
-        ]
-        == exact_proposal
-    )
-
-    # Still only staged.
-    assert captured == []
-
-    # -------------------------------------------------
-    # 2. Model sends a MUTATED token in SendMessage.
-    #
-    # This must be delivery proof only.
-    # -------------------------------------------------
-
-    mutated_proposal = dict(
-        exact_proposal
-    )
-
-    mutated_proposal[
-        "confirmation_token"
-    ] = "model-mutated-token"
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "PostToolUse"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "tool_name": (
-                "SendMessage"
-            ),
-            "tool_use_id": (
-                "merchant-send-1"
-            ),
-            "tool_input": {
-                "recipient": (
-                    "team-lead"
-                ),
-                "to": (
-                    "team-lead"
-                ),
-                "content": (
-                    "Proposal delivered"
-                ),
-                "message": (
-                    "Merchant proposal complete\n"
-                    "MERCHANT_PROPOSAL_RESULT_JSON:\n"
-                    + json.dumps(
-                        mutated_proposal
-                    )
-                ),
-            },
-        }
-    ) == 0
-
-    # SendMessage must NOT capture proposal authority.
-    assert captured == []
-
-    # -------------------------------------------------
-    # 3. Trusted TeammateIdle consumes exact CLI copy.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "TeammateIdle"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "teammate_name": (
-                "merchant-manager"
-            ),
-        }
-    ) == 0
-
-    assert (
-        len(captured)
-        == 1
-    )
-
-    (
-        captured_session_id,
-        captured_proposal,
-    ) = captured[0]
-
-    assert (
-        captured_session_id
-        == lead_session_id
-    )
-
-    # Critical Gate 11I assertion:
-    assert (
-        captured_proposal
-        == exact_proposal
-    )
-
-    assert (
-        captured_proposal[
-            "confirmation_token"
-        ]
-        == "exact-cli-token"
-    )
-
-    assert (
-        captured_proposal[
-            "confirmation_token"
-        ]
-        != mutated_proposal[
-            "confirmation_token"
-        ]
-    )
-
-    # Raw transient token must be cleaned.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-    state = load_team_state(
-        lead_session_id
-    )
-
-    record = state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus
-        .IDLE_REUSABLE
-        .value
-    )
-
-    assert (
-        record["result_received"]
-        is True
-    )
-
-def test_tmux_merchant_proposal_survives_stop_before_idle(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = (
-        "lead-stop-session"
-    )
-
-    pane_session_id = (
-        "merchant-stop-pane"
-    )
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request=(
-                "prepare merchant proposal"
-            ),
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id="run-stop-1",
-        ),
-    )
-
-    decision, teammate_name = (
-        allocate_teammate(
-            lead_session_id,
-            "merchant-manager",
-            "merchant-manager",
-        )
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        "run-stop-1",
-        "task-stop-1",
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    captured = []
-
-    def fake_capture(
-        session_id,
-        proposal,
-    ):
-        captured.append(
-            (
-                session_id,
-                proposal,
-            )
-        )
-
-        return SimpleNamespace(
-            accepted=True,
-            reason="",
-        )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        fake_capture,
-    )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "proposal_requires_local_auto_receipt",
-        lambda session_id, proposal: True,
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": (
-            "exact-stop-token"
-        ),
-        "command": "project update",
-    }
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: (
-            exact_proposal
-            if payload.get(
-                "tool_name"
-            )
-            == "PowerShell"
-            else None
-        ),
-    )
-
-    # -------------------------------------------------
-    # Exact CLI proposal happens BEFORE Stop.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "PostToolUse"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "tool_name": (
-                "PowerShell"
-            ),
-            "tool_use_id": (
-                "merchant-stop-cli"
-            ),
-            "tool_response": {
-                "stdout": json.dumps(
-                    exact_proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    pending_proposal = (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-    )
-
-    assert (
-        pending_proposal
-        is not None
-    )
-
-    assert (
-        pending_proposal[
-            "proposal"
-        ]
-        == exact_proposal
-    )
-
-    # -------------------------------------------------
-    # SendMessage report.
-    # -------------------------------------------------
-
-    mutated_proposal = dict(
-        exact_proposal
-    )
-
-    mutated_proposal[
-        "confirmation_token"
-    ] = "mutated-stop-token"
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "PostToolUse"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "tool_name": (
-                "SendMessage"
-            ),
-            "tool_use_id": (
-                "merchant-stop-send"
-            ),
-            "tool_input": {
-                "recipient": (
-                    "team-lead"
-                ),
-                "to": (
-                    "team-lead"
-                ),
-                "content": (
-                    "Proposal delivered"
-                ),
-                "message": (
-                    "Merchant proposal complete\n"
-                    "MERCHANT_PROPOSAL_RESULT_JSON:\n"
-                    + json.dumps(
-                        mutated_proposal
-                    )
-                ),
-            },
-        }
-    ) == 0
-
-    assert captured == []
-
-    # -------------------------------------------------
-    # Real ordering:
-    # Stop removes run state before TeammateIdle.
-    # -------------------------------------------------
-
-    assert clear_state(
-        lead_session_id
-    )
-
-    # Exact proposal must still exist because its owner/run/task
-    # binding was captured before Stop.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is not None
-    )
-
-    # -------------------------------------------------
-    # Trusted TeammateIdle.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": (
-                "TeammateIdle"
-            ),
-            "session_id": (
-                pane_session_id
-            ),
-            "agent_type": (
-                "merchant-manager"
-            ),
-            "teammate_name": (
-                "merchant-manager"
-            ),
-        }
-    ) == 0
-
-    assert (
-        len(captured)
-        == 1
-    )
-
-    (
-        captured_session_id,
-        captured_proposal,
-    ) = captured[0]
-
-    assert (
-        captured_session_id
-        == lead_session_id
-    )
-
-    assert (
-        captured_proposal
-        == exact_proposal
-    )
-
-    assert (
-        captured_proposal[
-            "confirmation_token"
-        ]
-        == "exact-stop-token"
-    )
-
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-    state = load_team_state(
-        lead_session_id
-    )
-
-    record = state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus
-        .IDLE_REUSABLE
-        .value
-    )
-
-    assert (
-        record[
-            "last_completed_task_id"
-        ]
-        == "task-stop-1"
-    )
-
-def test_tmux_merchant_proposal_prose_only_does_not_capture(
-    isolated_runtime,
-    monkeypatch,
-):
-    captured = []
-
-    def fake_capture(
-        session_id,
-        proposal,
-    ):
-        captured.append(
-            (
-                session_id,
-                proposal,
-            )
-        )
-
-        return SimpleNamespace(
-            accepted=True,
-            reason="",
-        )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        fake_capture,
-    )
-
-    message = (
-        "Proposal Status: SUCCESS\n"
-        "- Code: GATE11_TMUX\n"
-        "- Database Target: runtime\n"
-        "- Confirmation token: ready"
-    )
-
-    result = (
-        team_result_hook
-        .merchant_proposal_candidate_from_message(
-            message
-        )
-    )
-
-    assert result is None
-    assert captured == []
-
-def test_tmux_merchant_proposal_marker_requires_exact_json():
-    message = (
-        "MERCHANT_PROPOSAL_RESULT_JSON:\n"
-        '{"success": true, '
-        '"confirmation_token": "token"}\n'
-        "extra prose"
-    )
-
-    assert (
-        team_result_hook
-        .merchant_proposal_candidate_from_message(
-            message
-        )
-        is None
-    )
-
-def test_tmux_merchant_proposal_stages_when_agent_id_is_present(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = "lead-agent-id-session"
-    pane_session_id = "merchant-agent-id-pane"
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id="run-agent-id-1",
-        ),
-    )
-
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        "run-agent-id-1",
-        "task-agent-id-1",
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": "exact-agent-id-token",
-        "command": "project update",
-    }
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: (
-            exact_proposal
-            if payload.get("tool_name") == "Bash"
-            else None
-        ),
-    )
-
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_id": "merchant-agent-id",
-            "agent_type": "merchant-manager",
-            "tool_name": "Bash",
-            "tool_use_id": "merchant-agent-id-cli",
-            "tool_response": {
-                "stdout": json.dumps(
-                    exact_proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    pending = load_pending_merchant_proposal(
-        pane_session_id
-    )
-
-    assert pending is not None
-
-    assert (
-        pending["owner_session_id"]
-        == lead_session_id
-    )
-
-    assert (
-        pending["teammate_name"]
-        == "merchant-manager"
-    )
-
-    assert (
-        pending["run_id"]
-        == "run-agent-id-1"
-    )
-
-    assert (
-        pending["task_id"]
-        == "task-agent-id-1"
-    )
-
-    assert (
-        pending["proposal"]
-        == exact_proposal
-    )
-
-def test_tmux_merchant_proposal_missing_exact_cli_blocks_idle(
+def test_tmux_merchant_clarification_is_terminal_without_write(
     isolated_runtime,
 ):
-    lead_session_id = "lead-missing-proposal"
-    pane_session_id = "pane-missing-proposal"
+    """A clarification result is terminal even when merchant_execute was authorized.
 
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id="run-missing-proposal",
-        ),
-    )
+    Authorization permits the teammate to attempt a write. It does not mean
+    that every task outcome must contain a write.
 
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        "run-missing-proposal",
-        "task-missing-proposal",
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    # SendMessage exists, but NO exact CLI proposal was staged.
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "tool_name": "SendMessage",
-            "tool_use_id": "missing-proposal-send",
-            "tool_input": {
-                "recipient": "team-lead",
-                "content": "Proposal delivered",
-                "message": (
-                    "Merchant proposal complete"
-                ),
-            },
-        }
-    ) == 0
-
-    result = run_hook(
-        {
-            "hook_event_name": "TeammateIdle",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "teammate_name": "merchant-manager",
-        }
-    )
-
-    # TeammateIdle must be rejected.
-    assert result == 2
-
-    state = load_team_state(
-        lead_session_id
-    )
-
-    record = state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus
-        .REPORT_RECEIVED
-        .value
-    )
-
-    assert (
-        record["current_run_id"]
-        == "run-missing-proposal"
-    )
-
-    assert (
-        record["current_task_id"]
-        == "task-missing-proposal"
-    )
-
-    # SendMessage evidence must remain.
-    assert (
-        load_pending_result(
-            pane_session_id
-        )
-        is not None
-    )
-
-    # No exact CLI proposal exists.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-
-def test_tmux_merchant_proposal_capture_failure_blocks_idle_and_preserves_evidence(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = "lead-capture-failure"
-    pane_session_id = "pane-capture-failure"
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id="run-capture-failure",
-        ),
-    )
-
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        "run-capture-failure",
-        "task-capture-failure",
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": (
-            "exact-capture-failure-token"
-        ),
-        "command": "project update",
-    }
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: (
-            exact_proposal
-            if payload.get("tool_name") == "Bash"
-            else None
-        ),
-    )
-
-    # Stage exact CLI proposal.
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_id": "merchant-agent-id",
-            "agent_type": "merchant-manager",
-            "tool_name": "Bash",
-            "tool_use_id": "capture-failure-cli",
-            "tool_response": {
-                "stdout": json.dumps(
-                    exact_proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is not None
-    )
-
-    # Delivery proof.
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "tool_name": "SendMessage",
-            "tool_use_id": "capture-failure-send",
-            "tool_input": {
-                "recipient": "team-lead",
-                "content": "Proposal delivered",
-                "message": (
-                    "Merchant proposal complete"
-                ),
-            },
-        }
-    ) == 0
-
-    # Force long-lived receipt capture to fail.
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        lambda session_id, proposal: (
-            SimpleNamespace(
-                accepted=False,
-                reason="forced failure",
-            )
-        ),
-    )
-
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "proposal_requires_local_auto_receipt",
-        lambda session_id, proposal: True,
-    )
-    result = run_hook(
-        {
-            "hook_event_name": "TeammateIdle",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "teammate_name": "merchant-manager",
-        }
-    )
-
-    assert result == 2
-
-    state = load_team_state(
-        lead_session_id
-    )
-
-    record = state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    # Must NOT become reusable.
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus
-        .REPORT_RECEIVED
-        .value
-    )
-
-    assert (
-        record["current_run_id"]
-        == "run-capture-failure"
-    )
-
-    assert (
-        record["current_task_id"]
-        == "task-capture-failure"
-    )
-
-    # Both pieces of evidence must survive for diagnosis/retry.
-    assert (
-        load_pending_result(
-            pane_session_id
-        )
-        is not None
-    )
-
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is not None
-    )
-
-def test_tmux_merchant_proposal_stages_after_lead_run_state_is_cleared(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = "lead-stop-before-cli"
-    pane_session_id = "pane-stop-before-cli"
-
-    run_state = new_state(
-        request="prepare merchant proposal",
-        task_class="small_task",
-        risk_level="read_only",
-        selected_agents=[
-            "merchant-manager",
-        ],
-        operations=[
-            "merchant_propose",
-        ],
-        limits={
-            "max_members": 1,
-            "max_total_tool_calls": 10,
-        },
-        confirmed=False,
-        run_id="run-stop-before-cli",
-    )
-
-    save_state(
-        lead_session_id,
-        run_state,
-    )
-
-    # Use the real policy gate so authorization is snapshotted
-    # exactly where production dispatch does it.
-    assert policy_gate.apply_call(
-        run_state,
-        "Agent",
-        {
-            "subagent_type": "merchant-manager",
-            "name": "merchant-manager",
-            "prompt": (
-                "Prepare the Merchant proposal required by the current "
-                "authorized run using the registered Merchant tooling."
-            ),
-        },
-        lead_session_id,
-    ) is None
-
-    team_state = load_team_state(
-        lead_session_id
-    )
-
-    record = team_state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    assert (
-        record[
-            "authorized_operations"
-        ]
-        == [
-            "merchant_propose"
-        ]
-    )
-
-    assert (
-        record[
-            "authorized_selected_agents"
-        ]
-        == [
-            "merchant-manager"
-        ]
-    )
-
-    # Critical production ordering:
-    # runtime state disappears BEFORE Merchant CLI PostToolUse.
-    assert clear_state(
-        lead_session_id
-    )
-
-    assert (
-        load_state(
-            lead_session_id
-        )
-        is None
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": (
-            "exact-stop-before-cli-token"
-        ),
-        "command": "project create",
-    }
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        lambda payload: (
-            exact_proposal
-            if payload.get(
-                "tool_name"
-            )
-            == "Bash"
-            else None
-        ),
-    )
-
-    # Must stage successfully even though runtime_state is gone.
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_id": "merchant-agent",
-            "agent_type": "merchant-manager",
-            "tool_name": "Bash",
-            "tool_use_id": "stop-before-cli-tool",
-            "tool_response": {
-                "stdout": json.dumps(
-                    exact_proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    pending = (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-    )
-
-    assert pending is not None
-
-    assert (
-        pending[
-            "owner_session_id"
-        ]
-        == lead_session_id
-    )
-
-    assert (
-        pending[
-            "run_id"
-        ]
-        == "run-stop-before-cli"
-    )
-
-    assert (
-        pending[
-            "proposal"
-        ]
-        == exact_proposal
-    )
-
-def test_tmux_merchant_clarification_is_terminal_without_proposal(
-    isolated_runtime,
-    monkeypatch,
-):
-    """A clarification result is terminal even when merchant_propose was authorized.
-
-    Authorization permits the teammate to attempt a proposal. It does not mean
-    that every task outcome must contain a proposal.
-
-    REQUIRES_CLARIFICATION must:
+    REQUIRES_CLARIFICATION for a task with no write footprint must:
     - accept the already-delivered SendMessage;
-    - require no Merchant proposal;
-    - create no proposal receipt;
+    - match exact CLI completeness evidence;
+    - record a run/task-bound no-write terminal marker;
     - release the teammate to IDLE_REUSABLE;
     - consume the pending SendMessage receipt.
     """
@@ -1845,7 +572,7 @@ def test_tmux_merchant_clarification_is_terminal_without_proposal(
                 "merchant-manager",
             ],
             operations=[
-                "merchant_propose",
+                "merchant_execute",
             ],
             limits={
                 "max_members": 1,
@@ -1875,30 +602,17 @@ def test_tmux_merchant_clarification_is_terminal_without_proposal(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_execute",
         ],
         selected_agents=[
             "merchant-manager",
         ],
     )
 
-    # A clarification outcome must never attempt to capture
-    # Merchant proposal authority.
-    def unexpected_capture(*args, **kwargs):
-        pytest.fail(
-            "REQUIRES_CLARIFICATION must not capture a Merchant proposal receipt"
-        )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        unexpected_capture,
-    )
-
     clarification_result = {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -1963,12 +677,12 @@ def test_tmux_merchant_clarification_is_terminal_without_proposal(
 
     assert pending_result is not None
 
-    # Clarification did not produce a proposal.
+    # SendMessage alone does not complete a Direct EXECUTE task.
     assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
+        load_team_state(lead_session_id)["teammates"][
+            "merchant-manager"
+        ]["status"]
+        == TeammateLifecycleStatus.RUNNING.value
     )
 
     # -------------------------------------------------
@@ -2024,472 +738,11 @@ def test_tmux_merchant_clarification_is_terminal_without_proposal(
         is None
     )
 
-    # No proposal was invented.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
+    # No write was invented, and the task-bound marker is spent.
+    assert "direct_writes" not in record
+    assert "direct_completion_receipt" not in record
+    assert "direct_no_write_terminal" not in record
 
-
-def test_tmux_merchant_proposal_ready_without_exact_proposal_fails_closed(
-    isolated_runtime,
-):
-    """PROPOSAL_READY must never release without exact CLI proposal evidence."""
-
-    lead_session_id = "lead-proposal-ready-missing"
-    pane_session_id = "pane-proposal-ready-missing"
-    run_id = "run-proposal-ready-missing"
-    task_id = "task-proposal-ready-missing"
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=[
-                "merchant-manager",
-            ],
-            operations=[
-                "merchant_propose",
-            ],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id=run_id,
-        ),
-    )
-
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert (
-        decision
-        == TeammateAllocationDecision.CREATE
-    )
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        run_id,
-        task_id,
-        operations=[
-            "merchant_propose",
-        ],
-        selected_agents=[
-            "merchant-manager",
-        ],
-    )
-
-    proposal_ready_result = {
-        "contract_version": 1,
-        "outcome": "PROPOSAL_READY",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "proposal_emitted": True,
-    }
-
-    # -------------------------------------------------
-    # 1. Teammate CLAIMS proposal ready.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "tool_name": "SendMessage",
-            "tool_use_id": "proposal-ready-send",
-            "tool_input": {
-                "recipient": "team-lead",
-                "message": (
-                    "Merchant proposal prepared.\n"
-                    "TEAM_RESULT_JSON:\n"
-                    + json.dumps(
-                        proposal_ready_result
-                    )
-                ),
-            },
-        }
-    ) == 0
-
-    assert (
-        load_pending_result(
-            pane_session_id
-        )
-        is not None
-    )
-
-    # Critical setup:
-    # there is NO authoritative CLI-staged proposal.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-    # -------------------------------------------------
-    # 2. TeammateIdle MUST fail closed.
-    # -------------------------------------------------
-
-    assert run_hook(
-        {
-            "hook_event_name": "TeammateIdle",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "teammate_name": "merchant-manager",
-        }
-    ) == 2
-
-    # -------------------------------------------------
-    # 3. Teammate must NOT become reusable.
-    # -------------------------------------------------
-
-    team_state = load_team_state(
-        lead_session_id
-    )
-
-    record = team_state[
-        "teammates"
-    ][
-        "merchant-manager"
-    ]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus
-        .REPORT_RECEIVED
-        .value
-    )
-
-    assert record["result_received"] is True
-
-    assert (
-        record["current_run_id"]
-        == run_id
-    )
-
-    assert (
-        record["current_task_id"]
-        == task_id
-    )
-
-    # Delivery evidence is retained because reconciliation failed.
-    assert (
-        load_pending_result(
-            pane_session_id
-        )
-        is not None
-    )
-
-    # Most important assertion:
-    # SendMessage outcome never creates proposal authority.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-
-def test_tmux_merchant_malformed_task_result_does_not_bypass_proposal_gate(
-    isolated_runtime,
-):
-    """Malformed TEAM_RESULT_JSON must fall back to Gate 11 fail-closed behavior."""
-
-    lead_session_id = "lead-malformed-result"
-    pane_session_id = "pane-malformed-result"
-    run_id = "run-malformed-result"
-    task_id = "task-malformed-result"
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=["merchant-manager"],
-            operations=["merchant_propose"],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id=run_id,
-        ),
-    )
-
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert decision == TeammateAllocationDecision.CREATE
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        run_id,
-        task_id,
-        operations=["merchant_propose"],
-        selected_agents=["merchant-manager"],
-    )
-
-    # Missing required proposal_emitted field.
-    malformed_result = {
-        "contract_version": 1,
-        "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "missing_fields": [
-            "target_action",
-        ],
-        "question": "What exact action should be performed?",
-    }
-
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "tool_name": "SendMessage",
-            "tool_use_id": "malformed-result-send",
-            "tool_input": {
-                "recipient": "team-lead",
-                "message": (
-                    "Merchant result.\n"
-                    "TEAM_RESULT_JSON:\n"
-                    + json.dumps(malformed_result)
-                ),
-            },
-        }
-    ) == 0
-
-    # Invalid task outcome must not disable Gate 11 proposal requirement.
-    assert run_hook(
-        {
-            "hook_event_name": "TeammateIdle",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "teammate_name": "merchant-manager",
-        }
-    ) == 2
-
-    state = load_team_state(lead_session_id)
-
-    record = state["teammates"]["merchant-manager"]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus.REPORT_RECEIVED.value
-    )
-
-    assert record["current_run_id"] == run_id
-    assert record["current_task_id"] == task_id
-
-    assert load_pending_result(pane_session_id) is not None
-    assert load_pending_merchant_proposal(pane_session_id) is None
-
-
-def test_tmux_merchant_contradictory_clarification_with_proposal_fails_closed(
-    isolated_runtime,
-):
-    """Clarification outcome must not coexist with staged proposal authority."""
-
-    lead_session_id = "lead-contradictory-result"
-    pane_session_id = "pane-contradictory-result"
-    run_id = "run-contradictory-result"
-    task_id = "task-contradictory-result"
-
-    save_state(
-        lead_session_id,
-        new_state(
-            request="prepare merchant proposal",
-            task_class="small_task",
-            risk_level="read_only",
-            selected_agents=["merchant-manager"],
-            operations=["merchant_propose"],
-            limits={
-                "max_members": 1,
-                "max_total_tool_calls": 10,
-            },
-            confirmed=False,
-            run_id=run_id,
-        ),
-    )
-
-    decision, teammate_name = allocate_teammate(
-        lead_session_id,
-        "merchant-manager",
-        "merchant-manager",
-    )
-
-    assert decision == TeammateAllocationDecision.CREATE
-
-    assert mark_teammate_running(
-        lead_session_id,
-        teammate_name,
-        run_id,
-        task_id,
-        operations=["merchant_propose"],
-        selected_agents=["merchant-manager"],
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": "exact-cli-token",
-        "command": "project update",
-    }
-
-    original_parser = (
-        team_result_hook.merchant_proposal_from_tool_response
-    )
-
-    try:
-        team_result_hook.merchant_proposal_from_tool_response = (
-            lambda payload: (
-                exact_proposal
-                if payload.get("tool_name") == "PowerShell"
-                else None
-            )
-        )
-
-        # Stage exact proposal authority first.
-        assert run_hook(
-            {
-                "hook_event_name": "PostToolUse",
-                "session_id": pane_session_id,
-                "agent_type": "merchant-manager",
-                "tool_name": "PowerShell",
-                "tool_use_id": "contradictory-cli",
-                "tool_response": {
-                    "stdout": json.dumps(exact_proposal),
-                    "stderr": "",
-                },
-            }
-        ) == 0
-
-    finally:
-        team_result_hook.merchant_proposal_from_tool_response = (
-            original_parser
-        )
-
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is not None
-    )
-
-    clarification_result = {
-        "contract_version": 1,
-        "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "proposal_emitted": False,
-        "missing_fields": [
-            "target_action",
-        ],
-        "question": "What exact action should be performed?",
-    }
-
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "tool_name": "SendMessage",
-            "tool_use_id": "contradictory-send",
-            "tool_input": {
-                "recipient": "team-lead",
-                "message": (
-                    "Merchant task requires clarification.\n"
-                    "TEAM_RESULT_JSON:\n"
-                    + json.dumps(clarification_result)
-                ),
-            },
-        }
-    ) == 0
-
-    # Structured outcome says no proposal, but exact proposal exists.
-    # This contradiction must fail closed.
-    assert run_hook(
-        {
-            "hook_event_name": "TeammateIdle",
-            "session_id": pane_session_id,
-            "agent_type": "merchant-manager",
-            "teammate_name": "merchant-manager",
-        }
-    ) == 2
-
-    state = load_team_state(lead_session_id)
-    record = state["teammates"]["merchant-manager"]
-
-    assert (
-        record["status"]
-        == TeammateLifecycleStatus.REPORT_RECEIVED.value
-    )
-
-    # Preserve evidence for diagnosis.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is not None
-    )
-
-    assert (
-        load_pending_result(
-            pane_session_id
-        )
-        is not None
-    )
-
-def test_task_result_parser_accepts_proposal_ready_before_exact_proposal_block():
-    """PROPOSAL_READY may precede the Gate 11 exact proposal delivery block."""
-
-    task_result = {
-        "contract_version": 1,
-        "outcome": "PROPOSAL_READY",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "proposal_emitted": True,
-    }
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "confirmation_token": "exact-cli-token",
-        "command": "project update",
-    }
-
-    message = (
-        "Merchant proposal complete.\n"
-        "TEAM_RESULT_JSON:\n"
-        + json.dumps(task_result)
-        + "\n"
-        "MERCHANT_PROPOSAL_RESULT_JSON:\n"
-        + json.dumps(exact_proposal)
-    )
-
-    assert (
-        team_result_hook.task_result_candidate_from_message(
-            message
-        )
-        == task_result
-    )
 
 def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
     isolated_runtime,
@@ -2513,8 +766,7 @@ def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
         lead_session_id,
         new_state(
             request=(
-                "prepare a proposal to add Appendix 16 "
-                "to merchant CGV"
+                "add Appendix 16 to merchant CGV"
             ),
             task_class="small_task",
             risk_level="read_only",
@@ -2522,7 +774,7 @@ def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
                 "merchant-manager",
             ],
             operations=[
-                "merchant_propose",
+                "merchant_execute",
             ],
             limits={
                 "max_members": 1,
@@ -2552,7 +804,7 @@ def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_execute",
         ],
         selected_agents=[
             "merchant-manager",
@@ -2619,10 +871,14 @@ def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
         "merchant-manager"
     ]
 
+    # A malformed Direct EXECUTE result is never recorded as a
+    # trusted report; the correction turn stays bound to the task.
     assert (
         record["status"]
-        == TeammateLifecycleStatus.REPORT_RECEIVED.value
+        == TeammateLifecycleStatus.RUNNING.value
     )
+    assert record["result_received"] is False
+    assert record["terminal_recovery_sent"] is True
 
     # -------------------------------------------------
     # Second identical idle attempt:
@@ -2653,13 +909,10 @@ def test_tmux_malformed_merchant_result_blocks_only_once_then_fails_terminally(
     assert record["current_run_id"] is None
     assert record["current_task_id"] is None
 
-    # Nothing may invent proposal authority.
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
+    # Nothing may invent write or no-write terminal evidence.
+    assert "direct_writes" not in record
+    assert "direct_no_write_terminal" not in record
+    assert load_pending_result(pane_session_id) is None
 
 
 def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
@@ -2676,8 +929,7 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
         lead_session_id,
         new_state(
             request=(
-                "prepare a proposal to add Appendix 16 "
-                "to merchant CGV"
+                "add Appendix 16 to merchant CGV"
             ),
             task_class="small_task",
             risk_level="read_only",
@@ -2685,7 +937,7 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
                 "merchant-manager",
             ],
             operations=[
-                "merchant_propose",
+                "merchant_execute",
             ],
             limits={
                 "max_members": 1,
@@ -2715,7 +967,7 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_execute",
         ],
         selected_agents=[
             "merchant-manager",
@@ -2769,7 +1021,7 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
 
     assert (
         record["status"]
-        == TeammateLifecycleStatus.REPORT_RECEIVED.value
+        == TeammateLifecycleStatus.RUNNING.value
     )
 
     assert (
@@ -2779,14 +1031,14 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
 
     # -------------------------------------------------
     # Same task now sends the corrected structured
-    # outcome. No work is repeated and no proposal is
+    # outcome. No work is repeated and no write is
     # invented.
     # -------------------------------------------------
 
     corrected_result = {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -2867,12 +1119,8 @@ def test_tmux_invalid_merchant_result_can_recover_with_valid_clarification(
         is None
     )
 
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
+    assert "direct_writes" not in record
+    assert "direct_no_write_terminal" not in record
 
 
 def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
@@ -2889,8 +1137,7 @@ def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
         lead_session_id,
         new_state(
             request=(
-                "prepare a proposal to add Appendix 16 "
-                "to merchant CGV"
+                "add Appendix 16 to merchant CGV"
             ),
             task_class="small_task",
             risk_level="read_only",
@@ -2898,7 +1145,7 @@ def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
                 "merchant-manager",
             ],
             operations=[
-                "merchant_propose",
+                "merchant_execute",
             ],
             limits={
                 "max_members": 1,
@@ -2928,7 +1175,7 @@ def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_execute",
         ],
         selected_agents=[
             "merchant-manager",
@@ -2938,7 +1185,7 @@ def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
     clarification_result = {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": "merchant_propose",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -3075,12 +1322,8 @@ def test_tmux_repeated_idle_after_valid_clarification_is_idempotent(
         is None
     )
 
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
+    # Repeated idle never re-establishes no-write evidence.
+    assert "direct_no_write_terminal" not in final_record
 
 
 def test_second_lead_cannot_allocate_same_active_teammate(
@@ -3114,7 +1357,7 @@ def test_second_lead_cannot_allocate_same_active_teammate(
         run_a,
         task_a,
         operations=[
-            "merchant_propose",
+            "merchant_read",
         ],
         selected_agents=[
             "merchant-manager",
@@ -3193,7 +1436,7 @@ def test_tmux_second_active_owner_is_blocked_before_ambiguity(
         "run-owner-a",
         "task-owner-a",
         operations=[
-            "merchant_propose",
+            "merchant_read",
         ],
         selected_agents=[
             "merchant-manager",
@@ -3270,7 +1513,7 @@ def test_stale_global_owner_is_failed_and_new_session_can_allocate(
     stale_record[
         "authorized_operations"
     ] = [
-        "merchant_propose",
+        "merchant_read",
     ]
 
     stale_record[
@@ -3375,7 +1618,7 @@ def test_old_owner_with_live_run_state_remains_busy(
                 "merchant-manager",
             ],
             operations=[
-                "merchant_propose",
+                "merchant_read",
             ],
             limits={
                 "max_members": 1,
@@ -3402,7 +1645,7 @@ def test_old_owner_with_live_run_state_remains_busy(
         "run-live-old",
         "task-live-old",
         operations=[
-            "merchant_propose",
+            "merchant_read",
         ],
         selected_agents=[
             "merchant-manager",
@@ -3475,7 +1718,7 @@ def test_recent_owner_without_run_state_is_not_reclaimed(
     record[
         "authorized_operations"
     ] = [
-        "merchant_propose",
+        "merchant_read",
     ]
 
     record[
@@ -3544,7 +1787,7 @@ def test_stale_owner_with_different_current_run_is_reclaimed(
     record[
         "authorized_operations"
     ] = [
-        "merchant_propose",
+        "merchant_read",
     ]
 
     record[
@@ -3670,7 +1913,7 @@ def test_stale_owner_with_malformed_run_state_remains_busy(
     record[
         "authorized_operations"
     ] = [
-        "merchant_propose",
+        "merchant_read",
     ]
 
     record[
@@ -3784,7 +2027,7 @@ def test_lifecycle_transitions_refresh_last_transition_at(
         run_id,
         task_id,
         operations=[
-            "merchant_propose",
+            "merchant_read",
         ],
         selected_agents=[
             "merchant-manager",
@@ -3953,50 +2196,3 @@ def test_e2e03_galaxy_read_only_report_releases(isolated_runtime):
     assert record["current_run_id"] is None
     assert record["current_task_id"] is None
     assert load_pending_result(pane) is None
-    assert load_pending_merchant_proposal(pane) is None
-
-
-def test_e2e03_merchant_propose_blocked_without_proposal(
-    isolated_runtime,
-):
-    owner, pane, _ = _e2e03_setup_merchant_run(
-        "merchant_propose", "blocked"
-    )
-
-    terminal = {
-        "contract_version": 1,
-        "outcome": "BLOCKED",
-        "operation": "merchant_propose",
-        "database_target": "runtime",
-        "proposal_emitted": False,
-    }
-
-    assert _e2e03_send(
-        pane, "TEAM_RESULT_JSON:\n" + json.dumps(terminal)
-    ) == 0
-
-    assert _e2e03_idle(pane) == 0
-
-    record = load_team_state(owner)["teammates"]["merchant-manager"]
-    assert record["status"] == "IDLE_REUSABLE"
-    assert load_pending_merchant_proposal(pane) is None
-
-
-def test_e2e03_merchant_propose_prose_cannot_bypass_gate(
-    isolated_runtime,
-):
-    owner, pane, _ = _e2e03_setup_merchant_run(
-        "merchant_propose", "malformed"
-    )
-
-    assert _e2e03_send(
-        pane,
-        "Merchant audit finished. No proposal was created.",
-    ) == 0
-
-    # Missing structured outcome must never authorize reuse.
-    assert _e2e03_idle(pane) != 0
-
-    record = load_team_state(owner)["teammates"]["merchant-manager"]
-    assert record["status"] != "IDLE_REUSABLE"
-    assert load_pending_merchant_proposal(pane) is None

@@ -24,8 +24,6 @@ DEPENDENCY_MODULES = {
             "TrustedTmuxMerchantStageContextFn",
         "merchant_completeness_from_tool_response":
             "ToolResponseCandidateFn",
-        "merchant_proposal_from_tool_response":
-            "ToolResponseCandidateFn",
         "merchant_resolution_from_tool_response":
             "ToolResponseCandidateFn",
         "send_message_body":
@@ -36,8 +34,6 @@ DEPENDENCY_MODULES = {
             "ResolutionStageFn",
         "_stage_exact_tmux_merchant_completeness":
             "MerchantCompletenessStageFn",
-        "_stage_exact_tmux_merchant_proposal":
-            "MerchantProposalStageFn",
         "_stage_exact_tmux_merchant_resolution":
             "MerchantResolutionStageFn",
         "_stage_exact_tmux_project_resolution":
@@ -55,28 +51,20 @@ DEPENDENCY_MODULES = {
             "LockedStateFn",
         "trusted_post_tool_sender":
             "TrustedPostToolSenderFn",
-        "trusted_teammate_pane_session_matches":
+        "bind_running_teammate_pane_session":
             "TrustedTeammatePaneSessionMatchesFn",
-        "capture_proposal_receipt":
-            "CaptureProposalReceiptFn",
         "stage_runtime_handoff_attempt":
             "StageRuntimeHandoffAttemptFn",
         "contains_handoff_marker":
             "ContainsHandoffMarkerFn",
         "pending_merchant_completeness_matches":
             "PendingMerchantCompletenessMatchesFn",
-        "capture_merchant_proposal_from_message":
-            "CaptureMerchantProposalFromMessageFn",
         "load_pending_merchant_completeness":
             "LoadPendingMerchantCompletenessFn",
         "_coalesced_text":
             "CoalescedTextFn",
         "handoff_candidate_from_message":
             "HandoffCandidateFromMessageFn",
-        "merchant_proposal_candidate_from_message":
-            "MessageCandidateFn",
-        "merchant_report_sender":
-            "MerchantReportSenderFn",
         "send_message_body":
             "SendMessageBodyFn",
     },
@@ -92,26 +80,12 @@ DEPENDENCY_MODULES = {
             "RecordTeammateResultFn",
         "release_reported_teammate_to_idle":
             "ReleaseReportedTeammateToIdleFn",
-        "capture_proposal_receipt":
-            "CaptureProposalReceiptFn",
         "validate_completeness_receipt_for_outcome":
             "ValidateCompletenessReceiptForOutcomeFn",
-        "failed_runtime_handoff_matches":
-            "RuntimeHandoffMatchesFn",
-        "pending_merchant_proposal_matches":
-            "PendingMerchantProposalMatchesFn",
-        "successful_runtime_handoff_matches":
-            "RuntimeHandoffMatchesFn",
-        "bind_reported_teammate_pane_session":
-            "BindReportedTeammatePaneSessionFn",
         "clear_pending_merchant_completeness":
             "ClearPendingMerchantCompletenessFn",
-        "clear_pending_merchant_proposal":
-            "ClearPendingReceiptFn",
         "clear_pending_result":
             "ClearPendingReceiptFn",
-        "load_pending_merchant_proposal":
-            "LoadPendingStateFn",
         "load_pending_result":
             "LoadPendingStateFn",
         "load_team_state":
@@ -156,8 +130,8 @@ DEPENDENCY_MODULES = {
     ): {
         "locked_state":
             "LockedStateFn",
-        "invoke_trusted_merchant_session_apply":
-            "InvokeConfirmedMerchantSessionApplyFn",
+        "invoke_direct_merchant_execute":
+            "InvokeDirectMerchantExecuteFn",
         "record_runtime_handoff_result":
             "RecordRuntimeHandoffResultFn",
         "bounded_runtime_apply_failure":
@@ -166,8 +140,6 @@ DEPENDENCY_MODULES = {
             "BoundedRuntimeApplyResultFn",
         "emit_post_tool_context":
             "EmitPostToolContextFn",
-        "handle_merchant_proposal_receipt":
-            "HandleMerchantProposalReceiptFn",
         "handle_post_tool_use":
             "HandlePostToolUseFn",
         "handle_teammate_idle":
@@ -356,14 +328,11 @@ def test_security_critical_protocols_have_precise_return_annotations():
         "TrustedPostToolSenderFn",
         "TrustedTeammatePaneSessionMatchesFn",
         "ValidateMerchantResolutionResultFn",
-        "CaptureProposalReceiptFn",
         "StageRuntimeHandoffAttemptFn",
         "ValidateCompletenessReceiptForOutcomeFn",
-        "InvokeConfirmedMerchantSessionApplyFn",
+        "InvokeDirectMerchantExecuteFn",
         "ContainsHandoffMarkerFn",
         "PendingMerchantCompletenessMatchesFn",
-        "PendingMerchantProposalMatchesFn",
-        "RuntimeHandoffMatchesFn",
     }
 
     tree = ast.parse(

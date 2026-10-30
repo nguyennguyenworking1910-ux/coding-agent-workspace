@@ -6,27 +6,22 @@ allowed-tools: Agent, TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, SendM
 disallowed-tools: EnterWorktree, ExitWorktree
 ---
 
-## Direct Scope Merchant writes - preferred workflow
+## Merchant Direct EXECUTE
 
-The preferred Merchant write path is an explicitly confirmed exact
-scope:
+Merchant writes use Direct EXECUTE only. There is no proposal, confirmation token, or apply
+step. The only runtime-write authority is an explicitly confirmed exact scope typed by the user:
 
 `/solve --confirm --merchant-scope ["project","update","<project-uuid>","--status","IN_PROGRESS","--expected-version","3"] Update project <project-uuid> to IN_PROGRESS`
 
 - Intent Gate validates the scope and persists it under the owner run.
-- `merchant_apply` is dispatched exclusively to `merchant-manager`.
-- Merchant Manager sends an exact handoff request to `team-lead`.
-- Trusted orchestration verifies the persisted scope and executes
-  the authorized CLI command once.
+- `merchant_execute` is dispatched exclusively to `merchant-manager`.
+- Merchant Manager sends one `MERCHANT_EXECUTE_REQUEST_JSON:` request to `team-lead`.
+- Trusted orchestration records execution evidence, then executes the persisted scope once.
 - The agent must never invoke the runtime handoff directly.
-- Do not require a proposal or `--merchant-confirmation` for this
-  direct-scope path.
-- An unconfirmed or ambiguous write remains blocked. Never infer
-  runtime-write permission from natural language alone.
-
-The legacy proposal-first instructions below remain applicable only
-to legacy proposal-based sessions. They do not override this
-direct-scope contract.
+- `merchant_propose`, `merchant_apply`, and `--merchant-confirmation` are removed and rejected.
+- A `merchant_execute` run without a scope can read and check completeness only; it ends with
+  `REQUIRES_CLARIFICATION` or `BLOCKED`. Never infer runtime-write permission from natural
+  language alone.
 
 ## Trusted intent envelope
 
@@ -103,7 +98,7 @@ envelope passes every check below.
    - Otherwise, compare against `$ARGUMENTS` after trimming surrounding whitespace.
    - Require `confirmed: true` in the persisted envelope when `--confirm` is supplied.
    - Keep exact request matching, expiry, session, and unspent-envelope checks.
-   - Never use `--confirm` instead of the separate Merchant apply confirmation token.
+   - A Merchant runtime write additionally requires an exact validated `--merchant-scope`.
    - An envelope for different work is stale, even if the work is related.
    - An envelope authorizes one dispatch only. Never reuse a spent envelope.
 
@@ -153,25 +148,10 @@ destructive action that would occur.
 A generic or earlier approval does not authorize a different action. External and destructive
 mutations receive one attempt only; an uncertain or failed result must be reported, not retried.
 
-For legacy proposal-based `merchant_apply`, the general `--confirm` flag is never sufficient. For Direct Scope, the combination of `--confirm` and an exact validated `--merchant-scope` is required. The intent hook must
-validate the exact `--merchant-confirmation` token emitted by the prior proposal and inject a
-`merchant_confirmation` object containing the command, runtime target, expected version,
-payload hash, proposal hash, and confirmation hash. The token itself and raw proposal payload
-must not appear in the envelope or persisted run state. A missing, malformed, changed,
-non-runtime, or non-canonical token stops the run before team creation.
-
-The structured confirmation records exactly what the user approved, but it does not by itself
-grant the Merchant CLI runtime-write authority. Gate 7.3 permits one policy-validated
-`merchant-manager` dispatch only when its redacted authorization block matches that confirmation
-exactly. Runtime `--apply` remains unavailable in Checkpoint 6, and Gate 7.3 does not weaken
-that inherited boundary: runtime `--apply` remains fail-closed until the trusted in-process
-handoff in Gate 7.4.
-
-Runtime `--apply` remains fail-closed throughout Gate 7.3.
-
-The Checkpoint 7 intent/policy authorization handoff is therefore split across two boundaries:
-Gate 7.3 authorizes the exact teammate dispatch, while Gate 7.4 must authorize the exact
-in-process runtime mutation.
+For a Merchant write, `--confirm` authorizes the run, and only an exact validated
+`--merchant-scope` authorizes the runtime write. The scope is persisted under the owner run and
+bound to the policy-accepted dispatch. `--merchant-confirmation` is not supported; a prompt that
+carries it stops before team creation.
 
 ## 4. Required Agent Team mode
 
@@ -281,7 +261,7 @@ type, but its presence does not authorize dispatch; only `selected_agents` does.
 | `coder` | Feature implementation and refactoring from a specification | Yes |
 | `bug-fixer` | Repairing a specific reproduced failure or defect | Yes |
 | `group-sales-manager` | Sales-data queries, capacity analysis, and allocation planning | No |
-| `merchant-manager` | Merchant/project reads, redacted proposals, and confirmed-apply handoff through the Merchant CLI | Proposal only; runtime apply blocked through the ordinary CLI; Gate 7.4 in-process handoff only |
+| `merchant-manager` | Merchant/project reads and Direct EXECUTE of the exact user-authorized scope | Runtime writes only through the trusted in-process handoff; ordinary CLI is read-only for runtime |
 | `scheduler` | Creating a confirmed calendar event | Calendar only |
 
 Never invent an unregistered teammate type.
@@ -293,9 +273,9 @@ addition to the envelope gate and normal dispatch contract:
 
 - A Merchant-state read may be assigned only to `merchant-manager`, and only when
   `merchant-manager` appears in `selected_agents`.
-- A Merchant write-intent proposal may be assigned only to `merchant-manager`, and only when
-  the envelope authorizes that teammate. The assignment must say that the requested outcome is
-  a redacted `--propose` result and that no change may be applied.
+- A Merchant write (`merchant_execute`) may be assigned only to `merchant-manager`, and only
+  when the envelope authorizes that teammate. Without a `--merchant-scope` the assignment must
+  say that no runtime write is possible.
 - Do not route Merchant operations to `coder`, `bug-fixer`, `diagnostician`, another business
   teammate, or the lead session. Those roles may work on Merchant source code when separately
   selected for a development task, but they may not execute operational Merchant CLI commands.
@@ -304,419 +284,73 @@ addition to the envelope gate and normal dispatch contract:
 - If a Merchant operation is requested but `merchant-manager` is absent from
   `selected_agents`, report the authorization mismatch and stop. Do not add the teammate,
   substitute another role, reconstruct the envelope, or execute the command in the lead.
-- A confirmed Merchant apply may be dispatched once only when the saved operation is exactly
-  `merchant_apply`, the roster is exactly `merchant-manager`, the risk is `external_write` or
-  `destructive`, and the assignment contains the exact redacted block defined below.
-- Gate 7.3 dispatch authorization is not Merchant CLI runtime authority. The assignment must
-  state that runtime `--apply` remains unavailable until Gate 7.4 and must not ask the teammate
-  to bypass the adapter.
-- Preserve the earlier safety boundary in every assignment: runtime `--apply` is outside Checkpoint 6 authority.
-  Gate 7.3 authorizes only the redacted teammate dispatch, not the database mutation.
-- The proposal hash binds a command, runtime target, and payload. It is not permission, a
-  credential, or a substitute for confirmation.
+- A scoped `merchant_execute` may be dispatched once only when the saved operation is exactly
+  `merchant_execute`, the roster is exactly `merchant-manager`, the risk is `external_write`
+  or `destructive`, and the run is confirmed. The policy gate records the dispatch receipt.
+- Dispatch authorization is not runtime authority. Only the trusted in-process handoff spends
+  the one-use scope authorization.
+- A `MERCHANT_DISPATCH_AUTHORIZATION_JSON` block or proposal confirmation carries no authority;
+  the policy gate rejects any assignment that contains one.
 
 ### Merchant dispatch command authority
 
-For `merchant_propose`, the team lead authorizes the Merchant operation but does not author
-Merchant CLI syntax.
+The team lead authorizes the Merchant operation but does not author Merchant CLI syntax.
 
 When dispatching `merchant-manager`:
 
 - preserve the user's semantic objective and raw request;
-- if the raw request contains concrete Merchant CLI spelling, flags, or an executable command,
-  preserve its semantic intent but do not copy that CLI syntax into the teammate assignment;
-- preserve `operation: merchant_propose`;
-- preserve `database_target: runtime`;
-- declare `authorized_mode: PROPOSE`;
-- do not invent, reconstruct, translate, normalize, or guess a concrete Merchant CLI command;
-- do not provide guessed CLI flags, aliases, positional arguments, resource names, or action names;
-- do not instruct the teammate to execute a write command before deterministic completeness;
-- do not treat a natural-language Merchant action as if its CLI spelling were authoritative;
-- do not convert a semantic action into a CLI command in the lead assignment.
-
-In particular, never synthesize assignment text such as:
-
-```text
-python .claude/agents/tools/merchant/agent_cli.py <guessed-write-command> --propose
-```
+- preserve `operation: merchant_execute` (or `merchant_read`) and `database_target: runtime`;
+- for a scoped run, quote the exact persisted `merchant_scope.argv` unchanged; it is the only
+  write the teammate may request;
+- for an unscoped run, do not invent, reconstruct, translate, or guess a concrete Merchant CLI
+  command, flag, alias, or argument. The policy gate rejects an unscoped assignment that
+  contains a direct `agent_cli.py` reference or command-shaped Merchant text with CLI flags;
+- do not instruct the teammate to execute a write before deterministic completeness.
 
 The `merchant-manager` owns normalization against its registered Merchant write families and
-must run the deterministic completeness gate before any proposal or write-field clarification.
+runs the deterministic completeness gate before any execute request or write-field
+clarification. If the semantic action itself is unclear, preserve that ambiguity; the teammate
+uses its `action_semantics` clarification path.
 
-A bounded Merchant proposal assignment must describe the action semantically, for example:
+### Direct EXECUTE runtime handoff
 
-```text
-Objective: Create a new document revision for merchant CGV.
-
-Raw request: "For merchant CGV, create a new document revision."
-Operation: merchant_propose
-Database target: runtime
-Authorized mode: PROPOSE
-
-Resolve the normalized Merchant write command using the registered Merchant contract.
-Resolve only authoritative state available through allowlisted Merchant reads.
-Run deterministic completeness before either asking for write-field clarification or
-executing --propose.
-
-Do not apply any Merchant mutation.
-Do not use database or credential overrides.
-```
-
-The lead must never override the Merchant CLI contract with assignment-generated command syntax.
-The policy gate rejects a `merchant_propose` Agent or reusable-`SendMessage` assignment when it
-contains a direct `agent_cli.py` reference or command-shaped Merchant resource/action text with
-CLI flags. Rephrase the assignment semantically instead of retrying with different command syntax.
-
-If the semantic action itself is unclear, preserve that ambiguity in the assignment. The
-`merchant-manager` then uses its existing `action_semantics` clarification path. The lead must
-not choose one write family merely to make the assignment executable.
-
-For a confirmed apply assignment, the lead must also preserve the exact business fields needed
-to reconstruct the already-proposed normalized Merchant write command. Do not reduce the
-assignment to only a merchant code, label, proposal hash, or generic instruction such as
-"apply the exact confirmed proposal" when the underlying write command requires additional
-business fields.
-
-For `merchant create`, copy the exact proposed `code`, `name`, and `region_code` into the
-confirmed-apply assignment.
-
-For `project create`, copy the exact proposed `merchant_id`, `project_id`, `project_type`,
-`workflow_variant`, `requires_procurement`, `payment_period_number`,
-`reused_document_revision_id`, `title`, and `created_by` values when present.
-
-<!-- NULL_OPTIONAL_PROJECT_CREATE_ARGV_CONTRACT -->
-For `project create`, confirmed null optional values must be represented by
-omitting the corresponding CLI flag entirely:
-
-For confirmed Merchant apply, the ordinary-agent prohibition on `--apply`
-is an authority boundary, not evidence of invalid CLI syntax. Neither the lead
-nor merchant-manager may classify an argv vector as `INVALID_NORMALIZED_ARGV`
-merely because `agent_cli.py`, `prepare_agent_cli_argv()`, or
-`invoke_agent_cli()` intentionally reject runtime apply. Final apply argv
-validation belongs to Gate 7.4 and `merchant_runtime_handoff.py`.
-
-- `payment_period_number` -> no `--payment-period-number`;
-- `reused_document_revision_id` -> no `--reused-document-revision-id`;
-- `created_by` -> no `--created-by`.
-
-Never pass the literal string `null` as a CLI argument value.
-
-Preserve null or absent optional values exactly rather than inventing replacements.
-
-For `project create`, confirmed `requires_procurement: false` is represented by
-omitting the `--requires-procurement` flag from normalized CLI argv. That
-omission is the canonical representation of false and must not be treated as
-missing or changed business context. Confirmed `requires_procurement: true`
-requires that flag.
-
-`project create` is a new-entity write and the confirmed apply is bound by the exact
-`proposal_hash`, not an `expected_version`.
-
-These values are execution context only; they do not grant runtime write authority.
-If the exact required business context is unavailable, do not dispatch an incomplete
-apply assignment. Fail closed instead of asking `merchant-manager` to guess or reconstruct
-omitted values.
-
-For a confirmed apply assignment, include exactly one block in this form, copying every value
-from the injected `merchant_confirmation` object without reconstructing or changing it:
-
-````text
-MERCHANT_DISPATCH_AUTHORIZATION_JSON
-```json
-{
-  "contract_version": 1,
-  "confirmation_version": 1,
-  "operation": "merchant_apply",
-  "command": "<confirmed allowlisted command>",
-  "database_target": "runtime",
-  "expected_version": null,
-  "payload_hash": "<confirmed hash>",
-  "proposal_hash": "<confirmed hash>",
-  "confirmation_hash": "<confirmed hash>",
-  "authorized_mode": "CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY"
-}
-```
-````
-
-The outer `text` fence above is documentation only; the actual assignment contains the marker,
-the single `json` fence, and the JSON object. Never include the confirmation token or raw
-proposal payload in this block. The policy hook compares every field immediately before Agent
-dispatch, rejects missing, extra, malformed, stale, or changed data, and consumes the binding
-after one accepted dispatch attempt. Copy the exact confirmed positive integer into
-`expected_version` when present; retain JSON `null` only when the confirmation carries `null`.
-
-### Gate 7.4 runtime handoff
-
-Gate 7.4 runtime handoff is executed automatically by the registered
-PostToolUse orchestration hook after `merchant-manager` emits exactly one
-dedicated non-terminal `SendMessage` to `team-lead`.
-
-The canonical handoff marker is exactly:
+The registered PostToolUse hook executes the runtime handoff. The teammate sends exactly one
+non-terminal `SendMessage` to `team-lead`:
 
 ```text
-MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
+MERCHANT_EXECUTE_REQUEST_JSON:
+{"contract_version":1,"operation":"merchant_execute","database_target":"runtime","arguments":["<exact scope token 1>","<exact scope token 2>"]}
 ```
 
-The trailing colon (`:`) is part of the protocol marker and is mandatory.
-Never emit or instruct the teammate to emit the marker without that trailing
-colon.
+The request carries no authority. The hook re-derives the command and binding from the persisted
+scope, binds the executing pane on first use, persists execution evidence in team state, spends
+the one-use authorization, and executes at most once:
 
-The actual handoff `SendMessage` body must begin with the canonical marker as
-the first content in the message, followed by exactly one newline and exactly
-one JSON object. It must contain no prose before the marker and no prose after
-the JSON object.
+- `merchant create` runs through a durable reservation and the protected reserved executor;
+- every other write runs through one in-process `RuntimeApplyAuthorization`.
 
-Canonical body shape:
+Changed arguments spend the authorization without writing. A failed or uncertain attempt is never
+retried. The lead never executes the handoff, the Merchant CLI, or a fallback mutation.
 
-```text
-MERCHANT_APPLY_HANDOFF_REQUEST_JSON:
-{"contract_version":1,"operation":"merchant_apply","database_target":"runtime","confirmation_hash":"<exact confirmation_hash>","arguments":["<exact Merchant CLI argv token 1>","<exact Merchant CLI argv token 2>"]}
-```
+### Merchant terminal result contract
 
-The code block above is documentation only. Do not include Markdown fences in
-the actual `SendMessage`.
+For every `merchant_execute` assignment the teammate's final `SendMessage` contains exactly one
+`TEAM_RESULT_JSON` block with `operation: merchant_execute`, `database_target: runtime`, and
+`proposal_emitted: false`. Allowed outcomes are `EXECUTE_SUCCESS`, `EXECUTE_FAILED`,
+`REQUIRES_CLARIFICATION`, `BLOCKED`, and `FAILED`.
 
-The JSON object contains exactly these authority fields:
+The report describes the outcome; it is never execution authority. `TeammateIdle` releases the
+teammate only on trusted evidence:
 
-- `contract_version`;
-- `operation`;
-- `database_target`;
-- `confirmation_hash`;
-- `arguments`.
+- committed PostgreSQL evidence for every reserved Create write, recorded as a completion
+  receipt;
+- a SUCCEEDED scoped execution record for other writes;
+- or, for a task with no write footprint, a run/task-bound no-write marker. A completeness-driven
+  `REQUIRES_CLARIFICATION` must match the exact CLI completeness evidence.
 
-Rules:
-
-- `contract_version` must be `1`;
-- `operation` must be exactly `merchant_apply`;
-- `database_target` must be exactly `runtime`;
-- `confirmation_hash` must equal the exact confirmed hash from the dispatch;
-- `arguments` must be the exact Merchant CLI argv array that the trusted
-  in-process adapter would receive;
-- the arguments must include the exact normalized resource/action tokens,
-  `--apply`, and the exact `--proposal-hash`;
-- do not add `command`, `proposal_hash`, `expected_version`, `payload_hash`,
-  `confirmation_token`, owner session id, run id, task id, credentials,
-  runtime state, or runtime-authority objects to the handoff JSON;
-- do not put prose before the marker;
-- do not put prose after the JSON object;
-- do not emit the marker in ordinary assistant or status text;
-- emit exactly one handoff `SendMessage` for the run/task;
-- after that `SendMessage` receives PostToolUse feedback, never retransmit,
-  reformat, repair, or resend the handoff;
-- rejection, failure, exception, timeout, or uncertainty ends that handoff
-  attempt;
-- neither the lead nor `merchant-manager` may invoke, import, shell-call, or
-  wrap `merchant_runtime_handoff` directly;
-- do not use Bash, PowerShell, Python, `agent_cli.py`, direct repository
-  access, or another database target to perform Gate 7.4.
-
-The registered PostToolUse hook alone owns the transition:
-
-`handoff validation -> sender authentication -> PENDING staging -> owner lock
-release -> LOCAL_AUTO receipt consumption -> RuntimeApplyAuthorization
-issuance -> one in-process Merchant apply -> bounded result persistence`.
-
-Do not model-author `MERCHANT_APPLY_RECEIPT_JSON`.
-Do not model-author `MERCHANT_APPLY_RESULT_JSON`.
-
-Trusted Gate 7.4 receipt state is persisted runtime evidence produced by the
-hook. It is never teammate-authored result data.
-
-The terminal teammate delivery for a confirmed apply contains exactly one
-`TEAM_RESULT_JSON` describing the actual outcome.
-
-For trusted matching Gate 7.4 SUCCESS, require:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "APPLY_SUCCESS",
-  "operation": "merchant_apply",
-  "database_target": "runtime",
-  "proposal_emitted": false,
-  "confirmation_hash": "<exact 64-hex confirmation_hash>"
-}
-```
-
-For trusted matching Gate 7.4 FAILED, require:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "APPLY_FAILED",
-  "operation": "merchant_apply",
-  "database_target": "runtime",
-  "proposal_emitted": false,
-  "confirmation_hash": "<exact 64-hex confirmation_hash>"
-}
-```
-
-`APPLY_SUCCESS` is valid only when a trusted matching Gate 7.4 `SUCCESS`
-receipt exists. `APPLY_FAILED` is valid only when a trusted matching Gate 7.4
-`FAILED` receipt exists.
-
-If no trusted matching SUCCESS or FAILED receipt exists, use an already
-supported generic non-apply terminal outcome. Never invent `APPLY_UNCERTAIN`.
-
-For `merchant_apply` blocked before the Gate 7.4 handoff is sent, the teammate
-must return a bounded machine-readable `BLOCKED` terminal result with:
-
-- `blocked_stage` must be `PRE_GATE_7_4`;
-- an allowlisted `reason_code`;
-- `missing_fields`;
-- `mismatched_fields`.
-
-The diagnostic fields contain field names only. They must never contain raw
-business values, confirmation tokens, hashes, credentials, proposal payloads,
-runtime authority objects, or exception text.
-
-Every staged handoff attempt is at-most-once. `PENDING`, `SUCCESS`, `FAILED`,
-rejection, exception, timeout, or uncertainty are non-retryable for that
-run/task.
-
-The ordinary `agent_cli.py` command remains read/propose-only. A boolean,
-environment variable, confirmation token, JSON object, copied capability, or
-reconstructed run state is not runtime authority.
-
-Gate 7.5 connects that handoff to the actual persisted hook state through
-`invoke_confirmed_merchant_session_apply`. Controlled orchestration supplies the current session
-ID and exact apply arguments; it does not copy state into a prompt or CLI option. The function
-locks the session document, verifies the Gate 7.3 receipt, permanently reserves its single
-runtime-authorization slot, and saves that reservation before capability issuance or repository
-dispatch. This is deliberately at-most-once: after an uncertain interruption, failure, or
-successful call, a fresh proposal and confirmation are required instead of a retry.
-
-For an authorized Merchant assignment, require the teammate to use only the registered
-credential-free Merchant CLI interface and to include the redacted CLI JSON, exit outcome,
-confirmation state, failures, and unresolved work in its final `SendMessage` report.
-
-### Machine-readable Merchant proposal assignment contract
-
-For every assignment whose `authorized_mode` is `PROPOSE`, the lead must include
-the following result-delivery contract directly in the teammate assignment.
-Do not rely only on the static `.claude/agents/merchant-manager.md` definition,
-because an `IDLE_REUSABLE` teammate receives later work through `SendMessage`.
-
-The assignment must state that `TEAM_RESULT_JSON` describes what actually happened,
-not what the teammate was authorized to attempt.
-
-Allowed outcomes are:
-
-- `PROPOSAL_READY`
-- `REQUIRES_CLARIFICATION`
-- `BLOCKED`
-- `FAILED`
-
-For `PROPOSAL_READY`, require:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "PROPOSAL_READY",
-  "operation": "merchant_propose",
-  "database_target": "runtime",
-  "proposal_emitted": true
-}
-
-MERCHANT_PROPOSAL_RESULT_JSON:
-<exact JSON object emitted by the Merchant CLI>
-```
-
-Requirements:
-
-- the exact Merchant CLI proposal must already have been emitted successfully;
-- copy the complete successful CLI JSON object exactly as emitted;
-- preserve the CLI-emitted `confirmation_token` exactly in this transient
-  `SendMessage` report;
-- do not replace the token with `[REDACTED]`;
-- do not reconstruct, summarize, rename, omit, or invent JSON fields;
-- do not wrap the JSON object in a Markdown code fence;
-- prose may appear before `MERCHANT_PROPOSAL_RESULT_JSON:`;
-- no prose or other content may appear after the exact proposal JSON object;
-- emit the proposal marker exactly once;
-- never emit it for READ, failed proposal, completeness clarification, or
-  confirmed-apply output.
-
-For deterministic completeness clarification, require:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "REQUIRES_CLARIFICATION",
-  "operation": "merchant_propose",
-  "database_target": "runtime",
-  "proposal_emitted": false,
-  "missing_fields": ["<exact CLI-emitted direct missing field>"],
-  "missing_one_of": [
-    ["<exact alternative field 1>", "<exact alternative field 2>"]
-  ],
-  "question": "<exact CLI-emitted clarification.question>"
-}
-```
-
-Rules:
-
-- preserve `missing_fields` exactly as emitted by the completeness CLI;
-- preserve `missing_one_of` exactly as emitted by the completeness CLI;
-- `missing_fields` may be empty when requirements are represented entirely by
-  `missing_one_of`;
-- `missing_one_of` may be empty when all requirements are direct fields;
-- at least one of the two collections must be non-empty;
-- preserve the CLI-emitted clarification question exactly;
-- do not rewrite, paraphrase, broaden, narrow, reorder, add, or remove requirements;
-- do not emit `MERCHANT_PROPOSAL_RESULT_JSON` for clarification.
-
-For a pre-command action-semantics clarification, require:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "REQUIRES_CLARIFICATION",
-  "operation": "merchant_propose",
-  "database_target": "runtime",
-  "proposal_emitted": false,
-  "missing_fields": ["action_semantics"],
-  "missing_one_of": [],
-  "question": "<one minimal action-semantics clarification question>"
-}
-```
-
-This is the only `REQUIRES_CLARIFICATION` form that does not require a completeness receipt,
-because the normalized write command does not yet exist.
-
-For `BLOCKED`:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "BLOCKED",
-  "operation": "merchant_propose",
-  "database_target": "runtime",
-  "proposal_emitted": false
-}
-```
-
-For `FAILED`:
-
-```text
-TEAM_RESULT_JSON:
-{
-  "contract_version": 1,
-  "outcome": "FAILED",
-  "operation": "merchant_propose",
-  "database_target": "runtime",
-  "proposal_emitted": false
-}
-```
-
-Authorization to attempt `merchant_propose` never implies `PROPOSAL_READY`.
-The machine-readable result must reflect the actual task outcome.
+A spent execution that did not succeed ends the task as FAILED and keeps its evidence. An invalid
+terminal result gets one correction turn, then the task fails. A stale task carrying a removed
+operation is terminated as FAILED without a write.
 
 If any required field is missing, do not improvise it. Stop the
 Merchant dispatch and obtain the missing information through the deterministic Merchant completeness path.
@@ -724,26 +358,24 @@ Merchant dispatch and obtain the missing information through the deterministic M
 Every Merchant assignment must explicitly declare all of these fields in its prompt:
 
 - `database_target: runtime`;
-- `authorized_mode: READ`, `authorized_mode: PROPOSE`, or, only for an exact confirmed apply,
-  `authorized_mode: CONFIRMED_APPLY_PENDING_RUNTIME_AUTHORITY`;
+- `operation: merchant_read` or `operation: merchant_execute`;
 - the semantic Merchant objective and the identifiers or filters actually supplied by the
   request;
-- for `PROPOSE`, that the teammate owns normalized command resolution and deterministic
-  completeness;
+- for `merchant_execute`, that the teammate owns normalized command resolution and
+  deterministic completeness, and whether a user-authorized scope exists;
 - that database and credential arguments are forbidden;
-- that runtime `--apply` is outside Checkpoint 6 authority and remains blocked until the Gate 7.4
-  trusted in-process handoff;
+- that runtime writes happen only through the trusted Direct EXECUTE handoff;
 - that `TaskUpdate` is a status signal only and final result delivery requires `SendMessage`.
 
-For `PROPOSE`, do not require the lead assignment to contain an "exact allowlisted write command".
-The exact command is resolved by `merchant-manager` from the registered contract. Requiring the
-lead to author that syntax would violate the Merchant dispatch command-authority boundary above.
+For an unscoped `merchant_execute`, do not require the lead assignment to contain an "exact
+allowlisted write command". The exact command is resolved by `merchant-manager` from the
+registered contract.
 
 If any required dispatch field conflicts with the envelope, do not improvise it. Stop the
 Merchant dispatch and report the incomplete assignment contract.
 
 For the Merchant report ledger, accept delivery only when `SendMessage` from the named
-`merchant-manager` teammate carries the operation, runtime target, authorized mode, CLI-backed
+`merchant-manager` teammate carries the operation, runtime target, CLI-backed
 outcome, failures, and unresolved work. `TaskUpdate`, pane text, and idle notifications do not
 establish Merchant result delivery.
 
@@ -788,7 +420,7 @@ Every teammate assignment must include:
 - remaining relevant limits;
 - instruction to report failures accurately;
 - the mandatory result-delivery instruction below;
-- for Merchant `PROPOSE`, the complete machine-readable Merchant proposal assignment contract from section 6.
+- for `merchant_execute`, the Merchant terminal result contract from section 6.
 
 Teammates load project context, including `CLAUDE.md`, but do not inherit the lead's conversation
 history. Put all necessary task-specific context in the assignment.
@@ -827,11 +459,11 @@ The lead must not acknowledge the completed result back through `SendMessage`.
 For the Merchant report ledger, accept delivery only when `SendMessage` carries the complete Merchant result. `TaskUpdate`, pane
 text, and idle notifications do not establish Merchant result delivery.
 
-For `merchant_propose`, transport delivery and terminal-result validity are separate:
+For `merchant_execute`, transport delivery and terminal-result validity are separate:
 
 - a `SendMessage` may be staged before terminal validation;
 - it must not be treated as accepted Merchant completion merely because transport succeeded;
-- deterministic completeness/proposal evidence is validated at lifecycle reconciliation;
+- trusted execution and completeness evidence is validated at lifecycle reconciliation;
 - a premature Merchant message must not cause the teammate's remaining tools to freeze;
 - only a valid terminal Merchant result may transition the lifecycle to reusable completion.
 
@@ -859,9 +491,9 @@ hook-verifiable complete report and must not set `result_received`.
 Repeated `SendMessage` events for the same task are idempotent. Process the
 result once and keep one `sendmessage` delivery source in the ledger.
 
-For Merchant proposal work, "transport received" and "terminal result accepted" are not
-interchangeable. The exact Merchant terminal contract is validated against deterministic
-completeness/proposal evidence before reusable completion.
+For Merchant work, "transport received" and "terminal result accepted" are not
+interchangeable. The exact Merchant terminal contract is validated against trusted execution and
+completeness evidence before reusable completion.
 
 **Recovery behavior:** If a teammate becomes idle before a complete
 `SendMessage` report is recorded, the `TeammateIdle` hook exits with code 2,

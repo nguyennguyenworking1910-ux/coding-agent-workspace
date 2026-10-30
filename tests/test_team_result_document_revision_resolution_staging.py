@@ -799,8 +799,7 @@ def test_missing_tool_use_id_is_rejected(
     "operation",
     (
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     ),
 )
 def test_authorized_merchant_operations_are_accepted(
@@ -842,7 +841,7 @@ def test_multiple_operations_are_rejected(
         ),
         operations=(
             "merchant_read",
-            "merchant_propose",
+            "merchant_execute",
         ),
     ) is False
 

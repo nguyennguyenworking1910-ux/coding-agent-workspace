@@ -1023,20 +1023,97 @@ def get_or_create_teammate(
 def has_invalid_direct_completion_receipt(
     record: dict[str, Any],
 ) -> bool:
-    """Fail closed when a Merchant Direct Write lacks matching evidence."""
+    """Fail closed when a Merchant Direct task lacks terminal evidence.
+
+    Evidence is a verified Create write receipt, an exact SUCCEEDED scoped
+    execution, or, for a task with no write footprint, an exact
+    run/task-bound no-write marker.
+    """
     if "merchant_execute" not in (
         record.get("authorized_operations") or []
     ):
         return False
 
     from claude.hooks.merchant_completion_receipt import (
+        no_write_terminal_matches_state,
         receipt_matches_state,
+        scope_execution_succeeded,
     )
 
-    return not receipt_matches_state(
-        record,
-        record.get("direct_completion_receipt"),
+    return not (
+        receipt_matches_state(
+            record,
+            record.get("direct_completion_receipt"),
+        )
+        or no_write_terminal_matches_state(record)
+        or scope_execution_succeeded(record)
     )
+
+
+# Removed Merchant workflows. A stale task carrying one is never reported,
+# released or reassigned; it is terminated without a write.
+LEGACY_MERCHANT_OPERATIONS = frozenset(
+    {"merchant_propose", "merchant_apply"}
+)
+
+
+def has_legacy_merchant_operation(record: dict[str, Any]) -> bool:
+    operations = record.get("authorized_operations") or []
+
+    return any(
+        str(operation) in LEGACY_MERCHANT_OPERATIONS
+        for operation in operations
+    )
+
+
+def _archive_scope_execution_for_reuse(
+    record: dict[str, Any],
+) -> bool:
+    """Archive one SUCCEEDED scoped execution during release.
+
+    Must be called only while holding locked_team_state. Any other
+    scoped execution status is unresolved and blocks release.
+    """
+    from copy import deepcopy
+    from claude.hooks.merchant_completion_receipt import (
+        SCOPE_EXECUTION_SUCCEEDED,
+        valid_scope_execution,
+    )
+
+    if "direct_scope_execution" not in record:
+        return True
+
+    execution = record["direct_scope_execution"]
+
+    if (
+        not valid_scope_execution(execution)
+        or execution["status"] != SCOPE_EXECUTION_SUCCEEDED
+        or execution["run_id"] != record.get("current_run_id")
+        or execution["task_id"] != record.get("current_task_id")
+    ):
+        return False
+
+    history = record.get("completed_scope_execution_history", [])
+
+    if not isinstance(history, list):
+        return False
+
+    identity = (execution["run_id"], execution["task_id"])
+
+    for item in history:
+        if (
+            not valid_scope_execution(item)
+            or (item["run_id"], item["task_id"]) == identity
+        ):
+            return False
+
+    record["completed_scope_execution_history"] = [
+        *deepcopy(history),
+        deepcopy(execution),
+    ]
+    record.pop("direct_scope_execution", None)
+
+    return True
 
 
 def has_unresolved_direct_writes(record: dict[str, Any]) -> bool:
@@ -1202,11 +1279,25 @@ def mark_teammate_running(
         ):
             return False
 
+        # Removed Merchant workflows cannot start a new task.
+        if LEGACY_MERCHANT_OPERATIONS & set(operations_snapshot):
+            return False
+
         if has_unresolved_direct_writes(record):
                 return False
 
+        # An unarchived scoped execution was never settled successfully.
+        if (
+            "direct_scope_execution" in record
+            or "direct_unverified_authority" in record
+        ):
+            return False
+
         if not _archive_completed_direct_writes_for_reuse(record):
             return False
+
+        # A no-write marker never carries over to a new task.
+        record.pop("direct_no_write_terminal", None)
 
         record["status"] = (
             TeammateLifecycleStatus.RUNNING.value
@@ -1436,8 +1527,20 @@ def reserve_reusable_teammate(
                 if has_unresolved_direct_writes(record):
                         return False, "UNRESOLVED_DIRECT_WRITE"
 
+                if LEGACY_MERCHANT_OPERATIONS & set(operations_snapshot):
+                    return False, "LEGACY_MERCHANT_OPERATION"
+
+                if (
+                    "direct_scope_execution" in record
+                    or "direct_unverified_authority" in record
+                ):
+                    return False, "UNRESOLVED_SCOPE_EXECUTION"
+
                 if not _archive_completed_direct_writes_for_reuse(record):
                     return False, "INVALID_COMPLETED_WRITE_HISTORY"
+
+                # A no-write marker never carries over to a new task.
+                record.pop("direct_no_write_terminal", None)
 
                 record["status"] = (TeammateLifecycleStatus.RUNNING.value                )
                 record["current_run_id"] = run_id
@@ -1499,6 +1602,9 @@ def mark_report_received(
         ):
             return False
 
+        if has_legacy_merchant_operation(record):
+            return False
+
         if has_unresolved_direct_writes(record):
             return False
 
@@ -1557,6 +1663,9 @@ def release_reported_teammate_to_idle(
         ):
             return False, prior_status
 
+        if has_legacy_merchant_operation(record):
+            return False, "LEGACY_MERCHANT_OPERATION"
+
         if (
             record.get("result_received") is not True
             or record.get("report_source") != "sendmessage"
@@ -1597,6 +1706,12 @@ def release_reported_teammate_to_idle(
         # verified task while the state lock is held.
         if not _archive_completed_direct_writes_for_reuse(record):
             return False, "INVALID_COMPLETED_WRITE_HISTORY"
+
+        if not _archive_scope_execution_for_reuse(record):
+            return False, "UNRESOLVED_SCOPE_EXECUTION"
+
+        # The marker was verified above for this exact task only.
+        record.pop("direct_no_write_terminal", None)
 
         record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
         record["last_completed_task_id"] = task_id
@@ -1764,24 +1879,47 @@ def claim_terminal_recovery(
         ):
             return False, "BINDING_MISMATCH"
 
-        if (
-            record.get("result_received")
-            is not True
-            or record.get("report_source")
-            != "sendmessage"
-        ):
-            return False, "REPORT_NOT_RECEIVED"
-
         status = str(
             record.get("status")
             or ""
         )
 
-        if status not in (
-            TeammateLifecycleStatus.REPORT_RECEIVED.value,
-            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        if "merchant_execute" in (
+            record.get("authorized_operations") or []
         ):
-            return False, status or "INVALID_STATUS"
+            # A direct task is never REPORT_RECEIVED without trusted
+            # terminal evidence, so its one correction turn is bound to
+            # the RUNNING task. A write footprint must instead be
+            # reconciled from PostgreSQL evidence, never "corrected".
+            from claude.hooks.merchant_completion_receipt import (
+                has_direct_write_footprint,
+            )
+
+            if has_direct_write_footprint(record):
+                return False, "DIRECT_WRITE_PRESENT"
+
+            if (
+                record.get("authorized_operations")
+                != ["merchant_execute"]
+                or status != TeammateLifecycleStatus.RUNNING.value
+                or record.get("result_received") is True
+            ):
+                return False, status or "INVALID_STATUS"
+
+        else:
+            if (
+                record.get("result_received")
+                is not True
+                or record.get("report_source")
+                != "sendmessage"
+            ):
+                return False, "REPORT_NOT_RECEIVED"
+
+            if status not in (
+                TeammateLifecycleStatus.REPORT_RECEIVED.value,
+                TeammateLifecycleStatus.ACKNOWLEDGED.value,
+            ):
+                return False, status or "INVALID_STATUS"
 
         if record.get(
             "terminal_recovery_sent"
@@ -1817,11 +1955,337 @@ def mark_teammate_failed(
         record["status"] = TeammateLifecycleStatus.FAILED.value
         if reason:
             record["failure_reason"] = reason
+        record.pop("direct_no_write_terminal", None)
         record["current_task_id"] = None
         record["current_run_id"] = None
         record["authorized_operations"] = []
         record["authorized_selected_agents"] = []
         return True
+
+def _detach_failed_task(
+    record: dict[str, Any],
+    reason: str,
+) -> None:
+    record["status"] = TeammateLifecycleStatus.FAILED.value
+    record["failure_reason"] = reason
+    record.pop("direct_no_write_terminal", None)
+    record["current_task_id"] = None
+    record["current_run_id"] = None
+    record["authorized_operations"] = []
+    record["authorized_selected_agents"] = []
+    _touch_transition(record)
+
+
+def terminate_legacy_merchant_task(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> tuple[bool, str]:
+    """End one stale proposal/apply task without any write.
+
+    The task is marked FAILED, never successful, and its authority is
+    detached so repeated TeammateIdle events cannot request more turns.
+    Unresolved write evidence keeps the task fail-closed instead.
+    """
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if record.get("canonical_name") != teammate_name:
+            return False, "NON_CANONICAL"
+
+        if (
+            str(record.get("current_run_id") or "") != str(run_id)
+            or str(record.get("current_task_id") or "") != str(task_id)
+            or not str(run_id).strip()
+            or not str(task_id).strip()
+        ):
+            return False, "BINDING_MISMATCH"
+
+        if not has_legacy_merchant_operation(record):
+            return False, "NOT_LEGACY"
+
+        if record.get("status") not in {
+            TeammateLifecycleStatus.RUNNING.value,
+            TeammateLifecycleStatus.REPORT_RECEIVED.value,
+            TeammateLifecycleStatus.ACKNOWLEDGED.value,
+        }:
+            return False, str(record.get("status") or "INVALID_STATUS")
+
+        from claude.hooks.merchant_completion_receipt import (
+            has_direct_write_footprint,
+        )
+
+        # Write evidence is never discarded or settled by this path.
+        if has_direct_write_footprint(record):
+            return False, "DIRECT_WRITE_PRESENT"
+
+        _detach_failed_task(
+            record,
+            "LEGACY_MERCHANT_OPERATION_REMOVED",
+        )
+
+        return True, "TERMINATED"
+
+
+def direct_authority_spent_for_run(session_id: Any, run_id: str) -> bool:
+    """True when this run's one-use Direct EXECUTE authority was spent."""
+
+    from claude.hooks.runtime_state import load_state
+
+    run_state = load_state(session_id)
+
+    return (
+        isinstance(run_state, dict)
+        and run_state.get("run_id") == run_id
+        and (
+            run_state.get("merchant_runtime_authorization_issued") is True
+            or "merchant_runtime_authorization" in run_state
+        )
+    )
+
+
+def _never_executed_reservations(record: dict[str, Any]) -> bool:
+    """Every Create reservation is RESERVED and was never claimed.
+
+    The executor persists EXECUTING with an attempt identity before it
+    contacts PostgreSQL, so such a reservation never reached the database.
+    """
+
+    writes = record.get("direct_writes")
+
+    return (
+        isinstance(writes, dict)
+        and bool(writes)
+        and record.get("direct_completion_receipt") is None
+        and all(
+            isinstance(write, dict)
+            and write.get("status") == "RESERVED"
+            and "execution_attempt_id" not in write
+            for write in writes.values()
+        )
+    )
+
+
+def fail_spent_direct_execution(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+) -> tuple[bool, str]:
+    """End a Direct EXECUTE task that can never be released successfully.
+
+    - a scoped execution that did not succeed (spent, never retried);
+    - spent run authority with no team-state write evidence at all;
+    - Create reservations that were never claimed for execution.
+
+    Evidence is kept for audit and blocks reassignment, so an uncertain
+    outcome can never be released or overwritten.
+    """
+
+    from claude.hooks.merchant_completion_receipt import (
+        SCOPE_EXECUTION_SUCCEEDED,
+        has_direct_write_footprint,
+        valid_scope_execution,
+    )
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get("canonical_name") != teammate_name
+            or record.get("status") != TeammateLifecycleStatus.RUNNING.value
+            or record.get("current_run_id") != run_id
+            or record.get("current_task_id") != task_id
+            or record.get("authorized_operations") != ["merchant_execute"]
+            or record.get("authorized_selected_agents") != [teammate_name]
+        ):
+            return False, "BINDING_MISMATCH"
+
+        if "direct_scope_execution" in record:
+            execution = record["direct_scope_execution"]
+
+            if (
+                not valid_scope_execution(execution)
+                or execution["run_id"] != run_id
+                or execution["task_id"] != task_id
+                or execution["status"] == SCOPE_EXECUTION_SUCCEEDED
+            ):
+                return False, "NO_SPENT_EXECUTION"
+
+            if has_unresolved_direct_writes(record):
+                return False, "UNRESOLVED_DIRECT_WRITE"
+
+            _detach_failed_task(
+                record,
+                f"DIRECT_EXECUTION_{execution['status']}",
+            )
+
+            return True, "FAILED"
+
+        if _never_executed_reservations(record):
+            _detach_failed_task(record, "DIRECT_WRITE_NEVER_EXECUTED")
+            return True, "FAILED"
+
+        if not has_direct_write_footprint(
+            record
+        ) and direct_authority_spent_for_run(session_id, run_id):
+            # Authority was spent outside any trusted reservation. The
+            # outcome is unknowable here: never a no-write completion.
+            record["direct_unverified_authority"] = {
+                "run_id": run_id,
+                "task_id": task_id,
+            }
+            _detach_failed_task(
+                record,
+                "DIRECT_AUTHORITY_SPENT_WITHOUT_RELEASE",
+            )
+            return True, "FAILED"
+
+        return False, "NO_SPENT_EXECUTION"
+
+
+def bind_running_teammate_pane_session(
+    session_id: Any,
+    teammate_name: str,
+    pane_session_id: Any,
+    run_id: str,
+    task_id: str,
+    *,
+    required_operation: str,
+) -> tuple[bool, str]:
+    """Bind the executing pane for this task from harness identity only.
+
+    The caller's self-declared ``agent_type``/``session_id`` are never
+    enough: the hook process must run in the tmux pane the harness recorded
+    for this teammate (see harness_team_identity). The binding is scoped to
+    the current task. A verified pane presenting a different session for an
+    already-bound task is a conflict: the task ends FAILED (bounded) with
+    its evidence kept. Identity evidence grants no write authority.
+    """
+
+    from claude.hooks.harness_team_identity import verified_teammate_pane
+
+    pane_id = str(pane_session_id or "").strip()
+
+    if not all(
+        (
+            pane_id,
+            teammate_name,
+            str(run_id or "").strip(),
+            str(task_id or "").strip(),
+            str(required_operation or "").strip(),
+        )
+    ):
+        return False, "INVALID_BINDING"
+
+    tmux_pane = verified_teammate_pane(session_id, teammate_name)
+
+    if tmux_pane is None:
+        return False, "PANE_IDENTITY_UNVERIFIED"
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "DOES_NOT_EXIST"
+
+        if (
+            record.get("canonical_name") != teammate_name
+            or record.get("status") != TeammateLifecycleStatus.RUNNING.value
+        ):
+            return False, "NOT_RUNNING"
+
+        if (
+            record.get("current_run_id") != run_id
+            or record.get("current_task_id") != task_id
+        ):
+            return False, "BINDING_MISMATCH"
+
+        if (
+            record.get("authorized_operations") != [required_operation]
+            or record.get("authorized_selected_agents") != [teammate_name]
+        ):
+            return False, "AUTHORIZATION_MISMATCH"
+
+        if record.get("trusted_pane_task_id") == task_id:
+            if (
+                record.get("trusted_pane_session_id") == pane_id
+                and record.get("trusted_tmux_pane_id") == tmux_pane
+            ):
+                return True, "ALREADY_BOUND"
+
+            _detach_failed_task(record, "PANE_BINDING_CONFLICT")
+            return False, "PANE_BINDING_CONFLICT"
+
+        record["trusted_pane_session_id"] = pane_id
+        record["trusted_tmux_pane_id"] = tmux_pane
+        record["trusted_pane_task_id"] = task_id
+
+        return True, "BOUND"
+
+
+def direct_pane_identity_status(
+    session_id: Any,
+    teammate_name: str,
+    pane_session_id: Any,
+    run_id: str,
+    task_id: str,
+) -> str:
+    """Classify a TeammateIdle event for a Direct EXECUTE task.
+
+    - ``MATCH``: no binding yet, or the bound pane and session;
+    - ``IGNORE``: the event cannot come from a pane bound to this task
+      (unverified identity): no state change and no feedback, so a foreign
+      pane can neither settle the task nor loop;
+    - ``CONFLICT``: the teammate's verified pane presents a different
+      session for a bound task: the task ended FAILED with evidence kept.
+    """
+
+    from claude.hooks.harness_team_identity import verified_teammate_pane
+
+    with locked_team_state(session_id) as state:
+        record = (state or {}).get("teammates", {}).get(teammate_name)
+
+        if (
+            not isinstance(record, dict)
+            or record.get("current_run_id") != run_id
+            or record.get("current_task_id") != task_id
+            or record.get("trusted_pane_task_id") != task_id
+        ):
+            return "MATCH"
+
+        tmux_pane = verified_teammate_pane(session_id, teammate_name)
+
+        if tmux_pane is None or tmux_pane != record.get("trusted_tmux_pane_id"):
+            return "IGNORE"
+
+        if record.get("trusted_pane_session_id") == str(
+            pane_session_id or ""
+        ).strip():
+            return "MATCH"
+
+        if record.get("status") == TeammateLifecycleStatus.RUNNING.value:
+            _detach_failed_task(record, "PANE_BINDING_CONFLICT")
+
+        return "CONFLICT"
+
 
 def recover_failed_teammate_to_idle(
     session_id: Any,
@@ -1912,6 +2376,13 @@ def recover_failed_teammate_to_idle(
 
         if has_unresolved_direct_writes(record):
                 return False, "UNRESOLVED_DIRECT_WRITE"
+
+        # Unsettled Direct EXECUTE evidence is never recovered for reuse.
+        if (
+            "direct_scope_execution" in record
+            or "direct_unverified_authority" in record
+        ):
+            return False, "UNRESOLVED_SCOPE_EXECUTION"
 
         record[
             "status"
@@ -2073,6 +2544,10 @@ def mark_bound_report_received(
         ):
             return False
 
+        # Removed Merchant workflows never reach report acceptance.
+        if has_legacy_merchant_operation(record):
+            return False
+
         prior_status = str(
             record.get("status") or ""
         )
@@ -2099,33 +2574,42 @@ def mark_bound_report_received(
             return False
 
         # Direct execution completion requires trusted, persisted
-        # PostgreSQL evidence for every write in this task.
-        # Legacy operations preserve their existing report behavior.
+        # PostgreSQL evidence for every write in this task, or an
+        # exact no-write marker for a task with no write footprint.
+        # Absent writes alone are never no-write evidence.
         if "merchant_execute" in (
             record.get("authorized_operations") or []
         ):
-            writes = record.get("direct_writes")
+            from claude.hooks.merchant_completion_receipt import (
+                no_write_terminal_matches_state,
+                scope_execution_succeeded,
+            )
 
-            if not isinstance(writes, dict) or not writes:
-                return False
+            if not (
+                no_write_terminal_matches_state(record)
+                or scope_execution_succeeded(record)
+            ):
+                writes = record.get("direct_writes")
 
-            matching = [
-                write
-                for write in writes.values()
-                if isinstance(write, dict)
-                and write.get("run_id") == current_run_id
-                and write.get("task_id") == current_task_id
-            ]
+                if not isinstance(writes, dict) or not writes:
+                    return False
 
-            if not matching:
-                return False
+                matching = [
+                    write
+                    for write in writes.values()
+                    if isinstance(write, dict)
+                    and write.get("run_id") == current_run_id
+                    and write.get("task_id") == current_task_id
+                ]
 
-            if has_unresolved_direct_writes(record):
-                return False
+                if not matching:
+                    return False
 
-            if has_invalid_direct_completion_receipt(record):
-                return False
+                if has_unresolved_direct_writes(record):
+                    return False
 
+                if has_invalid_direct_completion_receipt(record):
+                    return False
 
         # Idempotent duplicate delivery:
         # do not extend the lease again for the same already-recorded report.
@@ -2163,7 +2647,7 @@ def mark_bound_report_received(
                     write.get("claim_generation"),
                 )
                 for write_id, write in sorted(
-                    record["direct_writes"].items()
+                    (record.get("direct_writes") or {}).items()
                 )
                 if isinstance(write_id, str)
                 and isinstance(write, dict)

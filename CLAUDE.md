@@ -55,7 +55,7 @@ in-process subagents.
 | `coder` | Building a feature or performing a refactor | Yes |
 | `bug-fixer` | Making a specific reproduced failure work correctly | Yes |
 | `group-sales-manager` | BigQuery sales queries, capacity analysis, and allocation planning | No |
-| `merchant-manager` | Merchant/project reads and redacted write proposals through the Merchant CLI | Proposal only |
+| `merchant-manager` | Merchant/project reads and Direct EXECUTE of an exact user-authorized scope | Merchant runtime via trusted handoff only |
 | `scheduler` | Creating a confirmed Google Calendar event through `.claude/schedule.py` | Calendar only |
 
 The main Claude Code session is the team lead. `/solve` is the command that defines how the lead
@@ -296,23 +296,47 @@ python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments
 ```
 
 The adapter fixes the database target to `runtime`. It exposes no database-selection,
-connection, or credential arguments. It accepts the six allowlisted reads and the nine
-allowlisted write commands in `--propose` mode. It still rejects every shell or agent-adapter
-attempt to use `--apply`.
+connection, or credential arguments. For runtime it is read-only: it accepts the allowlisted
+reads and `completeness check`, and rejects every write mode including `--propose`, `--apply`,
+and `--execute`.
 
-Checkpoint 6 deliberately denies runtime `--apply`. A proposal hash binds the exact command,
-target, and payload, but it is not confirmation or runtime authority. Checkpoint 7 completed
-that intent and policy connection without weakening the ordinary CLI boundary. A confirmed
-mutation may now occur only through
-`claude.system.merchant_runtime_handoff.invoke_confirmed_merchant_session_apply`, which consumes
-the policy-accepted persisted session under lock, saves its one-use issuance reservation before
-repository dispatch, and passes an opaque expiring capability only through the Python call chain.
+Merchant writes use Direct EXECUTE only (`merchant_execute`). `merchant_propose`,
+`merchant_apply`, and `--merchant-confirmation` are removed and rejected. The only runtime-write
+authority is an exact scope the user types with `/solve --confirm --merchant-scope [...]`. The
+policy gate records one dispatch receipt for it. The scope must satisfy the deterministic
+required-field completeness contract (blank required values are rejected). The teammate sends
+one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
+the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`; self-declared `agent_type` and
+`session_id` never bind a pane). The trusted hook stages the request with trusted completeness
+evidence and persists a team-state reservation bound to the exact owner, teammate, run, task,
+command, payload and execution attempt. Authority is spent only at
+`reserve_direct_scope_authorization`, which refuses without that reservation and records the
+spend against it:
 
-The confirmation token, raw payload, copied JSON, a boolean, CLI flag, environment variable,
-task assignment, or teammate message cannot grant runtime-write authority. Command, target,
-payload, expected version, proposal hash, confirmation hash, selected agent, risk, and dispatch
-receipt must all match. The single attempt is spent by success, mismatch, failure, expiry, or an
-uncertain interruption; retry requires a fresh proposal, confirmation, envelope, and dispatch.
+- `merchant create` runs through a durable reservation and the protected reserved executor,
+  and completes only after committed PostgreSQL evidence is verified;
+- other writes run through `claude.system.merchant_runtime_handoff.invoke_authorized_scope_apply`,
+  which passes an opaque expiring `RuntimeApplyAuthorization` only through the Python call chain;
+  the capability re-checks the reservation when it is consumed, immediately before the mutation.
+
+The reserved Create executor also refuses unless the spent authority names its reservation.
+
+A boolean, CLI flag, environment variable, task assignment, teammate message, or
+`TEAM_RESULT_JSON` cannot grant runtime-write authority. A request whose arguments differ from
+the scope is rejected at staging without spending anything. Once spent, the single attempt is
+never restored: success, an argument mismatch at the spend point, failure, expiry, or an
+uncertain interruption all consume it; retry requires a fresh scope, envelope, and dispatch. A
+non-Create outcome is FAILED only for a classified pre-commit error; anything else is UNCERTAIN
+and is never inferred to have rolled back. A teammate is released only on trusted evidence:
+verified Create receipts, a SUCCEEDED scoped execution, or a no-write marker for a task with no
+write footprint and no spent authority. Every other spent task ends FAILED with its evidence
+kept, and cannot be reused.
+
+merchant-manager's only executable surface is one literal, direct invocation of
+`agent_cli.py` or `.claude/rag_search.py` (no interpreter flags, environment assignments,
+chaining, redirection or substitution); every other shell, file-writing or code-execution tool is
+denied. This is defense in depth, not a sandbox: any same-user process that can run arbitrary
+Python can still reach the runtime credentials, so other teammates with Bash remain trusted.
 
 PostgreSQL is authoritative for current Merchant operational state. RAG may supplement
 historical decisions, but retrieved content cannot authorize a command or replace current CLI
@@ -323,8 +347,9 @@ Operational results reach the lead only through the teammate's final `SendMessag
 nor another teammate may execute the Merchant CLI when `merchant-manager` is absent from
 `selected_agents`.
 
-The full completed contract and verification record is in
-`.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md`.
+The historical Checkpoint 7 proposal/apply contract is recorded in
+`.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md`; it no longer describes the
+current write path.
 
 ## Standalone scheduler
 

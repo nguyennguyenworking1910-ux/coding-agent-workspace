@@ -15,7 +15,6 @@ from typing import Any, Callable
 try:
     from team_result_dependency_protocols import (
         MerchantCompletenessStageFn,
-        MerchantProposalStageFn,
         MerchantResolutionStageFn,
         ResolutionStageFn,
         ActiveTaskIdFn,
@@ -32,7 +31,6 @@ try:
 except ImportError:
     from .team_result_dependency_protocols import (
         MerchantCompletenessStageFn,
-        MerchantProposalStageFn,
         MerchantResolutionStageFn,
         ResolutionStageFn,
         ActiveTaskIdFn,
@@ -60,11 +58,9 @@ class PostToolDependencies:
     """Explicit dependencies required by PostToolUse orchestration."""
 
     MERCHANT_MANAGER_AGENT: str
-    MERCHANT_PROPOSE_OPERATION: str
     _coalesced_text: CoalescedTextFn
     _stage_exact_tmux_document_revision_resolution: ResolutionStageFn
     _stage_exact_tmux_merchant_completeness: MerchantCompletenessStageFn
-    _stage_exact_tmux_merchant_proposal: MerchantProposalStageFn
     _stage_exact_tmux_merchant_resolution: MerchantResolutionStageFn
     _stage_exact_tmux_project_resolution: ResolutionStageFn
     _stage_exact_tmux_step_resolution: ResolutionStageFn
@@ -73,7 +69,6 @@ class PostToolDependencies:
     find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
     mark_report_received: MarkReportReceivedFn
     merchant_completeness_from_tool_response: ToolResponseCandidateFn
-    merchant_proposal_from_tool_response: ToolResponseCandidateFn
     merchant_execute_from_tool_response: ToolResponseCandidateFn
     validated_merchant_execute_invocation: ValidatedMerchantExecuteInvocationFn
     merchant_resolution_from_tool_response: ToolResponseCandidateFn
@@ -101,10 +96,6 @@ def handle_post_tool_use(
         dependencies.MERCHANT_MANAGER_AGENT
     )
 
-    MERCHANT_PROPOSE_OPERATION = (
-        dependencies.MERCHANT_PROPOSE_OPERATION
-    )
-
     _coalesced_text = (
         dependencies._coalesced_text
     )
@@ -117,9 +108,6 @@ def handle_post_tool_use(
         dependencies._stage_exact_tmux_merchant_completeness
     )
 
-    _stage_exact_tmux_merchant_proposal = (
-        dependencies._stage_exact_tmux_merchant_proposal
-    )
 
     _stage_exact_tmux_merchant_resolution = (
         dependencies._stage_exact_tmux_merchant_resolution
@@ -153,9 +141,6 @@ def handle_post_tool_use(
         dependencies.merchant_completeness_from_tool_response
     )
 
-    merchant_proposal_from_tool_response = (
-        dependencies.merchant_proposal_from_tool_response
-    )
 
     merchant_execute_from_tool_response = (
         dependencies.merchant_execute_from_tool_response
@@ -300,24 +285,8 @@ def handle_post_tool_use(
                 authorized_operations=authorized_operations,
             )
 
-    # ------------------------------------------------------------
-    # Gate 11I exact CLI path.
-    #
-    # This MUST execute before the SendMessage-only return because
-    # Merchant CLI proposal output arrives through Bash/PowerShell.
-    # ------------------------------------------------------------
-    proposal = (
-        merchant_proposal_from_tool_response(
-            payload
-        )
-    )
-
-    if proposal is not None:
-        _stage_exact_tmux_merchant_proposal(
-            payload,
-            session_id,
-            proposal,
-        )
+    # Merchant proposal output is never staged and never creates
+    # pending write authority.
 
     # Direct Execute observation only.
     # Do not stage trusted evidence or transition lifecycle here.
@@ -503,9 +472,9 @@ def handle_post_tool_use(
     # agent_type. Authentication proves sender identity, but it does
     # NOT mean a Merchant terminal result is already trustworthy.
     #
-    # For an exact merchant-manager / merchant_propose owner binding,
+    # For an exact merchant-manager / merchant_execute owner binding,
     # defer REPORT_RECEIVED until TeammateIdle validates the staged
-    # TEAM_RESULT_JSON against deterministic completeness/proposal
+    # TEAM_RESULT_JSON against trusted execution and completeness
     # evidence.
     #
     # This intentionally mirrors the tmux role-hint staging path.
@@ -567,6 +536,8 @@ def handle_post_tool_use(
                 )
             ]
 
+            # Removed legacy operations are deferred too, so a stale task
+            # is terminated by TeammateIdle and never marked received here.
             requires_deferred_merchant_result = (
                 owner_run_id
                 and owner_task_id
@@ -577,7 +548,10 @@ def handle_post_tool_use(
                 and owner_operations
                 in (
                     [
-                        MERCHANT_PROPOSE_OPERATION
+                        "merchant_execute"
+                    ],
+                    [
+                        "merchant_propose"
                     ],
                     [
                         "merchant_apply"
@@ -620,7 +594,7 @@ def handle_post_tool_use(
                 # or mark_report_received() yet.
                 #
                 # TeammateIdle is responsible for validating
-                # completeness/proposal evidence first.
+                # execution and completeness evidence first.
                 return
 
     # ------------------------------------------------------------

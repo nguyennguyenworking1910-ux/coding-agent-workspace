@@ -1,8 +1,8 @@
 """TeammateIdle orchestration extracted from team_result_hook.
 
-This module preserves trusted result reconciliation, Merchant
-proposal/completeness enforcement, runtime apply verification,
-lifecycle release, cleanup, and reusable-teammate behavior.
+This module preserves trusted result reconciliation, Merchant Direct
+EXECUTE terminal verification (committed writes or a trusted no-write
+outcome), lifecycle release, cleanup, and reusable-teammate behavior.
 
 Dependencies are supplied dynamically by the hook so existing
 monkeypatch and dependency-injection seams remain compatible.
@@ -21,22 +21,17 @@ try:
         ActiveTaskIdFn,
         BoundMerchantCompletenessReceiptFn,
         MessageCandidateFn,
-        BindReportedTeammatePaneSessionFn,
         ClearPendingMerchantCompletenessFn,
         ClearPendingReceiptFn,
         LoadPendingStateFn,
         MarkBoundReportReceivedFn,
         MarkRecoverySentFn,
         MarkReportReceivedFn,
-        PendingMerchantProposalMatchesFn,
-        RuntimeHandoffMatchesFn,
-        CaptureProposalReceiptFn,
         ValidateCompletenessReceiptForOutcomeFn,
         FindUniqueActiveTeammateOwnerFn,
         LockedStateFn,
         RecordTeammateResultFn,
         ReleaseReportedTeammateToIdleFn,
-        ProposalRequiresLocalAutoReceiptFn,
     )
 except ImportError:
     from .team_result_dependency_protocols import (
@@ -45,26 +40,18 @@ except ImportError:
         ActiveTaskIdFn,
         BoundMerchantCompletenessReceiptFn,
         MessageCandidateFn,
-        BindReportedTeammatePaneSessionFn,
         ClearPendingMerchantCompletenessFn,
         ClearPendingReceiptFn,
         LoadPendingStateFn,
         MarkBoundReportReceivedFn,
         MarkRecoverySentFn,
         MarkReportReceivedFn,
-        PendingMerchantProposalMatchesFn,
-        RuntimeHandoffMatchesFn,
-        CaptureProposalReceiptFn,
         ValidateCompletenessReceiptForOutcomeFn,
         FindUniqueActiveTeammateOwnerFn,
         LockedStateFn,
         RecordTeammateResultFn,
         ReleaseReportedTeammateToIdleFn,
-        ProposalRequiresLocalAutoReceiptFn,
     )
-
-
-
 
 
 class ReconcileDirectWritesFn(Protocol):
@@ -78,46 +65,82 @@ class ReconcileDirectWritesFn(Protocol):
     ) -> bool: ...
 
 
+class EstablishNoWriteTerminalFn(Protocol):
+    def __call__(
+        self,
+        *,
+        owner_session_id: str,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+        outcome: Any,
+    ) -> bool: ...
+
+
+class TerminateDirectTaskFn(Protocol):
+    def __call__(
+        self,
+        session_id: Any,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+    ) -> tuple[bool, str]: ...
+
+
+class DirectPaneIdentityStatusFn(Protocol):
+    def __call__(
+        self,
+        session_id: Any,
+        teammate_name: str,
+        pane_session_id: Any,
+        run_id: str,
+        task_id: str,
+    ) -> str: ...
+
+
+LEGACY_MERCHANT_OPERATIONS = frozenset(
+    {"merchant_propose", "merchant_apply"}
+)
+
+
+def _has_legacy_merchant_operation(record: dict[str, Any]) -> bool:
+    return any(
+        str(operation) in LEGACY_MERCHANT_OPERATIONS
+        for operation in (record.get("authorized_operations") or [])
+    )
+
+
 @dataclass(frozen=True)
 class TeammateIdleDependencies:
     """Explicit dependencies required by TeammateIdle orchestration."""
 
     reconcile_direct_writes: ReconcileDirectWritesFn
-    MERCHANT_APPLY_FAILED_OUTCOME: str
-    MERCHANT_APPLY_SUCCESS_OUTCOME: str
+    direct_task_is_write_free: ReconcileDirectWritesFn
+    establish_no_write_terminal: EstablishNoWriteTerminalFn
+    terminate_legacy_merchant_task: TerminateDirectTaskFn
+    fail_spent_direct_execution: TerminateDirectTaskFn
+    direct_pane_identity_status: DirectPaneIdentityStatusFn
     MERCHANT_MANAGER_AGENT: str
-    MERCHANT_PROPOSAL_READY_OUTCOME: str
-    MERCHANT_PROPOSE_OPERATION: str
     MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES: Any
     MISSING_RESULT_FEEDBACK: str
     PENDING_RESULT_FEEDBACK: str
     _clear_merchant_resolution_after_release: ClearMerchantResolutionAfterReleaseFn
     active_task_id: ActiveTaskIdFn
-    bind_reported_teammate_pane_session: BindReportedTeammatePaneSessionFn
     bound_merchant_completeness_receipt: BoundMerchantCompletenessReceiptFn
     bounded_terminal_result_failure: BoundedTerminalResultFailureFn
-    capture_proposal_receipt: CaptureProposalReceiptFn
     clear_pending_merchant_completeness: ClearPendingMerchantCompletenessFn
-    clear_pending_merchant_proposal: ClearPendingReceiptFn
     clear_pending_result: ClearPendingReceiptFn
-    failed_runtime_handoff_matches: RuntimeHandoffMatchesFn
     find_unique_active_teammate_owner: FindUniqueActiveTeammateOwnerFn
-    load_pending_merchant_proposal: LoadPendingStateFn
     load_pending_result: LoadPendingStateFn
     load_team_state: LoadPendingStateFn
     locked_state: LockedStateFn
     mark_bound_report_received: MarkBoundReportReceivedFn
     mark_recovery_sent: MarkRecoverySentFn
     mark_report_received: MarkReportReceivedFn
-    pending_merchant_proposal_matches: PendingMerchantProposalMatchesFn
     record_teammate_result: RecordTeammateResultFn
     release_reported_teammate_to_idle: ReleaseReportedTeammateToIdleFn
-    successful_runtime_handoff_matches: RuntimeHandoffMatchesFn
     task_result_candidate_from_message: MessageCandidateFn
     validate_completeness_receipt_for_outcome: ValidateCompletenessReceiptForOutcomeFn
-    proposal_requires_local_auto_receipt: (
-        ProposalRequiresLocalAutoReceiptFn
-    )
 
 
 def handle_teammate_idle(
@@ -133,24 +156,8 @@ def handle_teammate_idle(
             "TeammateIdle dependencies are required"
         )
 
-    MERCHANT_APPLY_FAILED_OUTCOME = (
-        dependencies.MERCHANT_APPLY_FAILED_OUTCOME
-    )
-
-    MERCHANT_APPLY_SUCCESS_OUTCOME = (
-        dependencies.MERCHANT_APPLY_SUCCESS_OUTCOME
-    )
-
     MERCHANT_MANAGER_AGENT = (
         dependencies.MERCHANT_MANAGER_AGENT
-    )
-
-    MERCHANT_PROPOSAL_READY_OUTCOME = (
-        dependencies.MERCHANT_PROPOSAL_READY_OUTCOME
-    )
-
-    MERCHANT_PROPOSE_OPERATION = (
-        dependencies.MERCHANT_PROPOSE_OPERATION
     )
 
     MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES = (
@@ -173,10 +180,6 @@ def handle_teammate_idle(
         dependencies.active_task_id
     )
 
-    bind_reported_teammate_pane_session = (
-        dependencies.bind_reported_teammate_pane_session
-    )
-
     bound_merchant_completeness_receipt = (
         dependencies.bound_merchant_completeness_receipt
     )
@@ -185,32 +188,16 @@ def handle_teammate_idle(
         dependencies.bounded_terminal_result_failure
     )
 
-    capture_proposal_receipt = (
-        dependencies.capture_proposal_receipt
-    )
-
     clear_pending_merchant_completeness = (
         dependencies.clear_pending_merchant_completeness
-    )
-
-    clear_pending_merchant_proposal = (
-        dependencies.clear_pending_merchant_proposal
     )
 
     clear_pending_result = (
         dependencies.clear_pending_result
     )
 
-    failed_runtime_handoff_matches = (
-        dependencies.failed_runtime_handoff_matches
-    )
-
     find_unique_active_teammate_owner = (
         dependencies.find_unique_active_teammate_owner
-    )
-
-    load_pending_merchant_proposal = (
-        dependencies.load_pending_merchant_proposal
     )
 
     load_pending_result = (
@@ -237,10 +224,6 @@ def handle_teammate_idle(
         dependencies.mark_report_received
     )
 
-    pending_merchant_proposal_matches = (
-        dependencies.pending_merchant_proposal_matches
-    )
-
     record_teammate_result = (
         dependencies.record_teammate_result
     )
@@ -249,19 +232,12 @@ def handle_teammate_idle(
         dependencies.release_reported_teammate_to_idle
     )
 
-    successful_runtime_handoff_matches = (
-        dependencies.successful_runtime_handoff_matches
-    )
-
     task_result_candidate_from_message = (
         dependencies.task_result_candidate_from_message
     )
 
     validate_completeness_receipt_for_outcome = (
         dependencies.validate_completeness_receipt_for_outcome
-    )
-    proposal_requires_local_auto_receipt = (
-        dependencies.proposal_requires_local_auto_receipt
     )
 
     teammate_name = str(
@@ -292,6 +268,25 @@ def handle_teammate_idle(
             direct_team_state
             is not None
         ):
+            direct_record = (
+                direct_team_state.get("teammates") or {}
+            ).get(teammate_name)
+
+            if (
+                isinstance(direct_record, dict)
+                and _has_legacy_merchant_operation(direct_record)
+            ):
+                terminated, _ = dependencies.terminate_legacy_merchant_task(
+                    session_id,
+                    teammate_name,
+                    str(direct_record.get("current_run_id") or ""),
+                    str(direct_record.get("current_task_id") or ""),
+                )
+
+                if terminated:
+                    clear_pending_result(session_id)
+                    return ""
+
             released, _ = (
                 release_reported_teammate_to_idle(
                     session_id,
@@ -345,22 +340,6 @@ def handle_teammate_idle(
                 session_id
             )
         ):
-            pending_result = (
-                load_pending_result(
-                    session_id
-                )
-                if session_id
-                else None
-            )
-
-            if (
-                pending_result
-                is None
-            ):
-                return (
-                    MISSING_RESULT_FEEDBACK
-                )
-
             owner_run_id = str(
                 owner_record.get(
                     "current_run_id"
@@ -381,6 +360,59 @@ def handle_teammate_idle(
             ):
                 return (
                     PENDING_RESULT_FEEDBACK
+                )
+
+            # A stale task from a removed Merchant workflow ends here, with
+            # or without a delivered report: FAILED, no write, no new turn.
+            if _has_legacy_merchant_operation(owner_record):
+                terminated, _ = dependencies.terminate_legacy_merchant_task(
+                    owner_session_id,
+                    teammate_name,
+                    owner_run_id,
+                    owner_task_id,
+                )
+
+                if not terminated:
+                    return PENDING_RESULT_FEEDBACK
+
+                clear_pending_result(session_id)
+
+                return ""
+
+            # Once bound, only the verified executing pane may settle a
+            # direct task. A foreign pane is ignored without feedback, and a
+            # binding conflict ends the task: neither can loop.
+            if "merchant_execute" in (
+                owner_record.get("authorized_operations") or []
+            ):
+                pane_status = dependencies.direct_pane_identity_status(
+                    owner_session_id,
+                    teammate_name,
+                    session_id,
+                    owner_run_id,
+                    owner_task_id,
+                )
+
+                if pane_status != "MATCH":
+                    if pane_status == "CONFLICT":
+                        clear_pending_result(session_id)
+
+                    return ""
+
+            pending_result = (
+                load_pending_result(
+                    session_id
+                )
+                if session_id
+                else None
+            )
+
+            if (
+                pending_result
+                is None
+            ):
+                return (
+                    MISSING_RESULT_FEEDBACK
                 )
 
             receipt_matches_owner = (
@@ -447,344 +479,66 @@ def handle_teammate_idle(
                 ):
                     return PENDING_RESULT_FEEDBACK
 
-                try:
-                    direct_verified = (
-                        dependencies.reconcile_direct_writes(
-                            owner_session_id=owner_session_id,
-                            teammate_name=teammate_name,
-                            run_id=owner_run_id,
-                            task_id=owner_task_id,
-                        )
+                # Trusted state, never message content, selects the
+                # path. Any reservation, receipt, or same-task history
+                # requires committed-evidence reconciliation.
+                write_free = dependencies.direct_task_is_write_free(
+                    owner_session_id=owner_session_id,
+                    teammate_name=teammate_name,
+                    run_id=owner_run_id,
+                    task_id=owner_task_id,
+                )
+
+                if write_free is True:
+                    task_result = task_result_candidate_from_message(
+                        str(pending_result.get("message") or "")
                     )
-                except Exception:
-                    return PENDING_RESULT_FEEDBACK
 
-                if direct_verified is not True:
-                    return PENDING_RESULT_FEEDBACK
-
-            marked = (
-                mark_bound_report_received(
-                    owner_session_id,
-                    teammate_name,
-                    owner_run_id,
-                    owner_task_id,
-                    "sendmessage",
-                )
-            )
-
-            if not marked:
-                return (
-                    PENDING_RESULT_FEEDBACK
-                )
-
-            # --------------------------------------------------------
-            # Gate 11I:
-            # Merchant proposal authority comes from the exact staged CLI
-            # output, not from the model-copied SendMessage JSON.
-            #
-            # Missing/mismatched proposal state does not invent authority.
-            # It also does not undo a valid report delivery.
-            # --------------------------------------------------------
-
-            owner_authorized_operations = [
-                str(operation)
-                for operation in (
-                    owner_record.get(
-                        "authorized_operations"
-                    )
-                    or []
-                )
-            ]
-
-            owner_authorized_agents = [
-                str(agent)
-                for agent in (
-                    owner_record.get(
-                        "authorized_selected_agents"
-                    )
-                    or []
-                )
-            ]
-
-            requires_exact_merchant_apply = (
-                teammate_name
-                == MERCHANT_MANAGER_AGENT
-                and owner_authorized_operations
-                == [
-                    "merchant_apply"
-                ]
-                and owner_authorized_agents
-                == [
-                    MERCHANT_MANAGER_AGENT
-                ]
-            )
-
-            if requires_exact_merchant_apply:
-                apply_task_result = (
-                    task_result_candidate_from_message(
-                        str(
-                            pending_result.get(
-                                "message"
-                            )
-                            or ""
-                        )
-                    )
-                )
-
-                if (
-                    apply_task_result
-                    is None
-                    or str(
-                        apply_task_result.get(
-                            "operation"
-                        )
-                        or ""
+                    outcome = str(
+                        (task_result or {}).get("outcome") or ""
                     ).strip()
-                    != "merchant_apply"
-                    or str(
-                        apply_task_result.get(
-                            "database_target"
-                        )
-                        or ""
-                    ).strip()
-                    != "runtime"
-                ):
-                    return (
-                        bounded_terminal_result_failure(
-                            owner_session_id=(
-                                owner_session_id
-                            ),
-                            pane_session_id=(
-                                session_id
-                            ),
-                            teammate_name=(
-                                teammate_name
-                            ),
-                            run_id=(
-                                owner_run_id
-                            ),
-                            task_id=(
-                                owner_task_id
-                            ),
-                            reason=(
-                                "Merchant apply terminal result is "
-                                "missing or malformed"
-                            ),
-                        )
-                    )
 
-                apply_outcome = str(
-                    apply_task_result.get(
-                        "outcome"
-                    )
-                    or ""
-                ).strip()
-
-                apply_confirmation_hash = str(
-                    apply_task_result.get(
-                        "confirmation_hash"
-                    )
-                    or ""
-                ).strip()
-
-                with locked_state(
-                    owner_session_id
-                ) as owner_state:
-                    if owner_state is None:
-                        return (
-                            PENDING_RESULT_FEEDBACK
-                        )
-
+                    # An execution outcome without a trusted reservation
+                    # is malformed, as is any non-direct operation.
                     if (
-                        apply_outcome
-                        == MERCHANT_APPLY_SUCCESS_OUTCOME
+                        task_result is None
+                        or outcome
+                        not in MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES
+                        or str(
+                            task_result.get("operation") or ""
+                        ).strip()
+                        != "merchant_execute"
+                        or str(
+                            task_result.get("database_target") or ""
+                        ).strip()
+                        != "runtime"
                     ):
-                        trusted_apply_result = (
-                            successful_runtime_handoff_matches(
-                                owner_state,
-                                owner_session_id=(
-                                    owner_session_id
-                                ),
-                                teammate_name=(
-                                    teammate_name
-                                ),
-                                run_id=(
-                                    owner_run_id
-                                ),
-                                task_id=(
-                                    owner_task_id
-                                ),
-                                confirmation_hash=(
-                                    apply_confirmation_hash
-                                ),
-                            )
-                        )
-
-                        if not trusted_apply_result:
-                            return (
-                                bounded_terminal_result_failure(
-                                    owner_session_id=(
-                                        owner_session_id
-                                    ),
-                                    pane_session_id=(
-                                        session_id
-                                    ),
-                                    teammate_name=(
-                                        teammate_name
-                                    ),
-                                    run_id=(
-                                        owner_run_id
-                                    ),
-                                    task_id=(
-                                        owner_task_id
-                                    ),
-                                    reason=(
-                                        "APPLY_SUCCESS has no matching "
-                                        "trusted Gate 7.4 SUCCESS receipt"
-                                    ),
-                                )
-                            )
-
-                    elif (
-                        apply_outcome
-                        == MERCHANT_APPLY_FAILED_OUTCOME
-                    ):
-                        trusted_failure = (
-                            failed_runtime_handoff_matches(
-                                owner_state,
-                                owner_session_id=(
-                                    owner_session_id
-                                ),
-                                teammate_name=(
-                                    teammate_name
-                                ),
-                                run_id=(
-                                    owner_run_id
-                                ),
-                                task_id=(
-                                    owner_task_id
-                                ),
-                                confirmation_hash=(
-                                    apply_confirmation_hash
-                                ),
-                            )
-                        )
-
-                        if not trusted_failure:
-                            return (
-                                bounded_terminal_result_failure(
-                                    owner_session_id=(
-                                        owner_session_id
-                                    ),
-                                    pane_session_id=(
-                                        session_id
-                                    ),
-                                    teammate_name=(
-                                        teammate_name
-                                    ),
-                                    run_id=(
-                                        owner_run_id
-                                    ),
-                                    task_id=(
-                                        owner_task_id
-                                    ),
-                                    reason=(
-                                        "APPLY_FAILED has no matching "
-                                        "trusted Gate 7.4 FAILED receipt"
-                                    ),
-                                )
-                            )
-
-                    elif (
-                        apply_outcome
-                        not in {
-                            "BLOCKED",
-                            "FAILED",
-                        }
-                    ):
-                        return (
-                            bounded_terminal_result_failure(
-                                owner_session_id=(
-                                    owner_session_id
-                                ),
-                                pane_session_id=(
-                                    session_id
-                                ),
-                                teammate_name=(
-                                    teammate_name
-                                ),
-                                run_id=(
-                                    owner_run_id
-                                ),
-                                task_id=(
-                                    owner_task_id
-                                ),
-                                reason=(
-                                    "Merchant apply terminal outcome is "
-                                    "not allowed"
-                                ),
-                            )
-                        )
-
-            requires_exact_merchant_proposal = (
-                teammate_name
-                == MERCHANT_MANAGER_AGENT
-                and owner_authorized_operations
-                == [
-                    MERCHANT_PROPOSE_OPERATION
-                ]
-                and owner_authorized_agents
-                == [
-                    MERCHANT_MANAGER_AGENT
-                ]
-            )
-
-            # --------------------------------------------------------
-            # Gate 12A:
-            #
-            # Authorization tells us what the teammate was allowed
-            # to attempt. The structured task outcome tells us what
-            # actually happened.
-            #
-            # Only PROPOSAL_READY requires exact Merchant proposal
-            # evidence. Clarification/failure/block are valid terminal
-            # results without proposal authority.
-            #
-            # Missing or malformed TEAM_RESULT_JSON deliberately falls
-            # back to Gate 11 behavior and therefore remains fail-closed.
-            # --------------------------------------------------------
-            if requires_exact_merchant_proposal:
-                task_result = (
-                    task_result_candidate_from_message(
-                        str(
-                            pending_result.get(
-                                "message"
-                            )
-                            or ""
-                        )
-                    )
-                )
-
-                if (task_result is not None and str(task_result.get("operation") or "").strip() == MERCHANT_PROPOSE_OPERATION and str(task_result.get("database_target") or "").strip() == "runtime"):
-                    bound_completeness = (
-                        bound_merchant_completeness_receipt(
-                            pane_session_id=str(
-                                session_id
-                                or ""
-                            ).strip(),
-                            owner_session_id=str(
-                                owner_session_id
-                            ).strip(),
+                        return bounded_terminal_result_failure(
+                            owner_session_id=owner_session_id,
+                            pane_session_id=session_id,
                             teammate_name=teammate_name,
                             run_id=owner_run_id,
                             task_id=owner_task_id,
+                            reason=(
+                                "Direct Merchant task without a write "
+                                "has no valid no-write terminal result"
+                            ),
                         )
-                    )
 
                     completeness_decision = (
                         validate_completeness_receipt_for_outcome(
                             task_result,
-                            bound_completeness,
+                            bound_merchant_completeness_receipt(
+                                pane_session_id=str(
+                                    session_id or ""
+                                ).strip(),
+                                owner_session_id=str(
+                                    owner_session_id
+                                ).strip(),
+                                teammate_name=teammate_name,
+                                run_id=owner_run_id,
+                                task_id=owner_task_id,
+                            ),
                         )
                     )
 
@@ -802,198 +556,85 @@ def handle_teammate_idle(
                             ),
                         )
 
-                    task_outcome = str(
-                        task_result.get(
-                            "outcome"
-                        )
-                        or ""
-                    ).strip()
-
-                    if (
-                        task_outcome
-                        in MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES
-                    ):
-                        # A non-proposal terminal outcome must not coexist
-                        # with staged proposal authority. Preserve evidence
-                        # and fail closed if the two disagree.
-                        unexpected_proposal = (
-                            load_pending_merchant_proposal(
-                                session_id
-                            )
-                        )
-
-                        if (
-                            unexpected_proposal
-                            is not None
-                        ):
-                            return (
-                                PENDING_RESULT_FEEDBACK
-                            )
-
-                        requires_exact_merchant_proposal = (
-                            False
-                        )
-
-            if requires_exact_merchant_proposal:
-                pending_proposal = (
-                    load_pending_merchant_proposal(
-                        session_id
-                    )
-                )
-
-                # A merchant_propose run MUST have an exact
-                # CLI-staged proposal before the teammate can
-                # become reusable.
-                if pending_proposal is None:
-                    return bounded_terminal_result_failure(
+                    # Re-verified under the team-state lock. The report
+                    # and release boundaries verify the marker again.
+                    if not dependencies.establish_no_write_terminal(
                         owner_session_id=owner_session_id,
-                        pane_session_id=session_id,
                         teammate_name=teammate_name,
                         run_id=owner_run_id,
                         task_id=owner_task_id,
-                        reason=(
-                            "Merchant terminal report did not establish "
-                            "a valid non-proposal outcome and no exact "
-                            "CLI proposal was staged."
-                        ),
-                    )
-
-                if not pending_merchant_proposal_matches(
-                    pending_proposal,
-                    owner_session_id=(
-                        owner_session_id
-                    ),
-                    teammate_name=(
-                        teammate_name
-                    ),
-                    run_id=(
-                        owner_run_id
-                    ),
-                    task_id=(
-                        owner_task_id
-                    ),
-                ):
-                    return PENDING_RESULT_FEEDBACK
-
-                proposal = (
-                    pending_proposal.get(
-                        "proposal"
-                    )
-                )
-
-                if not isinstance(
-                    proposal,
-                    dict,
-                ):
-                    return PENDING_RESULT_FEEDBACK
-
-                if (
-                    task_result is not None
-                    and str(
-                        task_result.get(
-                            "outcome"
-                        )
-                        or ""
-                    ).strip()
-                    == MERCHANT_PROPOSAL_READY_OUTCOME
-                ):
-                    if not isinstance(
-                        bound_completeness,
-                        dict,
-                    ):
-                        return bounded_terminal_result_failure(
-                            owner_session_id=owner_session_id,
-                            pane_session_id=session_id,
-                            teammate_name=teammate_name,
-                            run_id=owner_run_id,
-                            task_id=owner_task_id,
-                            reason=(
-                                "PROPOSAL_READY has no exact "
-                                "completeness receipt"
-                            ),
-                        )
-
-                    completeness_result = (
-                        bound_completeness.get(
-                            "result"
-                        )
-                    )
-
-                    if not isinstance(
-                        completeness_result,
-                        dict,
+                        outcome=outcome,
                     ):
                         return PENDING_RESULT_FEEDBACK
 
-                    completeness_command = str(
-                        completeness_result.get(
-                            "command"
-                        )
-                        or ""
-                    ).strip()
+                elif "direct_scope_execution" in owner_record:
+                    execution = owner_record.get("direct_scope_execution")
 
-                    proposal_command = str(
-                        proposal.get(
-                            "command"
-                        )
-                        or ""
-                    ).strip()
-
+                    # A spent scoped write that did not succeed is never
+                    # retried or released: the task ends FAILED and the
+                    # execution record stays for audit. The report and
+                    # release boundaries re-verify SUCCEEDED under lock.
                     if (
-                        not completeness_command
-                        or completeness_command
-                        != proposal_command
+                        not isinstance(execution, dict)
+                        or execution.get("status") != "SUCCEEDED"
                     ):
-                        return bounded_terminal_result_failure(
-                            owner_session_id=owner_session_id,
-                            pane_session_id=session_id,
-                            teammate_name=teammate_name,
-                            run_id=owner_run_id,
-                            task_id=owner_task_id,
-                            reason=(
-                                "Merchant proposal command does not match "
-                                "the exact completeness command"
-                            ),
+                        failed, _ = dependencies.fail_spent_direct_execution(
+                            owner_session_id,
+                            teammate_name,
+                            owner_run_id,
+                            owner_task_id,
                         )
 
-                pane_bound, _ = (
-                    bind_reported_teammate_pane_session(
+                        if not failed:
+                            return PENDING_RESULT_FEEDBACK
+
+                        clear_pending_result(session_id)
+
+                        return ""
+
+                else:
+                    # Spent authority without trusted evidence, or Create
+                    # reservations never claimed, end the task (bounded).
+                    failed, _ = dependencies.fail_spent_direct_execution(
                         owner_session_id,
                         teammate_name,
-                        session_id,
                         owner_run_id,
                         owner_task_id,
-                        required_operation=(
-                            MERCHANT_PROPOSE_OPERATION
-                        ),
-                    )
-                )
-
-                if not pane_bound:
-                    return (
-                        PENDING_RESULT_FEEDBACK
                     )
 
-                requires_local_auto_receipt = (
-                    proposal_requires_local_auto_receipt(
-                        owner_session_id,
-                        proposal,
-                    )
-                )
+                    if failed:
+                        clear_pending_result(session_id)
+                        return ""
 
-                if requires_local_auto_receipt:
-                    capture_outcome = (
-                        capture_proposal_receipt(
-                            owner_session_id,
-                            proposal,
+                    try:
+                        direct_verified = (
+                            dependencies.reconcile_direct_writes(
+                                owner_session_id=owner_session_id,
+                                teammate_name=teammate_name,
+                                run_id=owner_run_id,
+                                task_id=owner_task_id,
+                            )
                         )
-                    )
-
-                    # LOCAL_AUTO receipt authority remains fail-closed.
-                    if not capture_outcome.accepted:
+                    except Exception:
                         return PENDING_RESULT_FEEDBACK
 
+                    if direct_verified is not True:
+                        return PENDING_RESULT_FEEDBACK
 
+            marked = (
+                mark_bound_report_received(
+                    owner_session_id,
+                    teammate_name,
+                    owner_run_id,
+                    owner_task_id,
+                    "sendmessage",
+                )
+            )
+
+            if not marked:
+                return (
+                    PENDING_RESULT_FEEDBACK
+                )
             # Update the lead run ledger when it still exists.
             # Stop may already have removed it; team state remains the
             # authoritative lifecycle completion record in that case.
@@ -1047,19 +688,8 @@ def handle_teammate_idle(
                 teammate_name,
             )
 
-            # Clear transient raw-token proposal only after successful
-            # lifecycle reconciliation. SendMessage receipt is cleared in
-            # the same successful path.
+            # Clear transient result evidence after successful release.
             if session_id:
-                # The staged proposal may contain the raw confirmation token.
-                # Once exact proposal reconciliation and lifecycle release succeed,
-                # it must be removed regardless of whether LOCAL_AUTO receipt
-                # persistence applied to this command.
-                if requires_exact_merchant_proposal:
-                    clear_pending_merchant_proposal(
-                        session_id
-                    )
-
                 clear_pending_merchant_completeness(
                     session_id
                 )

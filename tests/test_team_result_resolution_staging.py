@@ -100,7 +100,7 @@ def owner_record():
         "current_run_id": "run-1",
         "current_task_id": "task-1",
         "authorized_operations": [
-            "merchant_propose",
+            "merchant_execute",
         ],
         "authorized_selected_agents": [
             "merchant-manager",
@@ -364,8 +364,7 @@ def test_handle_post_tool_use_stages_resolution(
     "operation",
     (
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     ),
 )
 def test_resolution_staging_accepts_each_merchant_operation(
@@ -437,7 +436,7 @@ def test_resolution_staging_rejects_mixed_operations(
         "authorized_operations"
     ] = [
         "merchant_read",
-        "merchant_propose",
+        "merchant_execute",
     ]
 
     monkeypatch.setattr(

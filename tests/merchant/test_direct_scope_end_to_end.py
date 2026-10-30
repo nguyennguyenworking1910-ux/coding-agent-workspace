@@ -22,6 +22,10 @@ ARGV = [
 ]
 
 REQUEST = f"Update project {PROJECT_ID} to IN_PROGRESS"
+from tests.merchant.direct_reservation_support import (
+    isolate_team_state,
+    reserve_scoped_write,
+)
 
 
 class FakeParser:
@@ -38,7 +42,7 @@ class FakeParser:
             "confidence": 0.99,
             "complexity_score": 1,
             "domains": ["merchant"],
-            "operations": ["merchant_apply"],
+            "operations": ["merchant_execute"],
             "selected_agents": ["merchant-manager"],
             "limits": {
                 "max_members": 1,
@@ -62,6 +66,7 @@ def isolated_state(tmp_path, monkeypatch):
         intent_envelope_bridge.ENVELOPE_DIR_ENV_VAR,
         str(tmp_path / "envelopes"),
     )
+    isolate_team_state(monkeypatch, tmp_path)
 
 
 def submit(*, confirmed=True):
@@ -124,6 +129,7 @@ def test_user_confirmed_scope_reaches_handler_once(capsys):
     exit_code = invoke_authorized_scope_apply(
         SESSION_ID,
         ARGV,
+        **reserve_scoped_write(SESSION_ID),
         write_command_factory=lambda database: commands,
     )
 
@@ -138,6 +144,7 @@ def test_user_confirmed_scope_reaches_handler_once(capsys):
         invoke_authorized_scope_apply(
             SESSION_ID,
             ARGV,
+            **reserve_scoped_write(SESSION_ID),
             write_command_factory=lambda database: commands,
         )
 
@@ -147,21 +154,9 @@ def test_user_confirmed_scope_reaches_handler_once(capsys):
 def test_direct_scope_executes_without_legacy_confirmation(
     monkeypatch, capsys
 ):
-    def forbidden_legacy(*args, **kwargs):
-        raise AssertionError(
-            "Direct Scope must not use legacy confirmation"
-        )
-
-    monkeypatch.setattr(
-        intent_gate,
-        "authorize_local_auto_apply",
-        forbidden_legacy,
-    )
-    monkeypatch.setattr(
-        intent_gate,
-        "load_merchant_confirmation",
-        forbidden_legacy,
-    )
+    # The proposal-confirmation entry points no longer exist.
+    assert not hasattr(intent_gate, "authorize_local_auto_apply")
+    assert not hasattr(intent_gate, "load_merchant_confirmation")
 
     result, _ = submit()
     assert "hookSpecificOutput" in result
@@ -177,6 +172,7 @@ def test_direct_scope_executes_without_legacy_confirmation(
     exit_code = invoke_authorized_scope_apply(
         SESSION_ID,
         ARGV,
+        **reserve_scoped_write(SESSION_ID),
         write_command_factory=lambda database: commands,
     )
 
@@ -213,6 +209,7 @@ def test_changed_target_never_reaches_handler():
         invoke_authorized_scope_apply(
             SESSION_ID,
             changed,
+            **reserve_scoped_write(SESSION_ID),
             write_command_factory=lambda database: commands,
         )
 
@@ -274,7 +271,7 @@ def _direct_staging_candidate(arguments=None):
 
     return {
         "contract_version": 1,
-        "operation": "merchant_apply",
+        "operation": "merchant_execute",
         "database_target": "runtime",
         "confirmation_hash": validated["confirmation_hash"],
         "arguments": tuple(ARGV if arguments is None else arguments),
@@ -427,6 +424,7 @@ def test_direct_scope_runtime_rejects_unconfirmed_state():
         invoke_authorized_scope_apply(
             SESSION_ID,
             ARGV,
+            **reserve_scoped_write(SESSION_ID),
             write_command_factory=fake_factory,
         )
 

@@ -34,11 +34,12 @@ file to change how the agents behave; it previously lived inside `.claude/settin
 | `coder` | Building a feature, doing a refactor | Yes |
 | `bug-fixer` | Making a specific broken thing work | Yes |
 | `group-sales-manager` | Sales data queries, capacity and allocation analysis | No |
-| `merchant-manager` | Merchant/project reads, redacted proposals, and exact confirmed-apply handoff | Ordinary CLI read/propose only; trusted in-process apply |
+| `merchant-manager` | Merchant/project reads and Direct EXECUTE of an exact user-authorized scope | Ordinary CLI read-only for runtime; trusted in-process execute |
 | `scheduler` | Putting something on the calendar | Calendar only |
 
-The ordinary CLI remains read/propose-only. A Merchant mutation can run only through the
-policy-accepted, one-use, in-process session handoff documented in the Checkpoint 7 handoff.
+The ordinary CLI is read-only for runtime. A Merchant write runs only as Direct EXECUTE of an
+exact scope the user types with `/solve --confirm --merchant-scope [...]`, through the
+policy-accepted, one-use, in-process handoff. There is no proposal or apply step.
 
 Writing agents edit the working tree and **never commit** — you review the diff and commit
 yourself.
@@ -86,8 +87,8 @@ merchant activate-all     # Controlled batch activation of all ONBOARDING mercha
 **How it works:**
 
 1. **Single activation:** Specify merchant ID, expected version, and reason. Only ONBOARDING → ACTIVE is allowed.
-2. **Batch activation:** Read-only preflight validates the sorted manifest. Exact merchant count, codes, status, and versions must match between proposal and apply. Same-count membership drift is rejected.
-3. **Confirmation-required:** Both commands use proposal → confirmation → apply workflow. The `merchant-manager` teammate prepares the proposal; you provide the confirmation token to authorize the apply.
+2. **Batch activation:** Read-only preflight validates the sorted manifest. Exact merchant count, codes, status, and versions must match the manifest at execution. Same-count membership drift is rejected.
+3. **Confirmation-required:** Both commands run as Direct EXECUTE: you authorize the exact command with `/solve --confirm --merchant-scope [...]`, and it executes once.
 4. **Atomic transaction:** Updates, audit events, and workflow steps complete together or roll back together. Already-ACTIVE merchants are conflicts, not silent success.
 
 **Detailed documentation:** See [.claude/documents/MERCHANT_PROJECT_MANAGER.md](./.claude/documents/MERCHANT_PROJECT_MANAGER.md) for full syntax, manifest binding, drift rejection, and workflow integration.
@@ -148,7 +149,7 @@ gcloud auth application-default login \
 ├── hooks/                # Intent/policy gates and locked per-session run state
 ├── system/
 │   ├── schemas.py                 # TaskResult, shared by the scheduler path
-│   └── merchant_runtime_handoff.py # One-use confirmed Merchant apply bridge
+│   └── merchant_runtime_handoff.py # One-use user-scoped Merchant Direct EXECUTE bridge
 ├── documents/            # ALL markdown documentation lives here
 └── schedule.py           # Standalone scheduler entry point
 ```
@@ -168,7 +169,7 @@ Read in this order:
 5. **[.claude/documents/BIGQUERY_INTEGRATION.md](./.claude/documents/BIGQUERY_INTEGRATION.md)** —
    adding and running `.sql` query templates
 6. **[.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md)** —
-   Merchant intent, confirmation, dispatch, and trusted runtime-apply boundary
+   historical Merchant proposal/apply boundary (superseded by Direct EXECUTE)
 7. **[.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md)** —
    Merchant deadline, blocker, missing-gate, and global alert-read boundary
 8. **[.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md](./.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)** —

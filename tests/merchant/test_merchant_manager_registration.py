@@ -91,7 +91,7 @@ def test_registry_targets_only_the_runtime_cli_entry_point():
         ".claude/system/merchant_runtime_handoff.py"
     )
     assert access["runtime_handoff_method"] == (
-        "invoke_authorized_scope_apply"
+        "invoke_direct_merchant_execute"
     )
 
 
@@ -172,13 +172,13 @@ def test_registry_separates_ordinary_cli_from_trusted_handoff():
         ".claude/system/merchant_runtime_handoff.py"
     )
     assert access["runtime_handoff_method"] == (
-        "invoke_authorized_scope_apply"
+        "invoke_direct_merchant_execute"
     )
     assert "without reading or passing database credentials" in (
         access["note"]
     )
-    assert "ordinary CLI remains read/propose-only" in access["note"]
-    assert "opaque in-process handoff" in access["note"]
+    assert "ordinary CLI is read-only for runtime" in access["note"]
+    assert "trusted in-process Direct EXECUTE handoff" in access["note"]
 
 
 def test_no_other_agent_claims_merchant_access():
@@ -212,7 +212,7 @@ def test_solve_authorized_roster_documents_merchant_manager():
     content = SOLVE_PATH.read_text(encoding="utf-8")
 
     assert "| `merchant-manager` |" in content
-    assert "Proposal only; runtime apply blocked" in content
+    assert "Runtime writes only through the trusted in-process handoff" in content
     assert "### Merchant routing contract" in content
 
 
@@ -221,7 +221,7 @@ def test_solve_routes_operational_work_to_one_owner():
 
     assert "Merchant operational work has one owner" in content
     assert "A Merchant-state read may be assigned only" in content
-    assert "A Merchant write-intent proposal may be assigned only" in (
+    assert "A Merchant write (`merchant_execute`) may be assigned only" in (
         content
     )
     assert "The lead must never run the Merchant CLI" in content
@@ -238,14 +238,12 @@ def test_solve_requires_selected_agent_authority():
     assert "substitute another role" in content
 
 
-def test_solve_does_not_treat_proposal_hash_as_authority():
+def test_solve_does_not_treat_dispatch_or_report_as_authority():
     content = SOLVE_PATH.read_text(encoding="utf-8")
 
-    assert "Runtime `--apply` remains unavailable in Checkpoint 6" in (
-        content
-    )
-    assert "Checkpoint 7 intent/policy authorization handoff" in content
-    assert "It is not permission" in content
+    assert "Dispatch authorization is not runtime authority" in content
+    assert "carries no authority" in content
+    assert "it is never execution authority" in content
 
 
 def test_system_test_requires_the_registered_definition():

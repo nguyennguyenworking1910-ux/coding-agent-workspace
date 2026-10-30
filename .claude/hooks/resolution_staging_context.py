@@ -16,8 +16,7 @@ from typing import Any
 RESOLUTION_OPERATIONS = frozenset(
     {
         "merchant_read",
-        "merchant_propose",
-        "merchant_apply",
+        "merchant_execute",
     }
 )
 

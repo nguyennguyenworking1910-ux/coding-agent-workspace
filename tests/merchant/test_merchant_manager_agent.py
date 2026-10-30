@@ -111,26 +111,24 @@ def test_agent_carries_the_complete_write_allowlist():
         assert f"`{command}`" in content
 
 
-def test_agent_requires_propose_before_any_future_apply():
+def test_agent_uses_direct_execute_only():
     content = _content()
 
-    assert "`--propose` / `--apply`" in content
-    assert "run the exact allowlisted command" in content
-    assert "in `--propose` mode first" in content
-    assert "requires_confirmation: true" in content
-    assert "no change has been applied" in content
+    assert "Merchant writes use Direct EXECUTE only" in content
+    assert "Never run `--propose` or `--apply`" in content
+    assert "MERCHANT_EXECUTE_REQUEST_JSON:" in content
+    assert "MERCHANT_APPLY_HANDOFF_REQUEST_JSON" not in content
+    assert "PROPOSAL_READY" not in content
+    assert "confirmation_token" not in content
 
 
-def test_agent_fails_closed_without_checkpoint_7_authority():
+def test_agent_fails_closed_without_user_scope():
     content = _content()
 
-    assert (
-        "do not execute any runtime command in `--apply` mode"
-        in content
-    )
-    assert "runtime_authorized=True" in content
-    assert "Checkpoint 7" in content
-    assert "successful fail-closed outcome" in content
+    assert "no runtime write is possible" in content
+    assert "Never construct, modify, widen, or independently authorize a scope" in content
+    assert "never retry after rejection, failure, exception, timeout" in content
+    assert "never perform a fallback write by any other route" in content
 
 
 def test_agent_does_not_expose_or_source_credentials():
@@ -190,30 +188,11 @@ def test_agent_keeps_rag_supplemental_and_untrusted():
 def test_agent_requires_deterministic_completeness_before_write():
     content = _normalized_content()
 
-    assert (
-        "Deterministic write completeness gate"
-        in content
-    )
-
-    assert (
-        "agent_cli.py completeness check"
-        in content
-    )
-
-    assert (
-        "before any `--propose`"
-        in content
-    )
-
-    assert (
-        "before asking any write-related clarification"
-        in content
-    )
-
-    assert (
-        "Never invent, guess, default, or semantically reinterpret"
-        in content
-    )
+    assert "Deterministic write completeness gate" in content
+    assert "agent_cli.py completeness check" in content
+    assert "before any execute request" in content
+    assert "before asking any clarification about missing write fields" in content
+    assert "Never invent, guess, default, or semantically reinterpret" in content
 
 
 def test_agent_uses_cli_clarification_instead_of_inventing_one():
@@ -243,15 +222,8 @@ def test_agent_uses_cli_clarification_instead_of_inventing_one():
 def test_agent_completeness_is_not_write_authority():
     content = _normalized_content()
 
-    assert (
-        "Passing completeness is not confirmation"
-        in content
-    )
-
-    assert (
-        "permission to run `--apply`"
-        in content
-    )
+    assert "Passing completeness is not write authority" in content
+    assert "still requires the exact user-authorized scope" in content
 
 
 def test_agent_does_not_invent_stateful_completeness_context():

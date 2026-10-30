@@ -70,7 +70,7 @@ def _proposal(payload=None):
 
 def _receipt(confirmation, **changes):
     receipt = {
-        "operation": "merchant_apply",
+        "operation": "merchant_execute",
         "subagent_type": "merchant-manager",
         "teammate_name": "merchant-manager",
         "confirmation_hash": confirmation[
@@ -81,12 +81,17 @@ def _receipt(confirmation, **changes):
     return receipt
 
 
+def _valid_reservation():
+    """Stand-in for the issuer's durable reservation check."""
+
+
 def _authorization(*, clock=None, ttl_seconds=60.0):
     proposal = _proposal()
     confirmation = proposal["confirmation"]
     authorization = issue_runtime_apply_authorization(
         confirmation,
         _receipt(confirmation),
+        execution_guard=_valid_reservation,
         ttl_seconds=ttl_seconds,
         clock=clock,
     )
@@ -108,6 +113,7 @@ def test_runtime_authorization_cannot_be_constructed_directly():
             {},
             expires_at=1.0,
             clock=lambda: 0.0,
+            execution_guard=_valid_reservation,
             issuer_seal=object(),
         )
 
@@ -368,6 +374,7 @@ def test_issuance_requires_exact_policy_dispatch_receipt(
         issue_runtime_apply_authorization(
             confirmation,
             _receipt(confirmation, **receipt_change),
+            execution_guard=_valid_reservation,
         )
 
 
@@ -385,6 +392,7 @@ def test_issuance_revalidates_confirmation_hash():
         issue_runtime_apply_authorization(
             confirmation,
             _receipt(confirmation),
+            execution_guard=_valid_reservation,
         )
 
 
@@ -406,6 +414,7 @@ def test_issuance_rejects_untrusted_ttl(ttl):
         issue_runtime_apply_authorization(
             confirmation,
             _receipt(confirmation),
+            execution_guard=_valid_reservation,
             ttl_seconds=ttl,
         )
 
@@ -463,3 +472,45 @@ def test_direct_payload_mismatch_consumes_authorization():
         )
 
     assert handler.calls == []
+
+
+def test_issuance_requires_a_callable_execution_guard():
+    proposal = _proposal()
+    confirmation = proposal["confirmation"]
+
+    with pytest.raises(RuntimeWriteDeniedError, match="execution guard"):
+        issue_runtime_apply_authorization(
+            confirmation,
+            _receipt(confirmation),
+            execution_guard=None,
+        )
+
+
+def test_failed_execution_guard_consumes_without_calling_handler():
+    """The reservation is re-checked at the mutation boundary itself."""
+
+    proposal = _proposal()
+    confirmation = proposal["confirmation"]
+
+    def reservation_gone():
+        raise PermissionError("reservation finalized")
+
+    authorization = issue_runtime_apply_authorization(
+        confirmation,
+        _receipt(confirmation),
+        execution_guard=reservation_gone,
+    )
+
+    handler = RecordingHandler()
+    commands = MerchantWriteCommands({proposal["command"]: handler})
+
+    with pytest.raises(RuntimeWriteDeniedError, match="reservation"):
+        commands.execute(
+            proposal["command"],
+            "runtime",
+            proposal["payload"],
+            runtime_authorization=authorization,
+        )
+
+    assert handler.calls == []
+    assert authorization.consumed is True

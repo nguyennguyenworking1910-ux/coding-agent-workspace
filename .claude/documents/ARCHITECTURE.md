@@ -103,13 +103,18 @@ Root configuration and orchestration for all agents and tools.
 │
 ├── hooks/                   [CONTROLLED ORCHESTRATION GATES]
 │   ├── intent_gate.py       Validates the request and exact Merchant confirmation
-│   ├── policy_gate.py       Enforces tool, dispatch, and confirmation policy
+│   ├── policy_gate.py       Enforces tool, dispatch, and confirmation policy, and
+│   │                        merchant-manager's exact shell allowlist
+│   ├── harness_team_identity.py
+│   │                        Verifies a teammate pane from the harness team config
+│   ├── merchant_direct_handoff.py
+│   │                        Persists the reservation, then runs one Direct EXECUTE
 │   └── runtime_state.py     Locks and persists the session-scoped authority state
 │
 ├── system/                  [SHARED SYSTEM LOGIC]
 │   ├── schemas.py           TaskResult, used by the Python scheduler path
 │   └── merchant_runtime_handoff.py
-│                            One-use in-process confirmed Merchant apply bridge
+│                            One-use in-process user-scoped Merchant Direct EXECUTE bridge
 │
 ├── examples/                [USAGE EXAMPLES & TEMPLATES]
 │   └── (reference implementations for new agents/tools)
@@ -467,7 +472,7 @@ Team Leader (/solve command — not an agent)
 ├── Coder                 (features and refactors)                 writes
 ├── Bug Fixer             (issue resolution)                       writes
 ├── Group Sales Manager   (sales data, allocation analysis)        read-only
-├── Merchant Manager      (Merchant reads/proposals; trusted apply) controlled
+├── Merchant Manager      (Merchant reads; trusted Direct EXECUTE) controlled
 └── Scheduler             (calendar & task management)             calendar only
 ```
 

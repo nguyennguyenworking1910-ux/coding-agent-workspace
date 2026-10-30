@@ -1,11 +1,14 @@
-﻿"""Gate 12C.7.3B: machine-enforced Merchant completeness lifecycle."""
+"""Gate 12C.7.3B: machine-enforced Merchant completeness lifecycle.
+
+Direct EXECUTE only: completeness evidence supports a no-write terminal
+outcome for a merchant_execute task. It never authorizes a write.
+"""
 
 from __future__ import annotations
 from pathlib import Path
 import json
 import sys
 from io import StringIO
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,9 +23,6 @@ from claude.hooks.team_lifecycle import (
 )
 from claude.hooks.tmux_merchant_completeness import (
     load_pending_merchant_completeness,
-)
-from claude.hooks.tmux_merchant_proposal import (
-    load_pending_merchant_proposal,
 )
 from claude.hooks.tmux_result_receipt import (
     load_pending_result,
@@ -39,7 +39,7 @@ import policy_gate  # noqa: E402
 
 
 MERCHANT_MANAGER = "merchant-manager"
-MERCHANT_PROPOSE = "merchant_propose"
+MERCHANT_EXECUTE = "merchant_execute"
 
 
 @pytest.fixture
@@ -78,11 +78,12 @@ def run_hook(payload):
         sys.stdin = original_stdin
 
 
-def _start_merchant_propose(
+def _start_merchant_task(
     lead_session_id: str,
     *,
     run_id: str,
     task_id: str,
+    operation: str = MERCHANT_EXECUTE,
 ):
     decision, teammate_name = allocate_teammate(
         lead_session_id,
@@ -102,7 +103,7 @@ def _start_merchant_propose(
         run_id,
         task_id,
         operations=[
-            MERCHANT_PROPOSE,
+            operation,
         ],
         selected_agents=[
             MERCHANT_MANAGER,
@@ -156,7 +157,7 @@ def _clarification_outcome():
     return {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": MERCHANT_PROPOSE,
+        "operation": MERCHANT_EXECUTE,
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -172,21 +173,11 @@ def _clarification_outcome():
     }
 
 
-def _proposal_ready_outcome():
-    return {
-        "contract_version": 1,
-        "outcome": "PROPOSAL_READY",
-        "operation": MERCHANT_PROPOSE,
-        "database_target": "runtime",
-        "proposal_emitted": True,
-    }
-
-
-def _stage_completeness(
+def _completeness_tool_use(
     pane_session_id: str,
     result: dict,
 ):
-    assert run_hook(
+    return run_hook(
         {
             "hook_event_name": "PostToolUse",
             "session_id": pane_session_id,
@@ -200,6 +191,16 @@ def _stage_completeness(
                 "stderr": "",
             },
         }
+    )
+
+
+def _stage_completeness(
+    pane_session_id: str,
+    result: dict,
+):
+    assert _completeness_tool_use(
+        pane_session_id,
+        result,
     ) == 0
 
     receipt = load_pending_merchant_completeness(
@@ -213,8 +214,6 @@ def _stage_completeness(
 def _send_team_result(
     pane_session_id: str,
     result: dict,
-    *,
-    proposal: dict | None = None,
 ):
     message = (
         "TEAM_RESULT_JSON:\n"
@@ -222,15 +221,6 @@ def _send_team_result(
             result
         )
     )
-
-    if proposal is not None:
-        message += (
-            "\n"
-            "MERCHANT_PROPOSAL_RESULT_JSON:\n"
-            + json.dumps(
-                proposal
-            )
-        )
 
     assert run_hook(
         {
@@ -299,6 +289,8 @@ def _assert_reusable(
     assert record["result_received"] is True
     assert record["current_run_id"] is None
     assert record["current_task_id"] is None
+    assert "direct_writes" not in record
+    assert "direct_no_write_terminal" not in record
 
 
 def _assert_not_reusable(
@@ -314,85 +306,13 @@ def _assert_not_reusable(
     )
 
 
-def _install_proposal_capture(
-    monkeypatch,
-    proposal: dict,
-):
-    captured = []
-
-    def fake_extract(payload):
-        if (
-            payload.get("tool_use_id")
-            == "proposal-cli"
-        ):
-            return proposal
-
-        return None
-
-    def fake_capture(
-        session_id,
-        exact_proposal,
-    ):
-        captured.append(
-            (
-                session_id,
-                exact_proposal,
-            )
-        )
-        return SimpleNamespace(
-            accepted=True,
-            reason="",
-        )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "merchant_proposal_from_tool_response",
-        fake_extract,
-    )
-    monkeypatch.setattr(
-        team_result_hook,
-        "capture_proposal_receipt",
-        fake_capture,
-    )
-
-    return captured
-
-
-def _stage_proposal(
-    pane_session_id: str,
-    proposal: dict,
-):
-    assert run_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": pane_session_id,
-            "agent_type": MERCHANT_MANAGER,
-            "tool_name": "PowerShell",
-            "tool_use_id": "proposal-cli",
-            "tool_response": {
-                "stdout": json.dumps(
-                    proposal
-                ),
-                "stderr": "",
-            },
-        }
-    ) == 0
-
-    receipt = load_pending_merchant_proposal(
-        pane_session_id
-    )
-
-    assert receipt is not None
-    assert receipt["proposal"] == proposal
-
-
 def test_requires_clarification_with_exact_incomplete_receipt_releases(
     isolated_runtime,
 ):
     lead_session_id = "lead-clarification-ok"
     pane_session_id = "pane-clarification-ok"
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-clarification-ok",
         task_id="task-clarification-ok",
@@ -436,7 +356,7 @@ def test_requires_clarification_without_receipt_fails_closed(
     lead_session_id = "lead-clarification-missing"
     pane_session_id = "pane-clarification-missing"
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-clarification-missing",
         task_id="task-clarification-missing",
@@ -454,6 +374,9 @@ def test_requires_clarification_without_receipt_fails_closed(
     _assert_not_reusable(
         lead_session_id
     )
+    assert "direct_no_write_terminal" not in _record(
+        lead_session_id
+    )
 
 
 def test_requires_clarification_question_mismatch_fails_closed(
@@ -462,7 +385,7 @@ def test_requires_clarification_question_mismatch_fails_closed(
     lead_session_id = "lead-clarification-mismatch"
     pane_session_id = "pane-clarification-mismatch"
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-clarification-mismatch",
         task_id="task-clarification-mismatch",
@@ -499,181 +422,107 @@ def test_requires_clarification_question_mismatch_fails_closed(
     )
 
 
-def test_proposal_ready_with_complete_receipt_and_exact_proposal_releases(
+def test_complete_receipt_cannot_support_clarification(
     isolated_runtime,
-    monkeypatch,
 ):
-    lead_session_id = "lead-proposal-ok"
-    pane_session_id = "pane-proposal-ok"
+    """complete=true evidence contradicts a missing-field clarification."""
 
-    _start_merchant_propose(
+    lead_session_id = "lead-clarification-complete"
+    pane_session_id = "pane-clarification-complete"
+
+    _start_merchant_task(
         lead_session_id,
-        run_id="run-proposal-ok",
-        task_id="task-proposal-ok",
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "command": "merchant create",
-        "confirmation_token": "exact-cli-token",
-    }
-
-    captured = _install_proposal_capture(
-        monkeypatch,
-        exact_proposal,
-    )
-
-    monkeypatch.setattr(
-        team_result_hook,
-        "proposal_requires_local_auto_receipt",
-        lambda session_id, proposal: True,
+        run_id="run-clarification-complete",
+        task_id="task-clarification-complete",
     )
 
     _stage_completeness(
         pane_session_id,
-        _complete_completeness_result(
-            "merchant create"
-        ),
-    )
-
-    _stage_proposal(
-        pane_session_id,
-        exact_proposal,
+        _complete_completeness_result(),
     )
 
     _send_team_result(
         pane_session_id,
-        _proposal_ready_outcome(),
-        proposal=exact_proposal,
+        _clarification_outcome(),
     )
 
     assert _idle(
         pane_session_id
+    ) == 2
+
+    _assert_not_reusable(
+        lead_session_id
+    )
+
+
+def _install_stale_legacy_task(lead_session_id, operation):
+    """Simulate a task persisted before the workflow was removed."""
+    from claude.hooks.team_lifecycle import locked_team_state
+
+    allocate_teammate(lead_session_id, MERCHANT_MANAGER, MERCHANT_MANAGER)
+
+    with locked_team_state(lead_session_id) as state:
+        state["teammates"][MERCHANT_MANAGER].update(
+            status="RUNNING",
+            current_run_id=f"run-{operation}",
+            current_task_id=f"task-{operation}",
+            authorized_operations=[operation],
+            authorized_selected_agents=[MERCHANT_MANAGER],
+            result_received=False,
+            report_source=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    (
+        "merchant_propose",
+        "merchant_apply",
+    ),
+)
+def test_legacy_owner_cannot_stage_completeness_or_release(
+    isolated_runtime,
+    operation,
+):
+    """Removed proposal/apply tasks gain no completeness or release path."""
+
+    lead_session_id = f"lead-legacy-{operation}"
+    pane_session_id = f"pane-legacy-{operation}"
+
+    _install_stale_legacy_task(lead_session_id, operation)
+
+    assert _completeness_tool_use(
+        pane_session_id,
+        _complete_completeness_result(),
     ) == 0
 
-    _assert_reusable(
-        lead_session_id
-    )
-
-    assert captured == [
-        (
-            lead_session_id,
-            exact_proposal,
-        )
-    ]
-
-    assert (
-        load_pending_merchant_completeness(
-            pane_session_id
-        )
-        is None
-    )
-    assert (
-        load_pending_merchant_proposal(
-            pane_session_id
-        )
-        is None
-    )
-
-
-def test_proposal_ready_without_completeness_receipt_fails_closed(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = "lead-proposal-no-completeness"
-    pane_session_id = "pane-proposal-no-completeness"
-
-    _start_merchant_propose(
-        lead_session_id,
-        run_id="run-proposal-no-completeness",
-        task_id="task-proposal-no-completeness",
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "command": "merchant create",
-        "confirmation_token": "exact-cli-token",
-    }
-
-    _install_proposal_capture(
-        monkeypatch,
-        exact_proposal,
-    )
-
-    _stage_proposal(
-        pane_session_id,
-        exact_proposal,
-    )
+    assert load_pending_merchant_completeness(
+        pane_session_id
+    ) is None
 
     _send_team_result(
         pane_session_id,
-        _proposal_ready_outcome(),
-        proposal=exact_proposal,
+        {
+            "contract_version": 1,
+            "outcome": "BLOCKED",
+            "operation": operation,
+            "database_target": "runtime",
+            "proposal_emitted": False,
+        },
     )
 
-    assert _idle(
-        pane_session_id
-    ) == 2
+    # A removed workflow is never released, even with a valid-looking
+    # no-write outcome: it terminates once without a write.
+    assert _idle(pane_session_id) == 0
 
-    _assert_not_reusable(
-        lead_session_id
-    )
+    record = _record(lead_session_id)
+    assert record["status"] == TeammateLifecycleStatus.FAILED.value
+    assert record["failure_reason"] == "LEGACY_MERCHANT_OPERATION_REMOVED"
+    assert "direct_no_write_terminal" not in record
 
-
-def test_proposal_ready_rejects_completeness_command_mismatch(
-    isolated_runtime,
-    monkeypatch,
-):
-    lead_session_id = "lead-proposal-command-mismatch"
-    pane_session_id = "pane-proposal-command-mismatch"
-
-    _start_merchant_propose(
-        lead_session_id,
-        run_id="run-proposal-command-mismatch",
-        task_id="task-proposal-command-mismatch",
-    )
-
-    exact_proposal = {
-        "success": True,
-        "mode": "PROPOSE",
-        "database": "runtime",
-        "command": "document revision-create",
-        "confirmation_token": "exact-cli-token",
-    }
-
-    _install_proposal_capture(
-        monkeypatch,
-        exact_proposal,
-    )
-
-    _stage_completeness(
-        pane_session_id,
-        _complete_completeness_result(
-            "merchant create"
-        ),
-    )
-
-    _stage_proposal(
-        pane_session_id,
-        exact_proposal,
-    )
-
-    _send_team_result(
-        pane_session_id,
-        _proposal_ready_outcome(),
-        proposal=exact_proposal,
-    )
-
-    assert _idle(
-        pane_session_id
-    ) == 2
-
-    _assert_not_reusable(
-        lead_session_id
+    assert _idle(pane_session_id) == 0
+    assert _record(lead_session_id)["status"] == (
+        TeammateLifecycleStatus.FAILED.value
     )
 
 
@@ -695,7 +544,7 @@ def test_blocked_and_failed_do_not_require_completeness_receipt(
         f"pane-{outcome_name.lower()}"
     )
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id=f"run-{outcome_name.lower()}",
         task_id=f"task-{outcome_name.lower()}",
@@ -704,7 +553,7 @@ def test_blocked_and_failed_do_not_require_completeness_receipt(
     outcome = {
         "contract_version": 1,
         "outcome": outcome_name,
-        "operation": MERCHANT_PROPOSE,
+        "operation": MERCHANT_EXECUTE,
         "database_target": "runtime",
         "proposal_emitted": False,
     }
@@ -729,7 +578,7 @@ def test_action_semantics_clarification_does_not_require_completeness_receipt(
     lead_session_id = "lead-action-semantics"
     pane_session_id = "pane-action-semantics"
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-action-semantics",
         task_id="task-action-semantics",
@@ -738,7 +587,7 @@ def test_action_semantics_clarification_does_not_require_completeness_receipt(
     outcome = {
         "contract_version": 1,
         "outcome": "REQUIRES_CLARIFICATION",
-        "operation": MERCHANT_PROPOSE,
+        "operation": MERCHANT_EXECUTE,
         "database_target": "runtime",
         "proposal_emitted": False,
         "missing_fields": [
@@ -779,7 +628,7 @@ def test_authenticated_merchant_sendmessage_is_deferred_until_idle_validation(
         else "pane-authenticated-deferred"
     )
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-authenticated-deferred",
         task_id="task-authenticated-deferred",
@@ -817,13 +666,60 @@ def test_authenticated_merchant_sendmessage_is_deferred_until_idle_validation(
     assert record["result_received"] is False
     assert record["report_source"] is None
 
+
+def test_authenticated_pane_direct_result_completes_through_idle_gate(
+    isolated_runtime,
+):
+    """An authenticated pane reaches the same trusted no-write gate."""
+
+    lead_session_id = "lead-authenticated-direct"
+    pane_session_id = "pane-authenticated-direct"
+
+    _start_merchant_task(
+        lead_session_id,
+        run_id="run-authenticated-direct",
+        task_id="task-authenticated-direct",
+    )
+
+    assert run_hook(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": pane_session_id,
+            "agent_id": "merchant-agent-id",
+            "agent_type": MERCHANT_MANAGER,
+            "tool_name": "SendMessage",
+            "tool_use_id": "authenticated-blocked",
+            "tool_input": {
+                "recipient": "team-lead",
+                "message": "TEAM_RESULT_JSON:\n" + json.dumps(
+                    {
+                        "contract_version": 1,
+                        "outcome": "BLOCKED",
+                        "operation": MERCHANT_EXECUTE,
+                        "database_target": "runtime",
+                        "proposal_emitted": False,
+                    }
+                ),
+            },
+        }
+    ) == 0
+
+    assert _record(lead_session_id)["status"] == (
+        TeammateLifecycleStatus.RUNNING.value
+    )
+
+    assert _idle(pane_session_id) == 0
+
+    _assert_reusable(lead_session_id)
+
+
 def test_premature_authenticated_merchant_result_does_not_trigger_tool_freeze(
     isolated_runtime,
 ):
     lead_session_id = "lead-no-premature-freeze"
     pane_session_id = "pane-no-premature-freeze"
 
-    _start_merchant_propose(
+    _start_merchant_task(
         lead_session_id,
         run_id="run-no-premature-freeze",
         task_id="task-no-premature-freeze",

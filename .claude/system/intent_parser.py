@@ -56,8 +56,7 @@ class Operation(str, Enum):
     SALES_QUERY = "sales_query"
     SCHEDULE = "schedule"
     MERCHANT_READ = "merchant_read"
-    MERCHANT_PROPOSE = "merchant_propose"
-    MERCHANT_APPLY = "merchant_apply"
+    MERCHANT_EXECUTE = "merchant_execute"
 
 
 class Domain(str, Enum):
@@ -140,11 +139,10 @@ The complexity score is the sum:
 
 Risk is independent from complexity:
 
-- read_only: explain, inspect, search, analyze, review, read Merchant state,
-  or prepare a non-mutating Merchant write proposal
+- read_only: explain, inspect, search, analyze, review, or read Merchant state
 - write: modify local source code or local files
 - external_write: send, deploy, publish, push, upload, create an event, or
-  explicitly request application of a prior Merchant proposal to runtime state
+  change Merchant runtime state
 - destructive: delete data, drop or truncate tables, force push, reset --hard,
   or perform an irreversible operation
 
@@ -161,7 +159,7 @@ Internal coordination is NOT an external write:
 Allowed operations:
 
 diagnose, fix, build, refactor, review, test, security,
-sales_query, schedule, merchant_read, merchant_propose, merchant_apply
+sales_query, schedule, merchant_read, merchant_execute
 
 Allowed domains:
 
@@ -170,14 +168,11 @@ code, data, calendar, sales, documentation, security, merchant, general
 Merchant operational classification:
 
 - merchant_read: read current Merchant or Merchant-project state through the
-  operational Merchant interface.
-- merchant_propose: normalize and prepare a proposal for a Merchant-state
-  change. This mode does not apply a change and is read_only.
-- merchant_apply: explicitly apply or execute a previously generated Merchant
-  proposal. This is external_write and requires confirmation.
-- A Merchant write request without an explicit request to apply a prior
-  proposal is merchant_propose, including create, import, update, set, and
-  approve operations.
+  operational Merchant interface. A request for a preview without any change
+  is merchant_read.
+- merchant_execute: change Merchant runtime state directly, including create,
+  import, update, set, activate, and approve operations. This is
+  external_write and requires confirmation. There is no proposal or apply step.
 - Work on Merchant source code, tests, modules, repositories, or CLI
   implementation remains a normal code operation such as fix, build,
   refactor, review, or test. Do not classify source-code work as a Merchant
@@ -205,14 +200,12 @@ AGENTS_BY_OPERATION: dict[str, tuple[str, ...]] = {
     "sales_query": ("group-sales-manager",),
     "schedule": ("scheduler",),
     "merchant_read": ("merchant-manager",),
-    "merchant_propose": ("merchant-manager",),
-    "merchant_apply": ("merchant-manager",),
+    "merchant_execute": ("merchant-manager",),
 }
 
 
 OPERATION_PRIORITY: dict[str, int] = {
-    "merchant_apply": 115,
-    "merchant_propose": 110,
+    "merchant_execute": 110,
     "merchant_read": 105,
     "schedule": 100,
     "sales_query": 95,
@@ -229,15 +222,13 @@ OPERATION_PRIORITY: dict[str, int] = {
 MERCHANT_OPERATIONS = frozenset(
     {
         Operation.MERCHANT_READ.value,
-        Operation.MERCHANT_PROPOSE.value,
-        Operation.MERCHANT_APPLY.value,
+        Operation.MERCHANT_EXECUTE.value,
     }
 )
 
 MERCHANT_NON_MUTATING_OPERATIONS = frozenset(
     {
         Operation.MERCHANT_READ.value,
-        Operation.MERCHANT_PROPOSE.value,
     }
 )
 
@@ -589,7 +580,7 @@ class IntentParser:
 
         if merchant_risk_reconciled:
             # WRITE means local file/source modification. Merchant reads and
-            # proposals do not mutate either local files or runtime state.
+            # previews do not mutate either local files or runtime state.
             # External/destructive model decisions are never downgraded.
             risk_level = local_risk
         else:
@@ -837,10 +828,11 @@ class IntentParser:
     def _has_explicit_merchant_proposal_only(
         text: str,
     ) -> bool:
-        """Return True only for an affirmative proposal-only request.
+        """Return True only for an affirmative preview/proposal-only request.
 
-        Negative mutation constraints such as "do not apply" are safety
-        boundaries, not evidence that the user requested a proposal.
+        Such a request carries no write authority and is classified as a
+        Merchant read. Negative mutation constraints such as "do not apply"
+        are safety boundaries, not evidence of a preview request.
         """
 
         patterns = (
@@ -1171,7 +1163,7 @@ class IntentParser:
             return None
 
         explicit_mode_patterns = (
-            r"--(?:propose|apply)\b",
+            r"--(?:propose|apply|execute)\b",
             r"\b(?:apply|execute|confirm|approve)\b.{0,80}\bproposal\b",
             r"\bproposal\b.{0,80}\b(?:apply|execute|confirm|approve)\b",
             r"\b(?:ap dung|thuc thi|xac nhan|dong y)\b.{0,80}\bde xuat\b",
@@ -1209,13 +1201,25 @@ class IntentParser:
             )
         )
 
-        if IntentParser._has_explicit_merchant_proposal_only(
+        # A preview-only request, or one that forbids persisting the
+        # change, never carries write authority.
+        forbids_persistence = any(
+            re.search(pattern, text)
+            for pattern in (
+                r"\b(?:do\s+not|don'?t|never|must\s+not)\s+"
+                r"(?:[a-z]+\s+){0,3}(?:apply|persist|execute|save)\b",
+                r"\bwithout\s+(?:applying|executing|persisting|saving)\b",
+                r"\bkhong\s+(?:ap dung|thuc thi|luu|ghi)\b",
+            )
+        )
+
+        if forbids_persistence or IntentParser._has_explicit_merchant_proposal_only(
             operation_text
         ):
-            return Operation.MERCHANT_PROPOSE.value
+            return Operation.MERCHANT_READ.value
 
         apply_patterns = (
-            r"--apply\b",
+            r"--(?:apply|execute)\b",
             r"\b(?:apply|execute|confirm|approve)\b.{0,80}\bproposal\b",
             r"\bproposal\b.{0,80}\b(?:apply|execute|confirm|approve)\b",
             r"\b(?:ap dung|thuc thi|xac nhan|dong y)\b.{0,80}\bde xuat\b",
@@ -1229,15 +1233,14 @@ class IntentParser:
             )
             for pattern in apply_patterns
         ):
-            return Operation.MERCHANT_APPLY.value
+            return Operation.MERCHANT_EXECUTE.value
 
-        propose_patterns = (
+        # Proposals no longer exist. A request for one is a preview
+        # and never carries write authority.
+        preview_patterns = (
             r"--propose\b",
             r"\b(?:prepare|create|generate|make)\b.{0,40}\bproposal\b",
-            r"\bproposal\b.{0,80}\b(?:create|import|update|set|approve|change)\b",
             r"\b(?:de xuat|tao de xuat|chuan bi de xuat)\b",
-            r"\b(?:create|add|import|update|set|approve|change)\b",
-            r"\b(?:tao|them|nhap|cap nhat|gan|duyet|thay doi)\b",
         )
 
         if any(
@@ -1245,9 +1248,23 @@ class IntentParser:
                 pattern,
                 operation_text,
             )
-            for pattern in propose_patterns
+            for pattern in preview_patterns
         ):
-            return Operation.MERCHANT_PROPOSE.value
+            return Operation.MERCHANT_READ.value
+
+        execute_patterns = (
+            r"\b(?:create|add|import|update|set|approve|change|activate|execute)\b",
+            r"\b(?:tao|them|nhap|cap nhat|gan|duyet|thay doi|kich hoat|thuc thi)\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                operation_text,
+            )
+            for pattern in execute_patterns
+        ):
+            return Operation.MERCHANT_EXECUTE.value
 
         read_patterns = (
             r"\b(?:list|show|get|find|read|display|check)\b",
@@ -1286,14 +1303,14 @@ class IntentParser:
         )
 
         # Repository development takes precedence over Merchant
-        # domain wording. Merchant apply remains a separate,
+        # domain wording. Merchant execution remains a separate,
         # explicitly authorized operational workflow.
         if (
             software_development_requested
-            and Operation.MERCHANT_APPLY.value in operation_set
+            and Operation.MERCHANT_EXECUTE.value in operation_set
         ):
             raise IntentParserConfigError(
-                "Mixed Merchant apply and development intents "
+                "Mixed Merchant execution and development intents "
                 "must be submitted separately"
             )
 
@@ -1450,7 +1467,7 @@ class IntentParser:
         }
 
         if (
-            Operation.MERCHANT_APPLY.value
+            Operation.MERCHANT_EXECUTE.value
             in operations
         ):
             return RiskLevel.EXTERNAL_WRITE

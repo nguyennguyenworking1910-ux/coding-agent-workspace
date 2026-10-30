@@ -100,10 +100,9 @@ def test_solve_requires_complete_merchant_assignment_fields():
 
     assert "Every Merchant assignment must explicitly declare" in content
     assert "`database_target: runtime`" in content
-    assert "`authorized_mode: READ`" in content
-    assert "`authorized_mode: PROPOSE`" in content
+    assert "`operation: merchant_read` or `operation: merchant_execute`" in content
     assert "database and credential arguments are forbidden" in content
-    assert "runtime `--apply` is outside Checkpoint 6 authority" in (
+    assert "runtime writes happen only through the trusted Direct EXECUTE handoff" in (
         content
     )
 
@@ -134,25 +133,21 @@ def test_other_roles_cannot_execute_operational_merchant_cli():
     assert "may not execute operational Merchant CLI commands" in content
 
 
-def test_write_assignment_is_proposal_only():
+def test_write_assignment_is_direct_execute_only():
     content = _solve_content()
 
-    assert "A Merchant write-intent proposal may be assigned only" in (
-        content
-    )
-    assert "redacted `--propose` result" in content
-    assert "no change may be applied" in content
+    assert "A Merchant write (`merchant_execute`) may be assigned only" in content
+    assert "no runtime write is possible" in content
+    assert "authorized_mode: PROPOSE" not in content
 
 
-def test_runtime_apply_waits_for_checkpoint_7_handoff():
+def test_runtime_write_happens_only_through_trusted_handoff():
     agent = _agent_content()
     solve = _solve_content()
 
-    assert "do not execute any runtime command in `--apply` mode" in agent
-    assert "Runtime `--apply` remains unavailable in Checkpoint 6" in (
-        solve
-    )
-    assert "Checkpoint 7 intent/policy authorization handoff" in solve
+    assert "Runtime writes never run through `agent_cli.py` or a shell" in agent
+    assert "Dispatch authorization is not runtime authority" in solve
+    assert "The lead never executes the handoff, the Merchant CLI" in solve
 
 
 def test_task_update_occurs_before_final_send_message():
@@ -180,7 +175,7 @@ def test_merchant_report_contains_every_required_field():
     assert "operation, database, mode" in content
     assert "redacted CLI result" in content
     assert "exit outcome" in content
-    assert "confirmation state" in content
+    assert "execution state" in content
     assert "failures, and unresolved work" in content
 
 
@@ -273,9 +268,9 @@ def test_agent_interface_does_not_read_authority_from_environment():
     assert "getenv(" not in source
 
 
-def test_proposal_hash_is_binding_not_authority_everywhere():
+def test_team_result_is_never_execution_authority_everywhere():
     agent = _agent_content()
     solve = _solve_content()
 
-    assert "proposal hash is payload binding, not permission" in agent
-    assert "It is not permission, a\n  credential" in solve
+    assert "It never grants execution authority" in agent
+    assert "it is never execution authority" in solve
