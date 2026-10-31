@@ -87,6 +87,40 @@ class TerminateDirectTaskFn(Protocol):
     ) -> tuple[bool, str]: ...
 
 
+class DirectReportViolationFn(Protocol):
+    def __call__(
+        self,
+        *,
+        owner_session_id: str,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+        message: str,
+    ) -> str | None: ...
+
+
+class SettleDirectAttemptFn(Protocol):
+    def __call__(
+        self,
+        *,
+        owner_session_id: str,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+    ) -> None: ...
+
+
+class ClaimDirectReportCorrectionFn(Protocol):
+    def __call__(
+        self,
+        session_id: Any,
+        teammate_name: str,
+        run_id: str,
+        task_id: str,
+        reason: str,
+    ) -> str: ...
+
+
 class DirectPaneIdentityStatusFn(Protocol):
     def __call__(
         self,
@@ -120,6 +154,10 @@ class TeammateIdleDependencies:
     terminate_legacy_merchant_task: TerminateDirectTaskFn
     fail_spent_direct_execution: TerminateDirectTaskFn
     direct_pane_identity_status: DirectPaneIdentityStatusFn
+    direct_terminal_report_violation: DirectReportViolationFn
+    settle_scope_execution_at_idle: SettleDirectAttemptFn
+    end_unverified_direct_create: ReconcileDirectWritesFn
+    claim_direct_report_correction: ClaimDirectReportCorrectionFn
     MERCHANT_MANAGER_AGENT: str
     MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES: Any
     MISSING_RESULT_FEEDBACK: str
@@ -489,51 +527,72 @@ def handle_teammate_idle(
                     task_id=owner_task_id,
                 )
 
+                def report_violation() -> str | None:
+                    # The outcome is the settled trusted evidence; the
+                    # report must agree with it, including the target.
+                    return dependencies.direct_terminal_report_violation(
+                        owner_session_id=owner_session_id,
+                        teammate_name=teammate_name,
+                        run_id=owner_run_id,
+                        task_id=owner_task_id,
+                        message=str(pending_result.get("message") or ""),
+                    )
+
+                def rejection_reason(violation: str) -> str:
+                    return (
+                        "TERMINAL_REPORT_CONTRADICTS_EVIDENCE: "
+                        f"the report was rejected because {violation}"
+                    )
+
+                def reject_report(violation: str) -> str:
+                    return bounded_terminal_result_failure(
+                        owner_session_id=owner_session_id,
+                        pane_session_id=session_id,
+                        teammate_name=teammate_name,
+                        run_id=owner_run_id,
+                        task_id=owner_task_id,
+                        reason=rejection_reason(violation),
+                    )
+
+                def reject_write_report(violation: str) -> str:
+                    # Settled write evidence decides the outcome; only the
+                    # report gets one correction, then the task ends FAILED
+                    # with the evidence kept.
+                    claim = dependencies.claim_direct_report_correction(
+                        owner_session_id,
+                        teammate_name,
+                        owner_run_id,
+                        owner_task_id,
+                        rejection_reason(violation),
+                    )
+
+                    if claim == "CLAIMED":
+                        return (
+                            "Your Merchant report was rejected because "
+                            f"{violation}. The outcome comes from trusted "
+                            "execution evidence. Do not redo or retry the "
+                            "write. Send one corrected report through "
+                            "SendMessage to team-lead with exactly one "
+                            "TEAM_RESULT_JSON block, then finish with only: "
+                            "RESULT_DELIVERED."
+                        )
+
+                    if claim == "FAILED":
+                        clear_pending_result(session_id)
+                        return ""
+
+                    return PENDING_RESULT_FEEDBACK
+
                 if write_free is True:
                     task_result = task_result_candidate_from_message(
                         str(pending_result.get("message") or "")
                     )
+                    violation = report_violation()
 
-                    # The declared target must be the user-selected one.
-                    with locked_state(owner_session_id) as owner_run:
-                        owner_scope = (owner_run or {}).get("merchant_scope")
+                    if violation is not None:
+                        return reject_report(violation)
 
-                    trusted_target = (
-                        owner_scope.get("database_target")
-                        if isinstance(owner_scope, dict)
-                        else "runtime"
-                    )
-
-                    outcome = str(
-                        (task_result or {}).get("outcome") or ""
-                    ).strip()
-
-                    # An execution outcome without a trusted reservation
-                    # is malformed, as is any non-direct operation.
-                    if (
-                        task_result is None
-                        or outcome
-                        not in MERCHANT_TERMINAL_WITHOUT_PROPOSAL_OUTCOMES
-                        or str(
-                            task_result.get("operation") or ""
-                        ).strip()
-                        != "merchant_execute"
-                        or str(
-                            task_result.get("database_target") or ""
-                        ).strip()
-                        != trusted_target
-                    ):
-                        return bounded_terminal_result_failure(
-                            owner_session_id=owner_session_id,
-                            pane_session_id=session_id,
-                            teammate_name=teammate_name,
-                            run_id=owner_run_id,
-                            task_id=owner_task_id,
-                            reason=(
-                                "Direct Merchant task without a write "
-                                "has no valid no-write terminal result"
-                            ),
-                        )
+                    outcome = str(task_result["outcome"])
 
                     completeness_decision = (
                         validate_completeness_receipt_for_outcome(
@@ -578,7 +637,25 @@ def handle_teammate_idle(
                         return PENDING_RESULT_FEEDBACK
 
                 elif "direct_scope_execution" in owner_record:
-                    execution = owner_record.get("direct_scope_execution")
+                    # An attempt left EXECUTING by a crash, or UNCERTAIN, is
+                    # settled from committed database evidence first.
+                    dependencies.settle_scope_execution_at_idle(
+                        owner_session_id=owner_session_id,
+                        teammate_name=teammate_name,
+                        run_id=owner_run_id,
+                        task_id=owner_task_id,
+                    )
+
+                    settled_record = (
+                        (load_team_state(owner_session_id) or {})
+                        .get("teammates", {})
+                        .get(teammate_name)
+                    )
+                    execution = (
+                        settled_record.get("direct_scope_execution")
+                        if isinstance(settled_record, dict)
+                        else None
+                    )
 
                     # A spent scoped write that did not succeed is never
                     # retried or released: the task ends FAILED and the
@@ -601,6 +678,11 @@ def handle_teammate_idle(
                         clear_pending_result(session_id)
 
                         return ""
+
+                    violation = report_violation()
+
+                    if violation is not None:
+                        return reject_write_report(violation)
 
                 else:
                     # Spent authority without trusted evidence, or Create
@@ -629,7 +711,23 @@ def handle_teammate_idle(
                         return PENDING_RESULT_FEEDBACK
 
                     if direct_verified is not True:
+                        # No committed evidence for an executed Create:
+                        # fence it and end the task, never loop or release.
+                        if dependencies.end_unverified_direct_create(
+                            owner_session_id=owner_session_id,
+                            teammate_name=teammate_name,
+                            run_id=owner_run_id,
+                            task_id=owner_task_id,
+                        ):
+                            clear_pending_result(session_id)
+                            return ""
+
                         return PENDING_RESULT_FEEDBACK
+
+                    violation = report_violation()
+
+                    if violation is not None:
+                        return reject_write_report(violation)
 
             marked = (
                 mark_bound_report_received(

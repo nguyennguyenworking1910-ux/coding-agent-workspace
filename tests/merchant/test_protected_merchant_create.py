@@ -81,6 +81,15 @@ def test_protected_create_replays_generated_id(test_repository):
     finally:
         with test_repository.connection() as conn:
             with conn.transaction():
+                # The attempt-bound claim is test data too; leaving it
+                # accumulated COMPLETED claims on every run.
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (key,),
+                )
                 conn.execute(
                     """
                     DELETE FROM merchant_ops.merchant_execution_ledger

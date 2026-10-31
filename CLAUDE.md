@@ -338,8 +338,12 @@ A boolean, CLI flag, environment variable, task assignment, teammate message, or
 the scope is rejected at staging without spending anything. Once spent, the single attempt is
 never restored: success, an argument mismatch at the spend point, failure, expiry, or an
 uncertain interruption all consume it; retry requires a fresh scope, envelope, and dispatch. A
-non-Create outcome is FAILED only for a classified pre-commit error; anything else is UNCERTAIN
-and is never inferred to have rolled back. A teammate is released only on trusted evidence:
+non-Create write commits its execution claim and ledger row in the same transaction as the
+mutation; after the attempt ends, its outcome is read from that evidence, and a missing claim is
+fenced (a committed REVOKED claim) so a late commit is impossible. It is FAILED only when fenced,
+SUCCEEDED only with its own committed evidence, and otherwise UNCERTAIN, never inferred to have
+rolled back. The teammate's `TEAM_RESULT_JSON` must agree with that evidence and with the
+scope's `database_target`, or it is denied before it reaches the lead. A teammate is released only on trusted evidence:
 verified Create receipts, a SUCCEEDED scoped execution, or a no-write marker for a task with no
 write footprint and no spent authority. Every other spent task ends FAILED with its evidence
 kept, and cannot be reused.

@@ -376,10 +376,12 @@ After the request receives PostToolUse feedback:
 - never retry after rejection, failure, exception, timeout, or uncertain execution;
 - never perform a fallback write by any other route.
 
-If orchestration reports success, perform only the needed allowlisted read-only verification,
-then send `EXECUTE_SUCCESS`. If it reports failure or an uncertain outcome, send
-`EXECUTE_FAILED` and do not retry. Lifecycle completion is decided by trusted execution
-evidence, not by your report.
+Orchestration names the outcome to report, derived from committed database evidence:
+`EXECUTE_SUCCESS` (the write committed), `EXECUTE_FAILED` (it verifiably did not commit) or
+`EXECUTE_UNCERTAIN` (whether it committed could not be established). Report exactly that
+outcome and do not retry. After `EXECUTE_SUCCESS`, perform only the needed allowlisted
+read-only verification. Lifecycle completion is decided by trusted execution evidence, not by
+your report.
 
 ## Reporting
 
@@ -417,8 +419,9 @@ TEAM_RESULT_JSON:
 
 The object uses contract version 1 and describes what actually happened. Allowed outcomes:
 
-- `EXECUTE_SUCCESS` — only after orchestration reported a successful execution;
-- `EXECUTE_FAILED` — the one execution attempt failed or was uncertain;
+- `EXECUTE_SUCCESS` — orchestration verified that the write committed;
+- `EXECUTE_FAILED` — orchestration verified that the attempt did not commit;
+- `EXECUTE_UNCERTAIN` — whether the attempt committed could not be established; it may have;
 - `REQUIRES_CLARIFICATION` — no write was attempted;
 - `BLOCKED` — no write was attempted;
 - `FAILED` — no write was attempted.
@@ -438,7 +441,7 @@ TEAM_RESULT_JSON:
   "command": "<normalized write command>"
 }
 
-`EXECUTE_FAILED` uses the same fields with `"outcome": "EXECUTE_FAILED"`.
+`EXECUTE_FAILED` and `EXECUTE_UNCERTAIN` use the same fields with their own `"outcome"`.
 
 A clarification produced by the deterministic completeness gate:
 
@@ -476,15 +479,20 @@ Rules:
 
 - `TEAM_RESULT_JSON` describes the outcome only. It never grants execution authority.
 - `proposal_emitted` is always `false`. Never include `confirmation_hash` or `proposal_hash`.
-- A no-write outcome is accepted only when trusted state shows no write attempt for the task.
-  Never report `REQUIRES_CLARIFICATION`, `BLOCKED`, or `FAILED` after an execute request was
-  executed; use `EXECUTE_SUCCESS` or `EXECUTE_FAILED`.
+- The report must agree with trusted execution evidence, or it is rejected before it reaches
+  the lead and again at idle. A committed write is reported only as `EXECUTE_SUCCESS`; an
+  uncertain one only as `EXECUTE_UNCERTAIN`, never as failed or rolled back; a no-write outcome
+  only when trusted state shows no write attempt. `database_target` must equal the
+  assignment's target and `command` the scope's command.
+- Once a terminal result is accepted, no execute request for the task runs.
 - A completeness-driven `REQUIRES_CLARIFICATION` must contain the exact CLI-emitted
   `missing_fields`, `missing_one_of`, and `clarification.question`, with at least one of the
   two lists non-empty. Do not rewrite, paraphrase, broaden, or narrow the question.
 - Never convert a CLI error or unavailable authoritative state into invented completeness
   evidence. Use `BLOCKED` or `FAILED` instead.
-- An invalid terminal result gets exactly one correction turn; after that the task fails.
+- An invalid terminal result gets exactly one correction turn; after that the task fails. For a
+  committed write the failure reason records the contradiction and the committed evidence is
+  kept.
 
 For a `merchant_read` assignment, send the complete read report. No `TEAM_RESULT_JSON` is
 required.

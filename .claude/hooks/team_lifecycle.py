@@ -1298,6 +1298,8 @@ def mark_teammate_running(
 
         # A no-write marker never carries over to a new task.
         record.pop("direct_no_write_terminal", None)
+        record.pop("direct_terminal_report", None)
+        record.pop("direct_report_correction_sent", None)
 
         record["status"] = (
             TeammateLifecycleStatus.RUNNING.value
@@ -1541,6 +1543,8 @@ def reserve_reusable_teammate(
 
                 # A no-write marker never carries over to a new task.
                 record.pop("direct_no_write_terminal", None)
+                record.pop("direct_terminal_report", None)
+                record.pop("direct_report_correction_sent", None)
 
                 record["status"] = (TeammateLifecycleStatus.RUNNING.value                )
                 record["current_run_id"] = run_id
@@ -1712,6 +1716,8 @@ def release_reported_teammate_to_idle(
 
         # The marker was verified above for this exact task only.
         record.pop("direct_no_write_terminal", None)
+        record.pop("direct_terminal_report", None)
+        record.pop("direct_report_correction_sent", None)
 
         record["status"] = TeammateLifecycleStatus.IDLE_REUSABLE.value
         record["last_completed_task_id"] = task_id
@@ -1956,6 +1962,8 @@ def mark_teammate_failed(
         if reason:
             record["failure_reason"] = reason
         record.pop("direct_no_write_terminal", None)
+        record.pop("direct_terminal_report", None)
+        record.pop("direct_report_correction_sent", None)
         record["current_task_id"] = None
         record["current_run_id"] = None
         record["authorized_operations"] = []
@@ -1969,6 +1977,8 @@ def _detach_failed_task(
     record["status"] = TeammateLifecycleStatus.FAILED.value
     record["failure_reason"] = reason
     record.pop("direct_no_write_terminal", None)
+    record.pop("direct_terminal_report", None)
+    record.pop("direct_report_correction_sent", None)
     record["current_task_id"] = None
     record["current_run_id"] = None
     record["authorized_operations"] = []
@@ -2156,6 +2166,91 @@ def fail_spent_direct_execution(
             return True, "FAILED"
 
         return False, "NO_SPENT_EXECUTION"
+
+
+def claim_direct_report_correction(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+    reason: str,
+) -> str:
+    """One correction turn for a report contradicting settled write evidence.
+
+    The write outcome is already decided by trusted evidence; only the
+    report can be corrected. Returns CLAIMED for the first contradiction and
+    FAILED for the second, which ends the task with ``reason`` and keeps the
+    evidence. Unsettled writes are never corrected (UNRESOLVED).
+    """
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return "STATE_UNAVAILABLE"
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if (
+            not isinstance(record, dict)
+            or record.get("canonical_name") != teammate_name
+            or record.get("status") != TeammateLifecycleStatus.RUNNING.value
+            or record.get("current_run_id") != run_id
+            or record.get("current_task_id") != task_id
+            or record.get("authorized_operations") != ["merchant_execute"]
+            or record.get("result_received") is True
+        ):
+            return "BINDING_MISMATCH"
+
+        if has_unresolved_direct_writes(record):
+            return "UNRESOLVED"
+
+        if record.get("direct_report_correction_sent") is True:
+            _detach_failed_task(record, reason)
+            return "FAILED"
+
+        record["direct_report_correction_sent"] = True
+
+        return "CLAIMED"
+
+
+def end_unverified_direct_create(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    task_id: str,
+    reason: str,
+) -> bool:
+    """End a Create task whose executed write has no committed evidence.
+
+    ``reason`` is DIRECT_WRITE_NOT_COMMITTED (fenced) or
+    DIRECT_WRITE_UNCERTAIN. The reservation stays for audit and the task is
+    never released.
+    """
+
+    if reason not in {"DIRECT_WRITE_NOT_COMMITTED", "DIRECT_WRITE_UNCERTAIN"}:
+        return False
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if (
+            not isinstance(record, dict)
+            or record.get("canonical_name") != teammate_name
+            or record.get("status") != TeammateLifecycleStatus.RUNNING.value
+            or record.get("current_run_id") != run_id
+            or record.get("current_task_id") != task_id
+            or record.get("authorized_operations") != ["merchant_execute"]
+            or record.get("direct_completion_receipt") is not None
+            or not isinstance(record.get("direct_writes"), dict)
+            or not record["direct_writes"]
+        ):
+            return False
+
+        _detach_failed_task(record, reason)
+
+        return True
 
 
 def bind_running_teammate_pane_session(

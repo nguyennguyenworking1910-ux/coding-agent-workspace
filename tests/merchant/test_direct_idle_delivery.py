@@ -91,6 +91,9 @@ def build_environment(
         _clear_merchant_resolution_after_release=clear,
         # The event comes from the task's verified pane and session.
         direct_pane_identity_status=lambda *args: "MATCH",
+        # These tests cover delivery ordering; report consistency with
+        # trusted evidence is tested separately.
+        direct_terminal_report_violation=lambda **kwargs: None,
     )
 
     return deps, calls
@@ -202,3 +205,27 @@ def test_mismatched_sendmessage_blocks_reconciliation():
 
     assert feedback == deps.MISSING_RESULT_FEEDBACK
     assert calls == []
+
+
+def test_report_contradicting_committed_evidence_is_never_released():
+    deps, calls = build_environment(verified=True)
+    rejections = []
+
+    def claim(session_id, teammate_name, run_id, task_id, reason):
+        rejections.append(reason)
+        return "CLAIMED"
+
+    deps = replace(
+        deps,
+        direct_terminal_report_violation=(
+            lambda **kwargs: "its outcome 'BLOCKED' contradicts trusted "
+            "execution evidence (COMMITTED); report EXECUTE_SUCCESS"
+        ),
+        claim_direct_report_correction=claim,
+    )
+
+    feedback = invoke(deps)
+
+    assert "COMMITTED" in feedback and "Do not redo" in feedback
+    assert names(calls) == ["reconcile"]
+    assert rejections and "COMMITTED" in rejections[0]

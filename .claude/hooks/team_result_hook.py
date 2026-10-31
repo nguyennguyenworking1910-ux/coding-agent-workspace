@@ -820,12 +820,34 @@ def _teammate_idle_dependencies(
 ) -> TeammateIdleDependencies:
     """Bind current hook symbols to TeammateIdle dependencies."""
 
+    from claude.hooks.merchant_attempt_resolution import (
+        end_unverified_direct_create,
+        settle_scope_execution_at_idle,
+    )
     from claude.hooks.merchant_direct_completion import (
         direct_task_is_write_free,
         establish_no_write_terminal,
     )
+    from claude.hooks.merchant_terminal_consistency import (
+        direct_terminal_report_violation,
+    )
+    from claude.hooks.team_lifecycle import (
+        claim_direct_report_correction,
+    )
 
     return TeammateIdleDependencies(
+        direct_terminal_report_violation=(
+            direct_terminal_report_violation
+        ),
+        settle_scope_execution_at_idle=(
+            settle_scope_execution_at_idle
+        ),
+        end_unverified_direct_create=(
+            end_unverified_direct_create
+        ),
+        claim_direct_report_correction=(
+            claim_direct_report_correction
+        ),
         reconcile_direct_writes=(
             _reconcile_direct_merchant_writes
         ),
@@ -936,10 +958,14 @@ def _dispatcher_dependencies(
 
     from claude.hooks.merchant_direct_handoff import (
         DirectPreflightRefused,
+        direct_execution_evidence,
         invoke_direct_merchant_execute,
     )
 
     return DispatcherDependencies(
+        direct_execution_evidence=(
+            direct_execution_evidence
+        ),
         HOOK_EVENT_NAMES=(
             HOOK_EVENT_NAMES
         ),

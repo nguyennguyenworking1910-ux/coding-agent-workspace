@@ -22,6 +22,7 @@ try:
         PrepareMerchantRuntimeHandoffFn,
         RecordRuntimeHandoffResultFn,
         InvokeDirectMerchantExecuteFn,
+        DirectExecutionEvidenceFn,
         LockedStateFn,
     )
 except ImportError:
@@ -34,6 +35,7 @@ except ImportError:
         PrepareMerchantRuntimeHandoffFn,
         RecordRuntimeHandoffResultFn,
         InvokeDirectMerchantExecuteFn,
+        DirectExecutionEvidenceFn,
         LockedStateFn,
     )
 
@@ -63,6 +65,7 @@ class DispatcherDependencies:
     sys: Any
 
     invoke_direct_merchant_execute: InvokeDirectMerchantExecuteFn
+    direct_execution_evidence: DirectExecutionEvidenceFn
 
 
 def main(
@@ -328,21 +331,6 @@ def main(
                         )
                     )
 
-            if (
-                succeeded
-                and result_recorded
-            ):
-                emit_post_tool_context(
-                    "Merchant Direct EXECUTE succeeded for the exact "
-                    "user-authorized scope. The attempt is spent and must not "
-                    "be executed again. Continue only with allowlisted "
-                    "read-only runtime verification, then report "
-                    "EXECUTE_SUCCESS. Do not send another "
-                    "MERCHANT_EXECUTE_REQUEST_JSON for this run/task."
-                )
-
-                return 0
-
             if result_recorded and preflight_reason is not None:
                 emit_post_tool_context(
                     "Merchant Direct EXECUTE was refused before execution. "
@@ -356,19 +344,39 @@ def main(
                 return 0
 
             if result_recorded:
-                bounded_failure = (
-                    runtime_failure_type
-                    or "UNKNOWN"
+                # The outcome to report comes from trusted execution
+                # evidence, never from the CLI output alone.
+                evidence = dependencies.direct_execution_evidence(
+                    handoff_attempt
                 )
 
-                emit_post_tool_context(
-                    "Merchant Direct EXECUTE was attempted but did not "
-                    "complete successfully. "
-                    f"Failure: {bounded_failure}. "
-                    "The attempt is spent and is not retryable. Report "
-                    "EXECUTE_FAILED. Do not execute a Merchant write through "
-                    "Bash, Python, or another execute request."
-                )
+                if evidence == "COMMITTED":
+                    emit_post_tool_context(
+                        "Merchant Direct EXECUTE committed for the exact "
+                        "user-authorized scope; committed database evidence "
+                        "was verified. The attempt is spent and must not "
+                        "be executed again. Report EXECUTE_SUCCESS. Do not "
+                        "send another MERCHANT_EXECUTE_REQUEST_JSON for this "
+                        "run/task."
+                    )
+                elif evidence == "NOT_COMMITTED":
+                    emit_post_tool_context(
+                        "Merchant Direct EXECUTE was attempted and verifiably "
+                        "did not commit "
+                        f"(failure: {runtime_failure_type or 'UNKNOWN'}). "
+                        "The attempt is spent and is not retryable. Report "
+                        "EXECUTE_FAILED. Do not execute a Merchant write "
+                        "through Bash, Python, or another execute request."
+                    )
+                else:
+                    emit_post_tool_context(
+                        "Merchant Direct EXECUTE was attempted but whether it "
+                        "committed could not be established "
+                        f"(failure: {runtime_failure_type or 'NONE'}). The "
+                        "write may have committed. The attempt is spent and "
+                        "is never retried. Report EXECUTE_UNCERTAIN; do not "
+                        "report it as failed, blocked or successful."
+                    )
 
                 return 0
 

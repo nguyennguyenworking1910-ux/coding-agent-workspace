@@ -7,7 +7,10 @@ that the TeammateIdle gate must settle from trusted evidence:
 - ``merchant create``: a durable reservation executed by the protected
   reserved executor and later verified from committed PostgreSQL evidence;
 - every other allowlisted write: a ``direct_scope_execution`` record
-  executed through the one-use runtime authorization.
+  executed through the one-use runtime authorization, inside one
+  transaction that also commits its execution claim and ledger row; its
+  outcome is then settled from that database evidence
+  (``merchant_attempt_resolution``).
 
 No identity, command, argument or database target here comes from agent
 input. The staged attempt was validated against the user-typed scope, whose
@@ -36,6 +39,9 @@ from claude.hooks.merchant_completion_receipt import (
     SCOPE_EXECUTION_SUCCEEDED,
     SCOPE_EXECUTION_UNCERTAIN,
     has_direct_write_footprint,
+)
+from claude.hooks.merchant_terminal_consistency import (
+    terminal_report_marker_matches,
 )
 from claude.hooks.merchant_runtime_handoff_gate import (
     PreparedRuntimeHandoff,
@@ -105,10 +111,13 @@ def _bound_record(
     return record
 
 
-def _begin_scope_execution(attempt: PreparedRuntimeHandoff) -> str:
+def _begin_scope_execution(
+    attempt: PreparedRuntimeHandoff,
+) -> dict[str, Any]:
     """Persist EXECUTING before any runtime authorization is spent.
 
-    Returns the fresh execution attempt identity the spend is bound to.
+    Returns the persisted record; its fresh execution attempt identity is
+    the one the spend and the database evidence are bound to.
     """
 
     execution_attempt_id = str(uuid.uuid4())
@@ -123,7 +132,10 @@ def _begin_scope_execution(attempt: PreparedRuntimeHandoff) -> str:
         if "direct_no_write_terminal" in record:
             raise DirectHandoffError("Task already finalized without a write")
 
-        record["direct_scope_execution"] = {
+        if terminal_report_marker_matches(record):
+            raise DirectHandoffError("Task already reported a terminal result")
+
+        execution = record["direct_scope_execution"] = {
             "version": 1,
             "run_id": attempt.run_id,
             "task_id": attempt.task_id,
@@ -134,7 +146,7 @@ def _begin_scope_execution(attempt: PreparedRuntimeHandoff) -> str:
             "status": SCOPE_EXECUTION_EXECUTING,
         }
 
-    return execution_attempt_id
+    return dict(execution)
 
 
 def _finish_scope_execution(
@@ -169,12 +181,55 @@ def _finish_scope_execution(
     return True
 
 
-def _execute_scoped_write(attempt: PreparedRuntimeHandoff) -> int:
+def _scope_write_commands(
+    database: str,
+    repository: Any,
+    identity: Any,
+) -> Any:
+    """Write handlers whose single transaction also commits the evidence."""
+
+    from claude.agents.tools.merchant.write_adapters import (
+        build_repository_write_commands,
+    )
+    from claude.clients.merchant.attempt_evidence import (
+        evidence_bound_repository,
+    )
+
+    return build_repository_write_commands(
+        database,
+        repository=evidence_bound_repository(repository, identity),
+    )
+
+
+def _execute_scoped_write(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+) -> int:
+    from claude.hooks.merchant_attempt_resolution import (
+        scope_attempt_identity,
+        settle_scope_execution,
+    )
     from claude.system.merchant_runtime_handoff import (
         invoke_authorized_scope_apply,
     )
 
-    execution_attempt_id = _begin_scope_execution(attempt)
+    execution = _begin_scope_execution(attempt)
+    identity = scope_attempt_identity(
+        attempt.owner_session_id, attempt.teammate_name, execution
+    )
+
+    def settle(fence: bool) -> str | None:
+        # The attempt's connection is closed here, so a missing claim can be
+        # fenced. Committed evidence decides; a rollback is never inferred.
+        return settle_scope_execution(
+            owner_session_id=attempt.owner_session_id,
+            teammate_name=attempt.teammate_name,
+            run_id=attempt.run_id,
+            task_id=attempt.task_id,
+            database=attempt.database_target,
+            repository_factory=lambda database: repository,
+            fence=fence,
+        )
 
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -186,25 +241,34 @@ def _execute_scoped_write(attempt: PreparedRuntimeHandoff) -> int:
                 attempt.arguments,
                 teammate_name=attempt.teammate_name,
                 task_id=attempt.task_id,
-                execution_attempt_id=execution_attempt_id,
+                execution_attempt_id=execution["execution_attempt_id"],
+                write_command_factory=lambda database: _scope_write_commands(
+                    database, repository, identity
+                ),
             )
     except BaseException:
-        # The authorization may have been spent and a commit may have
-        # happened. Never record this as a definite outcome.
-        _finish_scope_execution(attempt, SCOPE_EXECUTION_UNCERTAIN)
+        # Settled straight from EXECUTING, so a crash before this point
+        # still leaves an attempt TeammateIdle can fence.
+        if settle(fence=True) is None:
+            _finish_scope_execution(attempt, SCOPE_EXECUTION_UNCERTAIN)
         sys.stdout.write(stdout.getvalue())
         sys.stderr.write(stderr.getvalue())
         raise
 
-    recorded = _finish_scope_execution(
-        attempt,
-        _scope_outcome(exit_code, stdout.getvalue(), stderr.getvalue(), attempt),
+    reported = _scope_outcome(
+        exit_code, stdout.getvalue(), stderr.getvalue(), attempt
     )
+    # The CLI's report only decides whether a fence may be placed: a
+    # reported success without its evidence is never fenced.
+    settled = settle(fence=reported != SCOPE_EXECUTION_SUCCEEDED)
+
+    if settled is None:
+        _finish_scope_execution(attempt, SCOPE_EXECUTION_UNCERTAIN)
 
     sys.stdout.write(stdout.getvalue())
     sys.stderr.write(stderr.getvalue())
 
-    if not recorded:
+    if settled is None:
         raise DirectHandoffError(
             "Scoped execution outcome could not be recorded"
         )
@@ -273,6 +337,9 @@ def _execute_reserved_create(
         if "direct_scope_execution" in record:
             raise DirectHandoffError("Task already has write evidence")
 
+        if terminal_report_marker_matches(record):
+            raise DirectHandoffError("Task already reported a terminal result")
+
     database = attempt.database_target
     payload = _create_payload(tuple(attempt.arguments))
     write_id = f"scope-{attempt.scope_hash[:32]}"
@@ -316,24 +383,96 @@ def _execute_reserved_create(
         payload=payload,
     )
 
+    _verify_committed_create(attempt, repository)
+
     print(json.dumps(result, default=str))
 
     return 0
 
 
+def _verify_committed_create(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+) -> None:
+    """Verify committed evidence now so the report can state it.
+
+    Best effort: TeammateIdle verifies again and settles the task.
+    """
+
+    from claude.hooks.merchant_direct_completion import (
+        reconcile_all_direct_writes,
+    )
+
+    try:
+        reconcile_all_direct_writes(
+            owner_session_id=attempt.owner_session_id,
+            teammate_name=attempt.teammate_name,
+            run_id=attempt.run_id,
+            task_id=attempt.task_id,
+            repository_factory=lambda database: repository,
+        )
+    except Exception:
+        pass
+
+
+def direct_execution_evidence(attempt: PreparedRuntimeHandoff) -> str:
+    """Trusted evidence state of the attempt's task (never agent input)."""
+
+    from claude.hooks.merchant_terminal_consistency import (
+        UNCERTAIN,
+        direct_evidence_state,
+    )
+    from claude.hooks.team_lifecycle import (
+        direct_authority_spent_for_run,
+        load_team_state,
+    )
+
+    record = (load_team_state(attempt.owner_session_id) or {}).get(
+        "teammates", {}
+    ).get(attempt.teammate_name)
+
+    if (
+        not isinstance(record, dict)
+        or record.get("current_run_id") != attempt.run_id
+        or record.get("current_task_id") != attempt.task_id
+    ):
+        return UNCERTAIN
+
+    return direct_evidence_state(
+        record,
+        authority_spent=direct_authority_spent_for_run(
+            attempt.owner_session_id, attempt.run_id
+        ),
+    )
+
+
+def _target_repository(target: str) -> Any:
+    """Read-only identity check, then the repository the attempt writes to."""
+
+    from claude.hooks.merchant_reserved_execution import (
+        preflight_database_identity,
+        repository_for_target,
+    )
+
+    repository = repository_for_target(target)
+    preflight_database_identity(repository, target)
+
+    return repository
+
+
 def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
-    """Refuse before any reservation or spend; return the Create repository.
+    """Refuse before any reservation or spend; return the target repository.
 
     Raises DirectPreflightRefused with RUNTIME_EXECUTION_DISABLED,
-    TEST_MODE_COMMAND_UNSUPPORTED, INVALID_CONFIGURATION or
-    DATABASE_UNAVAILABLE. The one-use authority stays unspent.
+    TEST_MODE_COMMAND_UNSUPPORTED, TERMINAL_REPORT_ALREADY_SENT,
+    INVALID_CONFIGURATION or DATABASE_UNAVAILABLE. The one-use authority
+    stays unspent.
     """
 
     from claude.hooks.merchant_reserved_execution import (
         DatabasePreflightError,
-        preflight_database_identity,
-        repository_for_target,
     )
+    from claude.hooks.team_lifecycle import load_team_state
 
     target = attempt.database_target
 
@@ -343,17 +482,18 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     if target == "test" and attempt.command not in TEST_MODE_COMMANDS:
         raise DirectPreflightRefused("TEST_MODE_COMMAND_UNSUPPORTED")
 
-    if attempt.command != MERCHANT_CREATE_COMMAND:
-        # Scoped writes connect through the runtime capability path.
-        return None
+    # Re-checked under the team-state lock where the footprint is created.
+    record = (load_team_state(attempt.owner_session_id) or {}).get(
+        "teammates", {}
+    ).get(attempt.teammate_name)
+
+    if terminal_report_marker_matches(record):
+        raise DirectPreflightRefused("TERMINAL_REPORT_ALREADY_SENT")
 
     try:
-        repository = repository_for_target(target)
-        preflight_database_identity(repository, target)
+        return _target_repository(target)
     except DatabasePreflightError as exc:
         raise DirectPreflightRefused(exc.reason) from exc
-
-    return repository
 
 
 def invoke_direct_merchant_execute(
@@ -366,4 +506,4 @@ def invoke_direct_merchant_execute(
     if attempt.command == MERCHANT_CREATE_COMMAND:
         return _execute_reserved_create(attempt, repository)
 
-    return _execute_scoped_write(attempt)
+    return _execute_scoped_write(attempt, repository)

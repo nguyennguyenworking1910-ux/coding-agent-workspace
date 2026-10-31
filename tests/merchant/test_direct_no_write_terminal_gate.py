@@ -638,6 +638,16 @@ def hook_runtime(monkeypatch, tmp_path):
         "_reconcile_direct_merchant_writes",
         reconcile,
     )
+    # An unverified executed write is fenced; the fence here cannot be
+    # placed, so it stays UNCERTAIN. No database is contacted.
+    monkeypatch.setattr(
+        "claude.clients.merchant.attempt_evidence.resolve_attempt",
+        lambda repository, identity, *, fence: "UNCERTAIN",
+    )
+    monkeypatch.setattr(
+        "claude.hooks.merchant_reserved_execution.repository_for_target",
+        lambda database: object(),
+    )
 
     decision, name = lifecycle.allocate_teammate(
         "lead-hook", TEAMMATE, TEAMMATE
@@ -743,16 +753,22 @@ def test_hook_blocked_with_executing_write_uses_write_path(hook_runtime):
 
     _send(BLOCKED_RESULT)
 
-    assert _idle() == 2
-
-    # A claimed write is routed to committed-evidence reconciliation;
-    # the no-write outcome did not bypass it.
+    # A claimed write is routed to committed-evidence reconciliation; the
+    # no-write outcome did not bypass it. Without committed evidence the
+    # write is fenced; an unplaceable fence ends the task FAILED as
+    # UNCERTAIN with its evidence kept, never released and never looping.
+    assert _idle() == 0
     assert len(hook_runtime) == 1
 
     current = _hook_record()
-    assert current["status"] == "RUNNING"
+    assert current["status"] == "FAILED"
+    assert current["failure_reason"] == "DIRECT_WRITE_UNCERTAIN"
+    assert current["direct_writes"]["write-1"]["status"] == "EXECUTING"
     assert "direct_no_write_terminal" not in current
-    assert load_pending_result("pane-hook") is not None
+    assert load_pending_result("pane-hook") is None
+
+    assert _idle() == 0
+    assert _hook_record()["status"] == "FAILED"
 
 
 def test_hook_blocked_without_write_releases(hook_runtime):

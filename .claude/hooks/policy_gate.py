@@ -3755,6 +3755,27 @@ def main() -> int:
 
         return 0
 
+    # A Merchant terminal report must agree with trusted execution
+    # evidence before it can reach the lead.
+    from claude.hooks.merchant_terminal_consistency import (
+        merchant_terminal_report_decision,
+    )
+
+    terminal_report_decision = merchant_terminal_report_decision(
+        payload,
+        deny,
+    )
+
+    if terminal_report_decision is not None:
+        print(
+            json.dumps(
+                terminal_report_decision,
+                ensure_ascii=False,
+            )
+        )
+
+        return 0
+
     resolution_decision = (
         merchant_resolution_use_decision(
             payload,

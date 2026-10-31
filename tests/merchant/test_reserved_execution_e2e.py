@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 
 import pytest
@@ -388,7 +389,18 @@ def test_committed_write_releases_through_idle_hook(
             "teammate_name": teammate,
             "run_id": run_id,
             "task_id": task_id,
-            "message": "Merchant operation completed",
+            # The report must agree with the committed evidence.
+            "message": "Merchant operation completed TEAM_RESULT_JSON: "
+            + json.dumps(
+                {
+                    "contract_version": 1,
+                    "outcome": "EXECUTE_SUCCESS",
+                    "operation": "merchant_execute",
+                    "database_target": context["database"],
+                    "proposal_emitted": False,
+                    "command": "merchant create",
+                }
+            ),
         }
 
         # Keep the real reconciliation callback, report

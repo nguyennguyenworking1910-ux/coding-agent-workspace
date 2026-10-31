@@ -172,20 +172,67 @@ def isolated(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_runtime_handler(monkeypatch):
-    """Non-Create runtime writes reach this in-memory handler only."""
-    calls = []
-    behaviour = {"raise": None}
+    """Non-Create runtime writes reach this in-memory handler only.
 
-    def handler(payload):
-        if behaviour["raise"] is not None:
-            raise behaviour["raise"]
-        calls.append(payload)
-        return {"status": "committed"}
+    The handler models one evidenced transaction: a commit records the
+    attempt's claim, a raise commits nothing. ``resolve_attempt`` reads that
+    model; ``fence_blocked`` models a fence that cannot be placed (an
+    in-flight transaction or an unreachable database), and
+    ``commit_then_raise`` a commit whose acknowledgement is lost.
+    """
+    calls = []
+    behaviour = {
+        "raise": None,
+        "fence_blocked": False,
+        "commit_then_raise": None,
+        "no_evidence": False,
+    }
+    evidence = {}
+
+    def scope_write_commands(database, repository, identity):
+        def handler(payload):
+            if behaviour["raise"] is not None:
+                raise behaviour["raise"]
+            calls.append(payload)
+            if not behaviour["no_evidence"]:
+                evidence[identity.operation_key] = (
+                    identity.execution_attempt_id
+                )
+            if behaviour["commit_then_raise"] is not None:
+                raise behaviour["commit_then_raise"]
+            return {"status": "committed"}
+
+        return MerchantWriteCommands({"project update": handler})
+
+    def resolve_attempt(repository, identity, *, fence):
+        committed = evidence.get(identity.operation_key)
+
+        if committed == identity.execution_attempt_id:
+            return "COMMITTED"
+
+        if committed is None and fence and not behaviour["fence_blocked"]:
+            evidence[identity.operation_key] = "REVOKED"
+            return "NOT_COMMITTED"
+
+        return "UNCERTAIN"
 
     monkeypatch.setattr(
-        merchant_cli,
-        "build_write_commands",
-        lambda database: MerchantWriteCommands({"project update": handler}),
+        merchant_direct_handoff,
+        "_target_repository",
+        lambda target: object(),
+    )
+    monkeypatch.setattr(
+        merchant_direct_handoff,
+        "_scope_write_commands",
+        scope_write_commands,
+    )
+    monkeypatch.setattr(
+        "claude.clients.merchant.attempt_evidence.resolve_attempt",
+        resolve_attempt,
+    )
+    monkeypatch.setattr(
+        "claude.hooks.merchant_reserved_execution.repository_for_target",
+        lambda database: object(),
     )
     # Runtime Direct EXECUTE ships disabled; these lifecycle tests reach
     # only the in-memory handler above.
@@ -480,9 +527,14 @@ def test_scoped_write_cannot_be_released_as_no_write(fake_runtime_handler):
     assert execute_request(UPDATE_ARGV) == 0
     assert len(calls) == 1
 
-    # A misleading no-write report changes nothing: the committed
-    # execution evidence decides, and no no-write marker is created.
+    # A misleading no-write report is rejected: the committed execution
+    # evidence decides, and no no-write marker is created.
     assert report("BLOCKED") == 0
+    assert idle() == 2
+    assert record()["status"] == "RUNNING"
+    assert "direct_no_write_terminal" not in record()
+
+    assert report("EXECUTE_SUCCESS", command="project update") == 0
     assert idle() == 0
 
     current = record()
@@ -500,14 +552,17 @@ def test_failed_scoped_write_is_terminal_and_never_retried(
     calls, behaviour = fake_runtime_handler
 
     if failure == "handler":
-        # A validation error is raised before commit: a definite failure.
+        # Nothing committed and the fence was placed: verifiably failed.
         behaviour["raise"] = ValueError("expected_version mismatch")
         expected = "FAILED"
     elif failure == "unclassified":
-        # Anything else may have committed: never inferred as rolled back.
+        # The fence cannot be placed: never inferred as rolled back.
         behaviour["raise"] = RuntimeError("database rejected the write")
+        behaviour["fence_blocked"] = True
         expected = "UNCERTAIN"
     else:
+        behaviour["fence_blocked"] = True
+
         def interrupted(*args, **kwargs):
             raise KeyboardInterrupt("interrupted after authorization")
 
@@ -534,7 +589,10 @@ def test_failed_scoped_write_is_terminal_and_never_retried(
     assert execute_request(UPDATE_ARGV) == 0
     assert calls == []
 
-    assert report("EXECUTE_FAILED", command="project update") == 0
+    assert report(
+        "EXECUTE_FAILED" if expected == "FAILED" else "EXECUTE_UNCERTAIN",
+        command="project update",
+    ) == 0
 
     # Item 9: bounded, no loop.
     assert idle() == 0
@@ -841,11 +899,20 @@ TEST_DB_CONFIGURED = (
 )
 
 
-def _cleanup_create(merchant_id, operation_key):
+def _cleanup_create(merchant_id, operation_key, code=None):
     repo = MerchantRepository(role="test")
 
     with repo.connection() as conn:
         with conn.transaction():
+            # A failed assertion can leave merchant_id unknown; the unique
+            # test code still finds the row.
+            if merchant_id is None and code is not None:
+                row = conn.execute(
+                    "SELECT id FROM merchant_ops.merchants WHERE code = %s",
+                    (code,),
+                ).fetchone()
+                merchant_id = str(row["id"]) if row else None
+
             conn.execute(
                 "DELETE FROM merchant_ops.merchant_execution_claims "
                 "WHERE operation_key = %s",
@@ -898,9 +965,11 @@ def test_scoped_merchant_create_commits_and_releases():
         (write,) = writes.values()
         operation_key = write["operation_key"]
 
-        # Executed with an attempt-bound claim before reconciliation.
-        assert write["status"] == "EXECUTING"
+        # Committed evidence is verified right after execution, so the
+        # teammate's report can be checked against it.
+        assert write["status"] == "VERIFIED"
         assert write["database"] == "test"
+        assert record()["direct_completion_receipt"]["writes"]
         assert run_state()[HANDOFF_STATE_KEY]["status"] == HANDOFF_SUCCESS
 
         # Duplicate execute requests never reach PostgreSQL again.
@@ -945,4 +1014,4 @@ def test_scoped_merchant_create_commits_and_releases():
         assert record()["status"] == "IDLE_REUSABLE"
     finally:
         if operation_key is not None:
-            _cleanup_create(merchant_id, operation_key)
+            _cleanup_create(merchant_id, operation_key, code)

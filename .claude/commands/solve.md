@@ -353,7 +353,13 @@ retried. The lead never executes the handoff, the Merchant CLI, or a fallback mu
 For every `merchant_execute` assignment the teammate's final `SendMessage` contains exactly one
 `TEAM_RESULT_JSON` block with `operation: merchant_execute`, the scope's `database_target`
 (`runtime` unless the user selected `test`), and `proposal_emitted: false`. Allowed outcomes are `EXECUTE_SUCCESS`, `EXECUTE_FAILED`,
-`REQUIRES_CLARIFICATION`, `BLOCKED`, and `FAILED`.
+`EXECUTE_UNCERTAIN`, `REQUIRES_CLARIFICATION`, `BLOCKED`, and `FAILED`.
+
+The outcome comes from trusted execution evidence. A report that contradicts it (a committed
+write reported as anything but `EXECUTE_SUCCESS`, an uncertain one as failed, success without
+committed evidence, or a `database_target` other than the scope's) is denied before it reaches
+the lead and rejected again at `TeammateIdle`. A delivered `EXECUTE_UNCERTAIN` means the write
+may have committed; report it to the user as such and never as a rollback.
 
 The report describes the outcome; it is never execution authority. `TeammateIdle` releases the
 teammate only on trusted evidence:

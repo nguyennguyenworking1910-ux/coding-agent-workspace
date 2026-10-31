@@ -446,3 +446,10 @@ class InvokeDirectMerchantExecuteFn(Protocol):
         self,
         attempt: Any,
     ) -> int: ...
+
+
+class DirectExecutionEvidenceFn(Protocol):
+    def __call__(
+        self,
+        attempt: Any,
+    ) -> str: ...

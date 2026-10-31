@@ -165,6 +165,17 @@ def reserve_merchant_create(
                 "Task already finalized without a write"
             )
 
+        # A terminal report accepted before execution forbids any write,
+        # checked under the lock that creates the footprint.
+        from claude.hooks.merchant_terminal_consistency import (
+            terminal_report_marker_matches,
+        )
+
+        if terminal_report_marker_matches(record):
+            raise DirectWriteReservationError(
+                "Task already reported a terminal result"
+            )
+
         if not isinstance(write_id, str) or not write_id.strip():
             raise DirectWriteReservationError(
                 "Invalid write identity"

@@ -280,17 +280,19 @@ def test_persistence_failure_after_commit_is_never_no_write(
     execute_request(UPDATE_ARGV)
     assert len(calls) == 1
 
+    # The provisional status was never persisted, but the committed
+    # database evidence settles the attempt.
     execution = record()["direct_scope_execution"]
-    assert execution["status"] == "EXECUTING"
+    assert execution["status"] == "SUCCEEDED"
 
+    # A committed write is never presented as a no-write outcome.
     assert report("BLOCKED") == 0
-    idle()
+    assert idle() == 2
 
     current = record()
-    assert current["status"] == "FAILED"
-    assert current["failure_reason"] == "DIRECT_EXECUTION_EXECUTING"
+    assert current["status"] == "RUNNING"
     assert "direct_no_write_terminal" not in current
-    assert current["direct_scope_execution"]["status"] == "EXECUTING"
+    assert current["direct_scope_execution"]["status"] == "SUCCEEDED"
 
 
 def test_concurrent_invocation_writes_once(fake_runtime_handler):
@@ -387,8 +389,13 @@ def test_committed_but_unreported_write_is_never_released(
     assert current["direct_scope_execution"]["status"] == "SUCCEEDED"
     assert run_state()[HANDOFF_STATE_KEY]["status"] == "SUCCESS"
 
-    # A later contradictory report is settled from the evidence.
+    # A later contradictory report is rejected; the corrected report
+    # agrees with the evidence and releases.
     assert report("BLOCKED") == 0
+    assert idle() == 2
+    assert record()["status"] == "RUNNING"
+
+    assert report("EXECUTE_SUCCESS", command="project update") == 0
     idle()
     current = record()
     assert current["status"] == "IDLE_REUSABLE"
@@ -403,7 +410,7 @@ def test_committed_but_unreported_write_is_never_released(
 # -------------------------------------------------------------------
 
 
-def test_success_exit_with_unparseable_output_is_uncertain(
+def test_success_exit_with_unparseable_output_is_settled_by_evidence(
     fake_runtime_handler,
     monkeypatch,
 ):
@@ -419,7 +426,30 @@ def test_success_exit_with_unparseable_output_is_uncertain(
     execute_request(UPDATE_ARGV)
 
     assert len(calls) == 1
+    assert record()["direct_scope_execution"]["status"] == "SUCCEEDED"
+
+
+def test_success_exit_without_evidence_is_uncertain_and_never_fenced(
+    fake_runtime_handler,
+):
+    calls, behaviour = fake_runtime_handler
+    _scoped_update()
+
+    # The CLI reports success but no evidence was committed with it.
+    behaviour["no_evidence"] = True
+    execute_request(UPDATE_ARGV)
+
+    assert len(calls) == 1
     assert record()["direct_scope_execution"]["status"] == "UNCERTAIN"
+
+    # Idle re-reads the evidence but never fences an UNCERTAIN attempt:
+    # it may stand for a commit whose evidence is missing.
+    assert report("EXECUTE_UNCERTAIN", command="project update") == 0
+    idle()
+    current = record()
+    assert current["status"] == "FAILED"
+    assert current["failure_reason"] == "DIRECT_EXECUTION_UNCERTAIN"
+    assert current["direct_scope_execution"]["status"] == "UNCERTAIN"
 
 
 def test_unclassified_command_error_is_uncertain(fake_runtime_handler):
@@ -427,11 +457,12 @@ def test_unclassified_command_error_is_uncertain(fake_runtime_handler):
     _scoped_update()
 
     behaviour["raise"] = ConnectionError("connection lost during commit")
+    behaviour["fence_blocked"] = True
     execute_request(UPDATE_ARGV)
 
     assert record()["direct_scope_execution"]["status"] == "UNCERTAIN"
 
-    assert report("EXECUTE_FAILED", command="project update") == 0
+    assert report("EXECUTE_UNCERTAIN", command="project update") == 0
     idle()
     current = record()
     assert current["status"] == "FAILED"

@@ -129,6 +129,15 @@ def record_create_authority(
 
     state = runtime_state.load_state(session_id) or {}
     state["run_id"] = run_id
+    # Spent authority always comes from the user's scope for this run.
+    state.setdefault(
+        "merchant_scope",
+        {
+            "run_id": run_id,
+            "command": "merchant create",
+            "database_target": database_target,
+        },
+    )
     state["merchant_runtime_authorization_issued"] = True
     state["merchant_runtime_authorization"] = {
         "run_id": run_id,

@@ -112,6 +112,15 @@ def test_verified_committed_create_and_rejected_evidence(
     finally:
         with repository.connection() as conn:
             with conn.transaction():
+                # The attempt-bound claim is test data too; leaving it
+                # accumulated COMPLETED claims on every run.
+                conn.execute(
+                    """
+                    DELETE FROM merchant_ops.merchant_execution_claims
+                    WHERE operation_key = %s
+                    """,
+                    (operation_key,),
+                )
                 conn.execute(
                     """
                     DELETE FROM
