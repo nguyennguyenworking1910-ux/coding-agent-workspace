@@ -17,6 +17,7 @@ from .entity_resolver import (
     resolve_merchant_entity,
 )
 from .project_entity_resolver import resolve_project_entity
+from .project_preview import build_project_preview
 from .step_entity_resolver import (
     resolve_step_entity,
 )
@@ -128,6 +129,27 @@ class MerchantReadCommands:
             "mode": "PROJECT_RESOLUTION",
             **resolution.to_dict(),
         }
+
+    def project_preview(
+        self,
+        *,
+        request: str,
+        merchant_hint: str | None = None,
+        project_type_hint: str | None = None,
+        title_hint: str | None = None,
+        database_target: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only Project creation preview; never write authority."""
+
+        preview = build_project_preview(
+            request,
+            self.repository,
+            merchant_hint=merchant_hint,
+            project_type_hint=project_type_hint,
+            title_hint=title_hint,
+            database_target=database_target,
+        )
+        return cast(dict[str, Any], redact_payload(preview))
 
     def step_resolve(
         self,

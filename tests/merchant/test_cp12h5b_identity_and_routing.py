@@ -78,7 +78,7 @@ def os_server(monkeypatch):
     monkeypatch.setattr(
         harness_team_identity,
         "own_pane_server",
-        lambda tmux_pane: (current["server"], TABLE),
+        lambda tmux_pane, *_: (current["server"], TABLE),
         raising=False,
     )
     return current
@@ -221,7 +221,7 @@ def test_d4_outer_nested_psmux_server_is_rejected(
     monkeypatch.setattr(
         harness_team_identity,
         "own_pane_server",
-        lambda tmux_pane: (os_server["server"], nested),
+        lambda tmux_pane, *_: (os_server["server"], nested),
     )
     calls, _ = fake_runtime_handler
     submit(f"Update merchant project {PROJECT_ID}", argv=UPDATE_ARGV)
@@ -328,7 +328,7 @@ def test_trusted_teammate_completes_read_only_task(monkeypatch):
 
     intent_gate.run(
         {
-            "hook_event_name": "UserPromptExpansion",
+            "hook_event_name": "UserPromptSubmit",
             "session_id": LEAD,
             "prompt": "/solve List merchants",
         },
@@ -524,7 +524,7 @@ def test_runtime_execution_stays_disabled_without_code_change():
 def test_only_the_test_target_can_be_typed(prefix):
     result = intent_gate.run(
         {
-            "hook_event_name": "UserPromptExpansion",
+            "hook_event_name": "UserPromptSubmit",
             "session_id": LEAD,
             "prompt": f'/solve --confirm {prefix} ["merchant"] Create it',
         },

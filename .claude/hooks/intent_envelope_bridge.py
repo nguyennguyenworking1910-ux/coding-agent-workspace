@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Persist and render the exact session-scoped intent envelope.
 
-UserPromptExpansion classifies the controlled request first and persists the
-exact envelope here. /solve then reads the same envelope through Claude Code
-dynamic context before its prompt reaches the model.
+UserPromptSubmit classifies the controlled request once and persists the
+exact envelope here; UserPromptExpansion consumes that run's claim without
+classifying. /solve then renders the same envelope through Claude Code dynamic
+context, only while it matches the consumed claim.
 
 This avoids relying on UserPromptExpansion.additionalContext delivery while
 preserving the same trusted classification boundary.
@@ -26,12 +27,14 @@ if __package__ in (None, ""):
 
     from runtime_state import (  # type: ignore
         CLAUDE_DIR,
+        load_state,
         replace_with_retry,
         sanitize_session_id,
     )
 else:
     from .runtime_state import (
         CLAUDE_DIR,
+        load_state,
         replace_with_retry,
         sanitize_session_id,
     )
@@ -234,6 +237,39 @@ def render_intent_envelope(
             "for this Claude Code session"
         )
 
+    # Render only the run UserPromptSubmit created and Expansion consumed for
+    # this prompt; anything else is a stale or competing envelope.
+    import time
+
+    from intent_gate import (
+        INTENT_CLAIM_FIELD,
+        INTENT_CLAIM_TTL_SECONDS,
+        claim_matches_run,
+    )
+
+    state = load_state(session_id)
+    claim = (
+        state.get(INTENT_CLAIM_FIELD)
+        if isinstance(state, dict)
+        else None
+    )
+    consumed_at = (
+        claim.get("consumed_at")
+        if isinstance(claim, dict)
+        else None
+    )
+
+    if not (
+        isinstance(state, dict)
+        and claim_matches_run(claim, state, envelope)
+        and isinstance(consumed_at, (int, float))
+        and 0 <= time.time() - consumed_at <= INTENT_CLAIM_TTL_SECONDS
+    ):
+        raise RuntimeError(
+            "Intent envelope is stale or does not match the run "
+            "UserPromptSubmit created for this prompt; refusing to render it"
+        )
+
     encoded = json.dumps(
         envelope,
         ensure_ascii=False,
@@ -282,6 +318,12 @@ def render_intent_envelope(
 
 
 def main() -> int:
+    # The envelope holds the user's exact (often Vietnamese) request; the
+    # Windows console default (cp1252) cannot encode it.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="strict")
+
     session_id = str(
         os.environ.get(
             SESSION_ID_ENV_VAR

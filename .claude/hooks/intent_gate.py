@@ -14,10 +14,12 @@ prevent.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
 import sys
+import time
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -28,7 +30,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from runtime_state import (  # noqa: E402
         CLAUDE_DIR,
-        load_state,
+        configure_utf8_output,
+        read_hook_payload,
+        locked_state,
         new_state,
         redact_secrets,
         save_state,
@@ -43,7 +47,9 @@ if __package__ in (None, ""):
 else:
     from .runtime_state import (
         CLAUDE_DIR,
-        load_state,
+        configure_utf8_output,
+        read_hook_payload,
+        locked_state,
         new_state,
         redact_secrets,
         save_state,
@@ -76,9 +82,80 @@ MERCHANT_TARGET_FLAG = "--merchant-target"
 MERCHANT_TEST_TARGET = "test"
 
 MERCHANT_EXECUTE_OPERATION = "merchant_execute"
+MERCHANT_READ_OPERATION = "merchant_read"
 LEGACY_MERCHANT_OPERATIONS = frozenset(
     {"merchant_propose", "merchant_apply"}
 )
+
+
+# The trusted fields of a persisted envelope. Only this hook sets them.
+TRUSTED_ENVELOPE_FIELDS = (
+    "run_id",
+    "merchant_scope",
+    "merchant_database_target",
+    "confirmed",
+)
+
+INTENT_CLAIM_FIELD = "intent_claim"
+
+# Expansion follows Submit within milliseconds; the bridge follows Expansion.
+INTENT_CLAIM_TTL_SECONDS = 30.0
+
+
+def prompt_digest(parsed: tuple[Any, ...]) -> str:
+    """Bind a claim to the exact parsed controlled prompt."""
+    return hashlib.sha256(
+        json.dumps(list(parsed), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def claim_matches_run(
+    claim: Any,
+    state: dict[str, Any],
+    envelope: Any,
+) -> bool:
+    """The claim, the run state and the persisted envelope name one run."""
+    run_id = str(state.get("run_id") or "").strip()
+
+    return bool(
+        run_id
+        and isinstance(claim, dict)
+        and isinstance(envelope, dict)
+        and claim.get("run_id") == run_id
+        and envelope.get("run_id") == run_id
+        and claim.get("request_id") == envelope.get("request_id")
+        and envelope.get("merchant_scope") == state.get("merchant_scope")
+    )
+
+
+def consume_intent_claim(session_id: Any, digest: str) -> bool:
+    """Spend Submit's claim for this exact prompt once; False fails closed."""
+    now = time.time()
+
+    with locked_state(session_id) as state:
+        if state is None:
+            return False
+
+        claim = state.get(INTENT_CLAIM_FIELD)
+
+        if not (
+            claim_matches_run(claim, state, load_intent_envelope(session_id))
+            and claim.get("issued_by") == "UserPromptSubmit"
+            and claim.get("consumed_at") is None
+            and claim.get("prompt_sha256") == digest
+            and isinstance(claim.get("issued_at"), (int, float))
+            and 0 <= now - claim["issued_at"] <= INTENT_CLAIM_TTL_SECONDS
+        ):
+            return False
+
+        claim["consumed_at"] = now
+        return True
+
+
+def revoke_intent_claim(session_id: Any) -> None:
+    with locked_state(session_id) as state:
+        if state is not None:
+            state.pop(INTENT_CLAIM_FIELD, None)
 
 
 def split_merchant_scope(request: str) -> tuple[list[str], str]:
@@ -138,14 +215,6 @@ load_dotenv(
     override=False,
     encoding="utf-8",
 )
-
-def configure_utf8_output() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(
-                encoding="utf-8",
-                errors="strict",
-            )
 
 def parse_prompt(
     prompt: str,
@@ -499,127 +568,27 @@ def run(
                 "Nothing was dispatched."
             )
 
-    if hook_event_name == "UserPromptSubmit":
-        persisted_envelope = load_intent_envelope(
-            payload.get("session_id")
-        )
-        persisted_state = load_state(
-            payload.get("session_id")
-        )
+    session_id = payload.get("session_id")
+    digest = prompt_digest(parsed)
 
-        # A matching description alone does not establish identical
-        # authorization. Expansion and Submit must bind the same scope.
-        if (
-            isinstance(persisted_envelope, dict)
-            and isinstance(persisted_state, dict)
-            and isinstance(persisted_envelope.get("raw_request"), str)
-            and isinstance(persisted_state.get("request"), str)
-            and persisted_envelope["raw_request"].strip() == request.strip()
-            and persisted_state["request"].strip() == request.strip()
-            and str(persisted_state.get("run_id") or "").strip()
-            and (
-                merchant_scope is not None
-                or persisted_state.get("merchant_scope") is not None
-            )
-        ):
-            persisted_scope = persisted_state.get("merchant_scope")
-            envelope_scope = persisted_envelope.get("merchant_scope")
-
-            if (
-                confirmed is not True
-                or persisted_state.get("confirmed") is not True
-                or not isinstance(merchant_scope, dict)
-                or not isinstance(persisted_scope, dict)
-                or not isinstance(envelope_scope, dict)
-            ):
-                return block(
-                    "Direct Merchant authorization differs between "
-                    "Expansion and Submit. Nothing was dispatched."
-                )
-
-            scope_fields = (
-                "argv",
-                "command",
-                "database_target",
-                "scope_hash",
-            )
-
-            if (
-                any(
-                    merchant_scope.get(field) != persisted_scope.get(field)
-                    or merchant_scope.get(field) != envelope_scope.get(field)
-                    for field in scope_fields
-                )
-                or persisted_scope.get("run_id")
-                != persisted_state.get("run_id")
-                or envelope_scope.get("run_id")
-                != persisted_state.get("run_id")
-            ):
-                return block(
-                    "Direct Merchant scope changed between Expansion "
-                    "and Submit. Nothing was dispatched."
-                )
-
-        if (
-            isinstance(
-                persisted_envelope,
-                dict,
-            )
-            and isinstance(
-                persisted_state,
-                dict,
-            )
-            and isinstance(
-                persisted_envelope.get("raw_request"),
-                str,
-            )
-            and isinstance(
-                persisted_state.get("request"),
-                str,
-            )
-            and persisted_envelope["raw_request"].strip()
-            == request.strip()
-            and persisted_state["request"].strip()
-            == request.strip()
-            and str(
-                persisted_state.get("run_id")
-                or ""
-            ).strip()
-            and (
-                (
-                    merchant_scope is None
-                    and persisted_state.get("merchant_scope") is None
-                    and persisted_envelope.get("merchant_scope") is None
-                )
-                or (
-                    confirmed is True
-                    and persisted_state.get("confirmed") is True
-                    and isinstance(merchant_scope, dict)
-                    and isinstance(persisted_state.get("merchant_scope"), dict)
-                    and isinstance(persisted_envelope.get("merchant_scope"), dict)
-                    and all(
-                        merchant_scope.get(field)
-                        == persisted_state["merchant_scope"].get(field)
-                        == persisted_envelope["merchant_scope"].get(field)
-                        for field in (
-                            "argv", "command", "database_target", "scope_hash"
-                        )
-                    )
-                    and persisted_state["merchant_scope"].get("run_id")
-                    == persisted_state.get("run_id")
-                    and persisted_envelope["merchant_scope"].get("run_id")
-                    == persisted_state.get("run_id")
-                )
-            )
-        ):
-            # UserPromptExpansion already classified this exact
-            # controlled request and the /solve bridge renders
-            # that persisted envelope into the command body.
-            #
-            # Stay silent here: re-classifying would create a
-            # second request_id and therefore two competing
-            # authority envelopes for one logical run.
+    # One owner per prompt. Claude Code fires UserPromptSubmit before the
+    # /solve expansion (a blocked Submit stops the command and its dynamic
+    # context), so Submit is the only event that classifies and creates the
+    # run. Expansion never classifies: it consumes the exact single-use claim
+    # Submit issued for this prompt, or blocks.
+    if hook_event_name == "UserPromptExpansion":
+        if consume_intent_claim(session_id, digest):
             return {}
+
+        return block(
+            f"/{command} has no matching UserPromptSubmit classification for "
+            "this exact prompt (missing, stale, consumed or inconsistent run "
+            "state). Nothing was dispatched. Resubmit the request."
+        )
+
+    # A new submission never reuses an earlier run: revoke its claim before
+    # classifying, so a failed Submit cannot leave a consumable claim behind.
+    revoke_intent_claim(session_id)
 
     try:
         preparsed = load_preparsed_envelope(request, dict(environment))
@@ -629,6 +598,11 @@ def run(
         else:
             factory = parser_factory or build_parser
             envelope_payload = envelope_to_payload(factory().parse(request))
+
+        # Run identity, scope, target and confirmation are set only below,
+        # by this hook; a parsed or pre-parsed envelope cannot supply them.
+        for trusted_field in TRUSTED_ENVELOPE_FIELDS:
+            envelope_payload.pop(trusted_field, None)
     except Exception as error:  # noqa: BLE001 - fail closed on anything
         return block(
             f"Intent classification failed, so /{command} did not run: {error} "
@@ -706,32 +680,60 @@ def run(
         merchant_scope["run_id"] = run_id
         envelope_payload["merchant_scope"] = dict(merchant_scope)
 
-    save_state(
-        payload.get("session_id"),
-        new_state(
-            request=request,
-            task_class=str(envelope_payload.get("task_class", "")),
-            risk_level=str(envelope_payload.get("risk_level", "")),
-            selected_agents=selected_agents,
-            limits=limits,
-            confirmed=confirmed,
-            operations=[
-                str(operation)
-                for operation in envelope_payload.get(
-                    "operations"
-                ) or []
-            ],
-            run_id=run_id,
-            merchant_scope=merchant_scope,
-        ),
-    )
+    # Trusted database target of an unscoped Merchant run: from the user's
+    # own words only (P1). A scope carries its own user-typed target.
+    merchant_read_target = None
 
-    save_intent_envelope(
-        payload.get(
-            "session_id"
-        ),
-        envelope_payload,
+    if merchant_scope is None and operations & {
+        MERCHANT_READ_OPERATION,
+        MERCHANT_EXECUTE_OPERATION,
+    }:
+        from claude.agents.tools.merchant.project_nl import (
+            requests_test_database,
+        )
+
+        merchant_read_target = (
+            "test" if requests_test_database(request) else "runtime"
+        )
+
+    if merchant_scope is not None or merchant_read_target is not None:
+        envelope_payload["merchant_database_target"] = (
+            merchant_scope["database_target"]
+            if merchant_scope is not None
+            else merchant_read_target
+        )
+
+    envelope_payload["run_id"] = run_id
+
+    state = new_state(
+        request=request,
+        task_class=str(envelope_payload.get("task_class", "")),
+        risk_level=str(envelope_payload.get("risk_level", "")),
+        selected_agents=selected_agents,
+        limits=limits,
+        confirmed=confirmed,
+        operations=[
+            str(operation)
+            for operation in envelope_payload.get("operations") or []
+        ],
+        run_id=run_id,
+        merchant_scope=merchant_scope,
+        merchant_read_target=merchant_read_target,
     )
+    state[INTENT_CLAIM_FIELD] = {
+        "run_id": run_id,
+        "request_id": envelope_payload.get("request_id"),
+        "prompt_sha256": digest,
+        "issued_by": "UserPromptSubmit",
+        "issued_at": time.time(),
+        "consumed_at": None,
+    }
+
+    # Envelope first, state (carrying the claim) last: the state write is the
+    # commit point, and a crash between them leaves run ids that disagree,
+    # which Expansion and the bridge refuse.
+    save_intent_envelope(session_id, envelope_payload)
+    save_state(session_id, state)
 
     envelope_json = json.dumps(envelope_payload, ensure_ascii=False, indent=2)
 
@@ -788,7 +790,15 @@ def main() -> int:
     configure_utf8_output()
 
     try:
-        payload = json.load(sys.stdin)
+        payload = read_hook_payload()
+    except UnicodeDecodeError:
+        # The prompt cannot be read exactly. Refuse it rather than classify
+        # a guessed decoding: an envelope must bind the user's exact text.
+        print(json.dumps(block(
+            "The prompt is not valid UTF-8, so it cannot be classified "
+            "exactly. Nothing was dispatched. Resubmit the request."
+        ), ensure_ascii=False))
+        return 0
     except (json.JSONDecodeError, ValueError):
         # No usable hook input: stay silent rather than block every prompt.
         return 0

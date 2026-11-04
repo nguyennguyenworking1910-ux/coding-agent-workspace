@@ -56,6 +56,7 @@ if __package__ in (None, ""):
     )
 
     from runtime_state import (
+        configure_utf8_output,
         locked_state,
     )
     from team_result_payload import (
@@ -124,6 +125,7 @@ if __package__ in (None, ""):
         load_team_state,
         mark_bound_report_received,
         mark_report_received,
+        mark_teammate_idle_reusable,
         release_reported_teammate_to_idle,
         bind_running_teammate_pane_session,
         direct_pane_identity_status,
@@ -183,6 +185,7 @@ if __package__ in (None, ""):
 
 else:
     from .runtime_state import (
+        configure_utf8_output,
         locked_state,
     )
     from .team_result_payload import (
@@ -251,6 +254,7 @@ else:
         load_team_state,
         mark_bound_report_received,
         mark_report_received,
+        mark_teammate_idle_reusable,
         release_reported_teammate_to_idle,
         bind_running_teammate_pane_session,
         direct_pane_identity_status,
@@ -923,6 +927,7 @@ def _teammate_idle_dependencies(
         release_reported_teammate_to_idle=(
             release_reported_teammate_to_idle
         ),
+        release_unbound_allocation=mark_teammate_idle_reusable,
         task_result_candidate_from_message=(
             task_result_candidate_from_message
         ),
@@ -1175,6 +1180,8 @@ def reconcile_reported_merchant_for_reuse(
 
 def main() -> None:
     """Compatibility entrypoint for extracted hook dispatcher."""
+
+    configure_utf8_output()
 
     return _dispatch_main(
         dependencies=(

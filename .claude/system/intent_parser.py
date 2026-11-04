@@ -15,6 +15,21 @@ from typing import Any, Iterable, Sequence
 
 from dotenv import load_dotenv
 from openai import OpenAI
+
+try:
+    from claude.agents.tools.merchant.project_nl import (
+        UNKNOWN as UNKNOWN_PROJECT_REQUEST,
+        interpret_project_request,
+    )
+except ModuleNotFoundError:
+    # Direct execution without the repository package on sys.path.
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parents[1] / "agents" / "tools" / "merchant")
+    )
+    from project_nl import (  # type: ignore
+        UNKNOWN as UNKNOWN_PROJECT_REQUEST,
+        interpret_project_request,
+    )
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -842,6 +857,11 @@ class IntentParser:
 
             # Vietnamese after normalize_text().
             r"\bchi de xuat\b",
+
+            # Read-only Project preview (CP12H.NL1).
+            r"\bpreview\b",
+            r"\bdry[- ]run\b",
+            r"\bxem truoc\b",
         )
 
         return any(
@@ -1156,7 +1176,12 @@ class IntentParser:
             r"\bordergroupid\b",
         )
 
-        if not any(
+        # A Merchant Project request names a Project type ("mở rạp",
+        # "cinema opening", "media top-up") even without the word Merchant.
+        project_request = interpret_project_request(text)
+        merchant_project = project_request.project_type is not None
+
+        if not merchant_project and not any(
             re.search(pattern, text)
             for pattern in merchant_context_patterns
         ):
@@ -1193,6 +1218,15 @@ class IntentParser:
             )
         ):
             return None
+
+        # Only an affirmative Project creation or update requests a write;
+        # negated, exploratory, preview and lookup wording stays a read.
+        if merchant_project and project_request.kind != UNKNOWN_PROJECT_REQUEST:
+            return (
+                Operation.MERCHANT_EXECUTE.value
+                if project_request.write_requested
+                else Operation.MERCHANT_READ.value
+            )
 
         operation_text = (
             IntentParser

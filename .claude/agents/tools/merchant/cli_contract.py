@@ -42,6 +42,7 @@ READ_COMMANDS = frozenset(
         "project blockers",
         "project history",
         "project list",
+        "project preview",
         "project resolve",
         "project show",
         "step resolve",

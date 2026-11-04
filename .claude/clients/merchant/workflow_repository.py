@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 from psycopg import errors
 from psycopg.rows import dict_row
@@ -86,8 +86,14 @@ class MerchantWorkflowRepository:
         title: str | None = None,
         created_by: str | None = None,
         project_id: str | None = None,
+        precondition: Callable[[Any], None] | None = None,
     ) -> ProjectCreationResult:
-        """Create one complete project instance atomically."""
+        """Create one complete project instance atomically.
+
+        ``precondition(cursor)`` runs inside the transaction after the
+        Merchant and template checks and before any insert; raising aborts
+        the creation with nothing written.
+        """
 
         normalized_merchant_id = _uuid(
             merchant_id,
@@ -111,6 +117,9 @@ class MerchantWorkflowRepository:
                             cursor,
                             template,
                         )
+
+                        if precondition is not None:
+                            precondition(cursor)
 
                         plan = (
                             build_project_instantiation_plan(
@@ -593,3 +602,65 @@ def _uuid(value: str, field_name: str) -> uuid.UUID:
         raise WorkflowPersistenceError(
             f"{field_name} must be a valid UUID"
         ) from error
+
+class TransactionPreviewReader:
+    """The preview reads, served by an open write-transaction cursor.
+
+    Lets the confirmed Project preview be re-checked inside the same
+    transaction that creates the Project.
+    """
+
+    def __init__(self, cursor: Any) -> None:
+        self.cursor = cursor
+
+    def lock_merchant(self, merchant_id: str) -> None:
+        """Serialize Project creation for one Merchant until commit."""
+
+        self.cursor.execute(
+            "SELECT id FROM merchant_ops.merchants WHERE id = %s FOR UPDATE",
+            (_uuid(merchant_id, "merchant_id"),),
+        )
+
+    def list_merchants(self) -> list[dict[str, Any]]:
+        self.cursor.execute(
+            """
+            SELECT id, code, name, account_status, version
+            FROM merchant_ops.merchants
+            ORDER BY code, id
+            """
+        )
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def list_projects(
+        self,
+        *,
+        merchant_id: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.cursor.execute(
+            """
+            SELECT id, merchant_id, project_type, workflow_variant,
+                   title, status, version
+            FROM merchant_ops.projects
+            WHERE merchant_id = %s
+              AND (%s::text IS NULL OR status = %s)
+            ORDER BY created_at, id
+            """,
+            (_uuid(merchant_id, "merchant_id"), status, status),
+        )
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def get_workflow_template(
+        self,
+        template_id: str,
+    ) -> dict[str, Any] | None:
+        self.cursor.execute(
+            """
+            SELECT id, name, version, variant, is_active
+            FROM merchant_ops.workflow_templates
+            WHERE id = %s
+            """,
+            (_uuid(template_id, "template_id"),),
+        )
+        row = self.cursor.fetchone()
+        return dict(row) if row is not None else None

@@ -26,9 +26,9 @@ DEPENDENCY_MODULES = (
 # CP12H.2C.7 removed 12 precise legacy proposal/apply TeammateIdle fields
 # and added 2 precise Direct EXECUTE no-write fields. CP12H.3 removed 9 more
 # precise proposal/apply fields and added 2 precise legacy-termination
-# fields. CP12H.4C added 1 precise pane-identity field. No field was
-# loosened.
-EXPECTED_TOTAL_FIELDS = 91
+# fields. CP12H.4C added 1 precise pane-identity field. CP12H.NL2B added 1
+# precise unbound-allocation release field. No field was loosened.
+EXPECTED_TOTAL_FIELDS = 92
 
 MINIMUM_PRECISE_FIELDS = 73
 

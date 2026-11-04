@@ -15,6 +15,7 @@ from .merchant_engine import (
     propose_merchant_activation,
     propose_merchant_batch_activation,
 )
+from .project_preview import verify_project_create
 from .workflow_templates import STANDARD_WORKFLOW_TEMPLATES
 from .write_commands import MerchantWriteCommands
 
@@ -43,6 +44,7 @@ try:
     )
     from claude.clients.merchant.workflow_repository import (
         MerchantWorkflowRepository,
+        TransactionPreviewReader,
     )
 except ModuleNotFoundError:
     from clients.merchant.approval_repository import (  # type: ignore
@@ -69,6 +71,7 @@ except ModuleNotFoundError:
     )
     from clients.merchant.workflow_repository import (  # type: ignore
         MerchantWorkflowRepository,
+        TransactionPreviewReader,
     )
 
 
@@ -187,6 +190,7 @@ class MerchantRepositoryWriteAdapters:
             title=payload.get("title"),
             created_by=payload.get("created_by"),
             project_id=payload.get("project_id"),
+            precondition=_confirmed_preview_precondition(payload),
         )
 
     def update_project(self, payload: dict[str, Any]) -> Any:
@@ -512,3 +516,17 @@ def execute_protected_merchant_create(
         "result": result,
         "replayed": replayed,
     }
+
+
+def _confirmed_preview_precondition(payload: dict[str, Any]) -> Any:
+    """Re-check a confirmed preview inside the creating transaction."""
+
+    if payload.get("expected_basis_hash") is None:
+        return None
+
+    def precondition(cursor: Any) -> None:
+        reader = TransactionPreviewReader(cursor)
+        reader.lock_merchant(payload["merchant_id"])
+        verify_project_create(reader, payload)
+
+    return precondition

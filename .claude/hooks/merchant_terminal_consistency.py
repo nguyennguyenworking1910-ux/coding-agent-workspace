@@ -145,7 +145,10 @@ def trusted_scope_binding(
         scope = run_state.get("merchant_scope")
 
         if scope is None:
-            return "runtime", None
+            from claude.hooks.runtime_state import merchant_database_target
+
+            target = merchant_database_target(run_state)
+            return (target, None) if target is not None else None
 
         if not isinstance(scope, dict) or scope.get("run_id") != run_id:
             return None

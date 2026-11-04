@@ -316,9 +316,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=tuple(sorted(WORKFLOW_VARIANTS)),
         required=True,
     )
+    # Explicit both ways (--no-requires-procurement) so a confirmed preview
+    # never relies on an absent flag; absent still means False.
     project_create.add_argument(
         "--requires-procurement",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
     project_create.add_argument(
         "--payment-period-number",
@@ -330,6 +333,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     project_create.add_argument("--title")
     project_create.add_argument("--created-by")
     project_create.add_argument("--project-id")
+    # The previewed Merchant code the user confirms with the operation.
+    project_create.add_argument("--merchant-code")
+    # basis_hash of the confirmed preview; re-checked in the write
+    # transaction, which refuses when the previewed state changed.
+    project_create.add_argument(
+        "--expected-basis",
+        dest="expected_basis_hash",
+    )
 
     project_update = project_actions.add_parser("update")
     _add_write_mode(project_update)
@@ -351,6 +362,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--allow-reopen",
         action="store_true",
     )
+    # Read-only natural-language Project creation preview. Hints are
+    # untrusted candidates; only repository resolution binds identities.
+    project_preview = project_actions.add_parser("preview")
+    project_preview.add_argument("--request", required=True)
+    project_preview.add_argument("--merchant-hint")
+    project_preview.add_argument("--type-hint")
+    project_preview.add_argument("--title-hint")
+
     project_resolve = project_actions.add_parser("resolve")
     project_resolve.add_argument(
         "--merchant-id",
@@ -562,10 +581,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    completeness_check.add_argument(
+    # Either a candidate payload, or the exact scope argv, translated to the
+    # payload by the same parser the trusted handoff uses (no hand-built keys).
+    completeness_source = completeness_check.add_mutually_exclusive_group(
+        required=True,
+    )
+    completeness_source.add_argument(
         "--payload-json",
         type=_json_object,
-        required=True,
+    )
+    completeness_source.add_argument(
+        "--argv-json",
+        type=_json_string_list,
     )
 
     completeness_check.add_argument(
@@ -592,6 +619,14 @@ def dispatch_read_command(
         return commands.project_resolve(
             merchant_id=args.merchant_id,
             query=args.query,
+        )
+    if command == "project preview":
+        return commands.project_preview(
+            request=args.request,
+            merchant_hint=args.merchant_hint,
+            project_type_hint=args.type_hint,
+            title_hint=args.title_hint,
+            database_target=args.database,
         )
     if command == "step resolve":
         return commands.step_resolve(
@@ -701,7 +736,11 @@ def dispatch_write_command(
 def dispatch_completeness_command(
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    values = args.payload_json
+    values = (
+        args.payload_json
+        if args.argv_json is None
+        else scope_argv_payload(args.argv_json, args.write_command)
+    )
 
     if args.context_json is None:
         result = (
@@ -801,7 +840,7 @@ def build_write_payload(
         }
 
     if command == "project create":
-        return _selected_fields(
+        payload = _selected_fields(
             args,
             (
                 "project_id",
@@ -815,6 +854,12 @@ def build_write_payload(
                 "created_by",
             ),
         )
+        # Present only when confirming a preview.
+        if args.expected_basis_hash is not None:
+            payload["expected_basis_hash"] = args.expected_basis_hash
+        if args.merchant_code is not None:
+            payload["merchant_code"] = args.merchant_code
+        return payload
 
     if command == "project update":
         return _selected_fields(
@@ -959,6 +1004,53 @@ def _json_object(
         )
 
     return parsed
+
+
+def _json_string_list(
+    value: str,
+) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise argparse.ArgumentTypeError(
+            "value must be a JSON array of strings"
+        ) from error
+
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
+        raise argparse.ArgumentTypeError(
+            "value must be a JSON array of strings"
+        )
+
+    return parsed
+
+
+def scope_argv_payload(
+    argv: list[str],
+    write_command: str,
+) -> dict[str, Any]:
+    """The write payload of an exact scope argv for ``write_command``.
+
+    Reuses the CLI parser and build_write_payload, the same translation the
+    trusted handoff applies to the persisted scope.
+    """
+
+    if normalize_command(" ".join(argv[:2])) != write_command:
+        raise ValueError(
+            "--argv-json does not name the --command write"
+        )
+
+    try:
+        args = build_argument_parser().parse_args(
+            ["--database", "runtime", *argv]
+        )
+    except SystemExit as error:
+        raise ValueError(
+            "--argv-json does not match the Merchant CLI contract"
+        ) from error
+
+    return build_write_payload(args, write_command)
 
 
 def _completeness_context(

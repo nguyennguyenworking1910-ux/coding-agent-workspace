@@ -69,6 +69,7 @@ PANE_TMUX = "%7"
 # _os_pane_server); the harness record and TMUX_PANE checks stay real.
 LEAD_PID = 4242
 PANE_SERVER = 7000
+PANE_PID_BASE = 7100
 TMUX_BY_PANE = {PANE: PANE_TMUX}
 TEAMMATE = "merchant-manager"
 PROJECT_ID = "00000000-0000-0000-0000-000000000001"
@@ -151,10 +152,20 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(
         harness_team_identity,
         "_os_pane_server",
-        lambda tmux_pane, lead_pid: (
+        lambda tmux_pane, lead_pid, *_: (
             PANE_SERVER if lead_pid == LEAD_PID else None
         ),
         raising=False,
+    )
+    # A spawned teammate's own pane, seen from the lead (CP12H.NL2C).
+    monkeypatch.setattr(
+        harness_team_identity,
+        "_os_teammate_pane",
+        lambda tmux_pane, lead_pid, *_: (
+            (PANE_SERVER, PANE_PID_BASE + int(tmux_pane[1:]))
+            if lead_pid == LEAD_PID
+            else None
+        ),
     )
 
     # Item 10: no test may even construct a non-test repository.
@@ -259,7 +270,7 @@ def submit(request, *, argv=None, confirmed=True, operations=(), target=None):
 
     return intent_gate.run(
         {
-            "hook_event_name": "UserPromptExpansion",
+            "hook_event_name": "UserPromptSubmit",
             "session_id": LEAD,
             "prompt": f"{prefix}{scope} {request}",
         },
@@ -271,7 +282,7 @@ def submit(request, *, argv=None, confirmed=True, operations=(), target=None):
 def dispatch(prompt="Perform the user's Merchant request."):
     with runtime_state.locked_state(LEAD) as state:
         assert state is not None
-        return policy_gate.apply_call(
+        decision = policy_gate.apply_call(
             state,
             "Agent",
             {
@@ -281,6 +292,14 @@ def dispatch(prompt="Perform the user's Merchant request."):
             },
             session_id=LEAD,
         )
+        run_id = state.get("run_id")
+
+    if decision is None:
+        # The harness spawned the teammate: the PostToolUse(Agent) backend
+        # hook verifies and records its own psmux pane.
+        team_lifecycle.verify_spawned_teammate_backend(LEAD, TEAMMATE, run_id)
+
+    return decision
 
 
 def write_harness_team(teams_dir, tmux_pane):
@@ -784,7 +803,7 @@ def test_unscoped_assignment_cannot_carry_cli_syntax():
 def test_legacy_confirmation_flag_is_rejected():
     result = intent_gate.run(
         {
-            "hook_event_name": "UserPromptExpansion",
+            "hook_event_name": "UserPromptSubmit",
             "session_id": LEAD,
             "prompt": "/solve --merchant-confirmation legacy-token apply it",
         },

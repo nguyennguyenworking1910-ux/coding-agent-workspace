@@ -62,8 +62,11 @@ IS_WINDOWS = os.name == "nt"
 # milliseconds, so a short bounded retry converts a spurious failure into a
 # successful atomic replacement. Other platforms never see this and must fail
 # immediately.
-REPLACE_RETRY_ATTEMPTS = 5
-REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08)
+# Windows denies os.replace while another process (an indexer, antivirus or
+# a concurrent hook reader) holds the destination open. A live denial
+# outlasted ~150 ms, so retry for about 1.3 s before failing.
+REPLACE_RETRY_ATTEMPTS = 10
+REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25, 0.25)
 
 
 class TeammateLifecycleStatus(str, Enum):
@@ -1772,6 +1775,132 @@ def mark_teammate_acknowledged(
 
         record["status"] = TeammateLifecycleStatus.ACKNOWLEDGED.value
         return True
+
+
+def discard_unbound_teammate(
+    session_id: Any,
+    teammate_name: str,
+) -> bool:
+    """Remove an allocation whose dispatch was refused before binding.
+
+    Only a CREATED record that never bound a run, task, authority, pane,
+    report or write is removed, so the role can be dispatched again. Any
+    other record is kept. Returns False when nothing was removed.
+    """
+
+    try:
+        with locked_team_state(session_id) as state:
+            if state is None:
+                return False
+
+            teammates = state.get("teammates", {})
+            record = teammates.get(teammate_name)
+
+            if not (
+                isinstance(record, dict)
+                and record.get("status") == TeammateLifecycleStatus.CREATED.value
+                and record.get("canonical_name") == teammate_name
+                and record.get("current_run_id") is None
+                and record.get("current_task_id") is None
+                and not record.get("authorized_operations")
+                and not record.get("authorized_selected_agents")
+                and not record.get("result_received")
+                and not record.get("report_source")
+                and not record.get("trusted_pane_session_id")
+                and not has_unresolved_direct_writes(record)
+            ):
+                return False
+
+            del teammates[teammate_name]
+            return True
+    except (OSError, Timeout):
+        return False
+
+
+_PANE_IDENTITY_KEYS = ("server", "pane", "pane_pid")
+
+
+def verify_spawned_teammate_backend(
+    session_id: Any,
+    teammate_name: str,
+    run_id: str,
+    *,
+    reported_pane: Any = None,
+    reported_splitpane: Any = None,
+) -> tuple[bool, str]:
+    """Accept a just-spawned teammate only in its own verified psmux pane.
+
+    The dispatch must already be bound to this run (RUNNING with a task), and
+    the harness must have spawned a tmux-backend split pane that the operating
+    system shows under the lead's psmux server. On success the server-
+    qualified pane identity is recorded for later reuse checks. Any other
+    outcome ends the task FAILED so it can neither deliver nor be reused; an
+    unbound allocation is ended the same way. Identity grants no authority.
+    """
+
+    from claude.hooks.harness_team_identity import teammate_pane_identity
+
+    identity = teammate_pane_identity(session_id, teammate_name)
+
+    with locked_team_state(session_id) as state:
+        if state is None:
+            return False, "STATE_UNAVAILABLE"
+
+        record = state.get("teammates", {}).get(teammate_name)
+
+        if not isinstance(record, dict):
+            return False, "UNTRACKED_TEAMMATE"
+
+        if not (
+            record.get("canonical_name") == teammate_name
+            and record.get("status") == TeammateLifecycleStatus.RUNNING.value
+            and run_id
+            and record.get("current_run_id") == run_id
+            and record.get("current_task_id")
+        ):
+            reason = "UNBOUND_DISPATCH"
+        elif reported_splitpane is False:
+            reason = "NOT_A_SPLIT_PANE"
+        elif identity is None:
+            reason = "TEAMMATE_BACKEND_UNVERIFIED"
+        elif reported_pane is not None and reported_pane != identity["pane"]:
+            reason = "PANE_MISMATCH"
+        else:
+            record["harness_pane"] = identity
+            return True, "VERIFIED"
+
+        if record.get("status") not in (
+            TeammateLifecycleStatus.FAILED.value,
+            TeammateLifecycleStatus.IDLE_REUSABLE.value,
+        ):
+            _detach_failed_task(record, reason)
+
+        return False, reason
+
+
+def reused_teammate_pane_matches(
+    session_id: Any,
+    teammate_name: str,
+) -> bool:
+    """True only if the teammate's verified spawn pane is still that pane.
+
+    A closed pane, a pane id recycled by a new process, a pane in another
+    server, or a teammate never verified at spawn does not match.
+    """
+
+    from claude.hooks.harness_team_identity import teammate_pane_identity
+
+    record = ((load_team_state(session_id) or {}).get("teammates") or {}).get(
+        teammate_name
+    )
+    stored = record.get("harness_pane") if isinstance(record, dict) else None
+    identity = teammate_pane_identity(session_id, teammate_name)
+
+    return (
+        isinstance(stored, dict)
+        and identity is not None
+        and all(stored.get(key) == identity[key] for key in _PANE_IDENTITY_KEYS)
+    )
 
 
 def mark_teammate_idle_reusable(

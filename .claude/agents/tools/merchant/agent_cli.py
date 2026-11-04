@@ -51,6 +51,8 @@ except ModuleNotFoundError:
 
 
 RUNTIME_DATABASE_TARGET = "runtime"
+TEST_DATABASE_TARGET = "test"
+TEST_PREVIEW_OPTION = "--test-database"
 
 CREDENTIAL_OR_TARGET_OPTIONS = frozenset(
     {
@@ -83,12 +85,20 @@ def prepare_agent_cli_argv(
     """Validate agent arguments and prepend the fixed runtime target."""
 
     values = _normalized_arguments(arguments)
+    target = RUNTIME_DATABASE_TARGET
+
+    # The read-only Project preview may read the Merchant test database,
+    # for a user who asked about test data. It grants no write.
+    if values[:2] == ("project", "preview") and TEST_PREVIEW_OPTION in values:
+        values = tuple(value for value in values if value != TEST_PREVIEW_OPTION)
+        target = TEST_DATABASE_TARGET
+
     _reject_target_or_credentials(values)
 
     parser = build_argument_parser()
     prepared = (
         "--database",
-        RUNTIME_DATABASE_TARGET,
+        target,
         *values,
     )
     args = _parse_without_argparse_output(parser, prepared)

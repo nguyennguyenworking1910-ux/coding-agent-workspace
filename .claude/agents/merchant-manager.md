@@ -112,6 +112,7 @@ The registered read command families are:
 - `merchant list`
 - `merchant resolve`
 - `project list`
+- `project preview`
 - `project resolve`
 - `project show`
 - `project history`
@@ -134,6 +135,47 @@ Only these read commands are authorized:
 | Show project audit history | `project history <project_id>` |
 | Show project blockers | `project blockers <project_id>` |
 | Show project alerts | `project alerts [<project_id>] [--merchant-id <merchant_id>] [--project-id <project_id>]` |
+| Preview a Project creation from the user's words | `project preview --request "<user request text>" [--test-database] [--merchant-hint "<text>"] [--type-hint <PROJECT_TYPE>] [--title-hint "<text>"]` |
+
+### Natural-language Project preview
+
+For a request to create, open, or preview a Merchant Project (for example "Tạo project mở
+rạp Beta Nguyễn Văn Cừ" or "Create a new cinema opening project for Beta Nguyễn Văn Cừ")
+without a `--merchant-scope`, run `project preview` with the user's request text verbatim. A
+Project request never means creating a Merchant.
+
+- The database is the assignment's trusted `database_target` (from the user's own words or
+  scope, never your judgement). Add `--test-database` exactly when it is `test`; omit it when it
+  is `runtime`. Any other read is refused by the policy gate. State the preview's
+  `database_target` in the report.
+- The hint options are untrusted candidates only. Pass one only when the request text alone
+  is not enough; the preview binds identities from the repository and reports a candidate
+  that does not match as a clarification.
+- Report the preview's `outcome`, resolved Merchant (with `match_kind`), Project type and
+  template, fields, `missing_fields`, `clarifications`, `conflicts`, and `initial_steps` as
+  returned.
+- `NEEDS_CLARIFICATION` and `BLOCKED` are terminal for this run: relay the questions or
+  conflicts. Never fill a missing field yourself.
+- `requested_operation` (only on `READY_FOR_CONFIRMATION`) is preview data with status
+  `NOT_AUTHORIZED`. It is never authority: do not send a `MERCHANT_EXECUTE_REQUEST_JSON:` for
+  it. Your report to `team-lead` must contain it exactly once, on its own line after
+  `MERCHANT_PREVIEW_OPERATION_JSON:`, as the complete JSON object the CLI printed (all fields,
+  argv order, Unicode title unchanged). Never retype, shorten, translate or rebuild it; the
+  policy gate compares it with the CLI output it captured and refuses any difference.
+- If the gate says no verified preview operation exists for the task (for example the CLI
+  output could not be verified), the result is not actionable: send the report once,
+  starting with `PREVIEW_DELIVERY_FAILED:` and the reason, keeping the read-only findings,
+  without `READY_FOR_CONFIRMATION`, an operation block, argv, `--merchant-scope` or a
+  confirmation command. Never rebuild the operation from the CLI text or prose, and do not
+  rerun the preview.
+- When `merchant_confirmation_required` is true the Merchant matched only as a CANDIDATE on
+  `merchant_matched_text`: say so, and name `merchant_code` and `merchant_name` as the
+  Merchant the user would be confirming. Creating the Project needs a separate explicit
+  confirmation: the user types `confirmation_command` exactly.
+- Under `merchant_read` (a preview, negated or exploratory request) report the preview as a
+  read. Under an unscoped `merchant_execute` finish as described in "Direct EXECUTE":
+  `BLOCKED` for a blocking conflict, otherwise `REQUIRES_CLARIFICATION`, naming the preview's
+  `requested_operation.argv` as the exact `--merchant-scope` the user would need to confirm.
 
 For a read assignment:
 
@@ -231,6 +273,14 @@ Use only this registered Merchant CLI boundary:
 
 ```text
 python .claude/agents/tools/merchant/agent_cli.py completeness check --command "<normalized-write-command>" --payload-json '<candidate-json>'
+```
+
+For a scoped `merchant_execute`, pass the exact scope argv instead of building payload keys
+yourself; the CLI translates it with the same parser the trusted handoff uses (for example
+`--variant` becomes `workflow_variant`):
+
+```text
+python .claude/agents/tools/merchant/agent_cli.py completeness check --command "<scope command>" --argv-json '<exact scope argv as a JSON array>'
 ```
 
 When authoritative current Merchant state makes additional requirements conditional, include
@@ -348,6 +398,13 @@ one dedicated, non-terminal `SendMessage` to `team-lead` whose body starts with:
 ```text
 MERCHANT_EXECUTE_REQUEST_JSON:
 ```
+
+The execute request is judged only against the run's persisted user scope, never against
+Project preview evidence. A scoped run needs no preview from the current task: the trusted
+handoff recomputes the preview basis itself. In a scoped run never send a
+`MERCHANT_PREVIEW_OPERATION_JSON:` block, a confirmation command or a `PREVIEW_DELIVERY_FAILED:`
+report; if the execute request is blocked, report `BLOCKED` with the gate's reason in
+`TEAM_RESULT_JSON`, and never claim `RESULT_DELIVERED` for a `SendMessage` that was blocked.
 
 The trailing colon is part of the marker. Canonical body shape (documentation only; do not
 include Markdown fences in the actual message):

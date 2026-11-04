@@ -25,6 +25,7 @@ try:
         DirectExecutionEvidenceFn,
         LockedStateFn,
     )
+    from runtime_state import read_hook_payload
 except ImportError:
     from .team_result_dependency_protocols import (
         BoundedRuntimeApplyFailureFn,
@@ -38,6 +39,7 @@ except ImportError:
         DirectExecutionEvidenceFn,
         LockedStateFn,
     )
+    from .runtime_state import read_hook_payload
 
 
 
@@ -149,11 +151,15 @@ def main(
         dependencies.sys
     )
     try:
-        payload = (
-            json.load(
-                sys.stdin
-            )
+        payload = read_hook_payload(sys.stdin)
+    except UnicodeDecodeError:
+        # Never deliver, stage or settle from a guessed decoding. Exit 2
+        # keeps a TeammateIdle teammate working and changes no state.
+        print(
+            "Hook input is not valid UTF-8; nothing was recorded.",
+            file=sys.stderr,
         )
+        return 2
     except (
         json.JSONDecodeError,
         ValueError,
@@ -395,6 +401,19 @@ def main(
     # ============================================================
     # Existing result / proposal / entity-receipt lifecycle.
     # ============================================================
+
+    if hook_event == "PostToolUse":
+        # CP12H.NL2E P4: bind a verified Project preview's exact operation
+        # to the teammate's task. A failure records nothing, so the report
+        # cannot carry an operation block (fails closed).
+        try:
+            from claude.hooks.merchant_preview_delivery import (
+                record_preview_evidence,
+            )
+
+            record_preview_evidence(payload)
+        except Exception:  # noqa: BLE001 - never block the tool result
+            pass
 
     idle_feedback = ""
 

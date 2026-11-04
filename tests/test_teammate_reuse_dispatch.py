@@ -20,6 +20,7 @@ from runtime_state import (
     new_state,
     save_state,
 )
+from tests.teammate_pane import verify_spawn
 from team_lifecycle import (
     TEAM_STATE_DIR_ENV_VAR,
     TeammateLifecycleStatus,
@@ -75,6 +76,9 @@ def test_two_runs_reuse_one_reviewer_without_a_second_agent(monkeypatch):
             )
 
             assert decision is None
+            assert verify_spawn(
+                monkeypatch, session_id, "reviewer", "run-1"
+            ) == (True, "VERIFIED")
             assert get_teammate_status(session_id, "reviewer") == (
                 TeammateLifecycleStatus.RUNNING.value
             )
@@ -156,6 +160,9 @@ def test_busy_teammate_cannot_receive_a_new_assignment(monkeypatch):
             {"subagent_type": "reviewer", "name": "reviewer"},
             "busy-session",
         ) is None
+        assert verify_spawn(
+            monkeypatch, "busy-session", "reviewer", "run-1"
+        ) == (True, "VERIFIED")
 
         second_state = controlled_state("run-2")
         decision = policy_gate.apply_call(

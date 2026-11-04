@@ -17,6 +17,7 @@ sys.path.insert(0, str(HOOKS_DIR))
 import team_lifecycle
 import policy_gate
 import pytest
+from tests.teammate_pane import verify_spawn
 from runtime_state import new_state
 
 from team_lifecycle import (
@@ -561,6 +562,10 @@ def test_new_run_can_reuse_previously_completed_teammate(
             teammate,
         ],
     )
+
+    assert verify_spawn(
+        monkeypatch, lead_session, teammate, old_run
+    ) == (True, "VERIFIED")
 
     assert mark_bound_report_received(
         lead_session,

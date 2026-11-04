@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
-from typing import Any
+from typing import Any, Callable
 
 try:
     from team_result_dependency_protocols import (
@@ -179,6 +179,8 @@ class TeammateIdleDependencies:
     release_reported_teammate_to_idle: ReleaseReportedTeammateToIdleFn
     task_result_candidate_from_message: MessageCandidateFn
     validate_completeness_receipt_for_outcome: ValidateCompletenessReceiptForOutcomeFn
+    # Releases an allocation that never bound a run (CREATED, no authority).
+    release_unbound_allocation: Callable[[Any, str], bool]
 
 
 def handle_teammate_idle(
@@ -396,6 +398,17 @@ def handle_teammate_idle(
                 owner_run_id
                 and owner_task_id
             ):
+                # A dispatch that never bound (its run state was then
+                # cleared) can never be delivered: release the unused
+                # allocation once instead of asking for delivery forever.
+                if owner_record.get("status") == "CREATED" and (
+                    dependencies.release_unbound_allocation(
+                        owner_session_id,
+                        teammate_name,
+                    )
+                ):
+                    return ""
+
                 return (
                     PENDING_RESULT_FEEDBACK
                 )

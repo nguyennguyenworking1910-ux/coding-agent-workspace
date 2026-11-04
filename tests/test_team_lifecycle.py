@@ -582,8 +582,10 @@ class AtomicTeamStatePersistenceTests(unittest.TestCase):
         real_replace = os.replace
 
         def record(source, destination):
-            observed.append((Path(source), Path(destination)))
+            # Record only successful replaces: a transient Windows denial
+            # is retried by save_team_state and is not a second save.
             real_replace(source, destination)
+            observed.append((Path(source), Path(destination)))
 
         with patch("team_lifecycle.os.replace", side_effect=record):
             team_lifecycle.save_team_state(self.session_id, {"teammates": {}})

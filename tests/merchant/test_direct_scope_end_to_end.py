@@ -79,7 +79,7 @@ def submit(*, confirmed=True):
 
     result = intent_gate.run(
         {
-            "hook_event_name": "UserPromptExpansion",
+            "hook_event_name": "UserPromptSubmit",
             "session_id": SESSION_ID,
             "prompt": prompt,
         },
@@ -216,28 +216,12 @@ def test_changed_target_never_reaches_handler():
     assert calls == []
 
 
-def test_direct_scope_expansion_submit_preserves_authorization():
+def test_direct_scope_submit_expansion_preserves_authorization():
     parser = FakeParser()
     prompt = (
         "/solve --confirm --merchant-scope "
         f"{json.dumps(ARGV)} {REQUEST}"
     )
-
-    expansion = intent_gate.run(
-        {
-            "hook_event_name": "UserPromptExpansion",
-            "session_id": SESSION_ID,
-            "prompt": prompt,
-        },
-        parser_factory=lambda: parser,
-        env={},
-    )
-
-    assert "hookSpecificOutput" in expansion
-
-    first = runtime_state.load_state(SESSION_ID)
-    first_run = first["run_id"]
-    first_scope = dict(first["merchant_scope"])
 
     submit_output = intent_gate.run(
         {
@@ -249,9 +233,25 @@ def test_direct_scope_expansion_submit_preserves_authorization():
         env={},
     )
 
+    assert "hookSpecificOutput" in submit_output
+
+    first = runtime_state.load_state(SESSION_ID)
+    first_run = first["run_id"]
+    first_scope = dict(first["merchant_scope"])
+
+    expansion = intent_gate.run(
+        {
+            "hook_event_name": "UserPromptExpansion",
+            "session_id": SESSION_ID,
+            "prompt": prompt,
+        },
+        parser_factory=lambda: parser,
+        env={},
+    )
+
     second = runtime_state.load_state(SESSION_ID)
 
-    assert submit_output == {}
+    assert expansion == {}
     assert parser.requests == [REQUEST]
     assert second["run_id"] == first_run
     assert second["merchant_scope"] == first_scope
@@ -382,9 +382,11 @@ def test_direct_scope_submit_rejects_changed_authorization(change):
 
     parser = FakeParser()
 
+    # The Expansion of a different prompt cannot consume the claim the
+    # original Submit issued.
     outcome = intent_gate.run(
         {
-            "hook_event_name": "UserPromptSubmit",
+            "hook_event_name": "UserPromptExpansion",
             "session_id": SESSION_ID,
             "prompt": followup,
         },
@@ -397,11 +399,10 @@ def test_direct_scope_submit_rejects_changed_authorization(change):
     assert current is not None
     assert current["run_id"] == original_run
     assert current["merchant_scope"] == original_scope
-
-    # A changed authorization must not be silently accepted as the
-    # already-validated Expansion event.
-    assert outcome != {}, (
-        "Changed Submit authorization was silently accepted"
+    assert current["intent_claim"]["consumed_at"] is None
+    assert parser.requests == []
+    assert outcome.get("decision") == "block", (
+        "Changed authorization was silently accepted at Expansion"
     )
 
 

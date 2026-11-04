@@ -97,11 +97,25 @@ def _exact_json_object(
     if stdout is None:
         return None
 
+    # Claude Code's Bash tool merges stderr into stdout, so interpreter
+    # warnings (e.g. a FutureWarning at import) can precede the CLI's JSON.
+    # Leading non-JSON lines are ignored; the FIRST line starting with "{"
+    # must begin exactly one JSON object that runs to the end of stdout.
+    # A second object or any trailing text is still rejected.
+    start = 0 if stdout.startswith("{") else stdout.find("\n{") + 1
+
+    if start == 0 and not stdout.startswith("{"):
+        return None
+
     try:
-        candidate = json.loads(
-            stdout
+        candidate, end = json.JSONDecoder().raw_decode(
+            stdout,
+            start,
         )
     except json.JSONDecodeError:
+        return None
+
+    if stdout[end:].strip():
         return None
 
     if not isinstance(

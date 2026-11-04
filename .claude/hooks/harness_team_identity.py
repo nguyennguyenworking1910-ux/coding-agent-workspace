@@ -23,6 +23,16 @@ system process tree, not from the environment:
 
 The verified identity is the server-qualified pane ``"<server_pid>:%N"``.
 
+psmux respawned panes: Claude Code starts a teammate with ``split-window --
+cat`` and then ``respawn-pane -k -t %N -- <claude ...>``. psmux 3.3.7 then
+reports an empty ``#{pane_pid}`` for that pane for its whole life, so the pane
+id can no longer be mapped to a process. Only for a pane listed with an empty
+pid, the pane process is instead the unique direct child of the server whose
+command line (psmux wraps it as ``powershell -NoLogo -Command "<cmd>"``)
+carries the harness-recorded ``--agent-id`` and the lead's
+``--parent-session-id``. The command line is read from the OS, not from any
+hook payload; the same server, ancestry and uniqueness checks still apply.
+
 Threat model: this rejects panes in other psmux sessions or servers, panes
 that are not the teammate's, and payloads replayed from elsewhere. It is not
 cryptographic: a same-user process that runs inside the teammate's own pane
@@ -54,6 +64,9 @@ _SERVER_EXECUTABLES = frozenset({"tmux", "tmux.exe", "psmux", "psmux.exe"})
 
 _MAX_ANCESTRY = 64
 
+_AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9_.-]*")
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
 
 def harness_teams_dir() -> Path:
     override = os.environ.get(TEAMS_DIR_ENV_VAR)
@@ -69,8 +82,12 @@ def current_tmux_pane() -> str:
 def harness_member(
     owner_session_id: Any,
     teammate_name: str,
-) -> tuple[str, int] | None:
-    """Return (tmuxPaneId, lead pid) the harness recorded, if unique."""
+) -> tuple[str, int, str] | None:
+    """Return (tmuxPaneId, lead pid, agentId) the harness recorded, if unique.
+
+    ``agentId`` is ``""`` when the harness did not record a usable one; the
+    respawned-pane fallback is then unavailable.
+    """
 
     owner = str(owner_session_id or "").strip()
 
@@ -127,7 +144,12 @@ def harness_member(
     ):
         return None
 
-    return pane, lead_pid
+    agent_id = member.get("agentId")
+
+    if not isinstance(agent_id, str) or _AGENT_ID.fullmatch(agent_id) is None:
+        agent_id = ""
+
+    return pane, lead_pid, agent_id
 
 
 def _process_table() -> dict[int, tuple[int, str]]:
@@ -189,6 +211,92 @@ def _process_table() -> dict[int, tuple[int, str]]:
     return table
 
 
+def _command_line(pid: int) -> str | None:
+    """The OS command line of ``pid``; None if unreadable."""
+
+    if sys.platform != "win32":
+        try:
+            raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return None
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32")
+    ntdll = ctypes.WinDLL("ntdll")
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    query = ntdll.NtQueryInformationProcess
+    query.restype = ctypes.c_long
+    query.argtypes = (
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
+        ctypes.POINTER(wintypes.ULONG),
+    )
+    # PROCESS_QUERY_LIMITED_INFORMATION; ProcessCommandLineInformation (60)
+    # returns a UNICODE_STRING followed by its buffer.
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+
+    if not handle:
+        return None
+
+    try:
+        size = wintypes.ULONG(0)
+        query(handle, 60, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if query(handle, 60, buffer, size, ctypes.byref(size)) != 0:
+            return None
+        length = ctypes.c_ushort.from_buffer(buffer).value
+        address = ctypes.c_void_p.from_buffer(
+            buffer, ctypes.sizeof(ctypes.c_void_p)
+        ).value
+        return ctypes.wstring_at(address, length // 2) if address else ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _flag_value(flag: str, value: str) -> "re.Pattern[str]":
+    quote = "['\"]?"
+    return re.compile(
+        rf"(?:^|\s){re.escape(flag)}[ =]{quote}{re.escape(value)}{quote}(?=[\s'\"]|$)"
+    )
+
+
+def _respawned_pane_roots(
+    server: int,
+    table: dict[int, tuple[int, str]],
+    agent_id: str,
+    owner_session_id: str,
+) -> list[int]:
+    """Direct children of ``server`` launched for this teammate of this lead.
+
+    Fallback for a psmux pane whose ``pane_pid`` is no longer reported
+    (see the module docstring). Callers require exactly one result.
+    """
+
+    if (
+        _AGENT_ID.fullmatch(agent_id or "") is None
+        or _SESSION_ID.fullmatch(owner_session_id or "") is None
+    ):
+        return []
+
+    agent = _flag_value("--agent-id", agent_id)
+    owner = _flag_value("--parent-session-id", owner_session_id)
+    roots = []
+
+    for pid, (parent, _) in table.items():
+        if parent != server:
+            continue
+        command = _command_line(pid) or ""
+        if agent.search(command) and owner.search(command):
+            roots.append(pid)
+
+    return roots
+
+
 def process_ancestors(pid: int, table: dict[int, tuple[int, str]]) -> list[int]:
     """``pid`` and its ancestors, nearest first."""
 
@@ -232,8 +340,32 @@ def _pane_pids(tmux_pane: str) -> list[int]:
     return pids
 
 
+def _pane_pid_unreported(tmux_pane: str) -> bool:
+    """True if the server lists ``tmux_pane`` only with an empty pane_pid."""
+
+    try:
+        done = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    if done.returncode != 0:
+        return False
+
+    rows = [line.strip().partition("\t") for line in done.stdout.splitlines()]
+    listed = [pid for pane, _, pid in rows if pane == tmux_pane]
+
+    return bool(listed) and not any(listed)
+
+
 def own_pane_server(
     tmux_pane: str,
+    agent_id: str = "",
+    owner_session_id: str = "",
 ) -> tuple[int, dict[int, tuple[int, str]]] | None:
     """(server pid, process table) for this process's own pane.
 
@@ -245,7 +377,25 @@ def own_pane_server(
 
     table = _process_table()
     ancestors = process_ancestors(os.getpid(), table)
-    matches = [pid for pid in _pane_pids(tmux_pane) if pid in ancestors]
+    listed = _pane_pids(tmux_pane)
+    matches = [pid for pid in listed if pid in ancestors]
+
+    if not listed and agent_id and _pane_pid_unreported(tmux_pane):
+        # psmux respawned pane: this process's pane root is its nearest
+        # ancestor whose parent is a server; it must be that server's only
+        # child launched for this teammate of this lead.
+        root = next(
+            (
+                pid
+                for pid in ancestors[1:]
+                if table.get(table[pid][0], (0, ""))[1] in _SERVER_EXECUTABLES
+            ),
+            None,
+        )
+        if root is not None and _respawned_pane_roots(
+            table[root][0], table, agent_id, owner_session_id
+        ) == [root]:
+            matches = [root]
 
     if len(matches) != 1:
         return None
@@ -276,34 +426,108 @@ def verified_teammate_pane(
     if recorded is None or actual != recorded[0]:
         return None
 
-    server = _os_pane_server(actual, recorded[1])
+    server = _os_pane_server(
+        actual, recorded[1], recorded[2], str(owner_session_id or "").strip()
+    )
 
     return None if server is None else f"{server}:{actual}"
 
 
-def _os_pane_server(tmux_pane: str, lead_pid: int) -> int | None:
+def _os_pane_server(
+    tmux_pane: str,
+    lead_pid: int,
+    agent_id: str = "",
+    owner_session_id: str = "",
+) -> int | None:
     """Server pid owning this process's pane, if it also hosts the lead.
 
     The only operating-system evidence; unit tests replace this seam.
     """
 
-    located = own_pane_server(tmux_pane)
+    located = own_pane_server(tmux_pane, agent_id, owner_session_id)
 
     if located is None:
         return None
 
     server, table = located
 
+    return server if server == _nearest_server(lead_pid, table) else None
+
+
+def _nearest_server(pid: int, table: dict[int, tuple[int, str]]) -> int | None:
     # psmux spawns new servers from existing ones, so servers nest in the
-    # process tree. The lead's server is its NEAREST server ancestor; any
+    # process tree. A process's server is its NEAREST server ancestor; any
     # outer server is a different psmux session.
-    lead_server = next(
+    return next(
         (
-            pid
-            for pid in process_ancestors(lead_pid, table)[1:]
-            if table[pid][1] in _SERVER_EXECUTABLES
+            ancestor
+            for ancestor in process_ancestors(pid, table)[1:]
+            if table[ancestor][1] in _SERVER_EXECUTABLES
         ),
         None,
     )
 
-    return server if server == lead_server else None
+
+def teammate_pane_identity(
+    owner_session_id: Any,
+    teammate_name: str,
+) -> dict[str, Any] | None:
+    """The spawned teammate's own pane, verified from the lead's side.
+
+    Used at dispatch and reuse time, where the checking process is the lead's
+    hook, not the teammate. Returns ``{"server", "pane", "pane_pid"}`` only if
+    the harness recorded a tmux backend and pane for this teammate, and the
+    operating system shows exactly one pane with that id whose process is a
+    child of the lead's nearest psmux server and is not the lead's own pane.
+    An in-process teammate (``backendType: in-process``) never verifies.
+    """
+
+    recorded = harness_member(owner_session_id, teammate_name)
+
+    if recorded is None:
+        return None
+
+    located = _os_teammate_pane(
+        recorded[0], recorded[1], recorded[2], str(owner_session_id or "").strip()
+    )
+
+    if located is None:
+        return None
+
+    server, pane_pid = located
+
+    return {"server": server, "pane": recorded[0], "pane_pid": pane_pid}
+
+
+def _os_teammate_pane(
+    tmux_pane: str,
+    lead_pid: int,
+    agent_id: str = "",
+    owner_session_id: str = "",
+) -> tuple[int, int] | None:
+    """(server pid, pane pid) of a teammate pane in the lead's server.
+
+    The operating-system seam for teammate_pane_identity; tests replace it.
+    """
+
+    table = _process_table()
+    lead_server = _nearest_server(lead_pid, table)
+
+    if lead_server is None:
+        return None
+
+    lead_chain = process_ancestors(lead_pid, table)
+    candidates = _pane_pids(tmux_pane)
+
+    if not candidates and agent_id and _pane_pid_unreported(tmux_pane):
+        candidates = _respawned_pane_roots(
+            lead_server, table, agent_id, owner_session_id
+        )
+
+    matches = [
+        pid
+        for pid in candidates
+        if table.get(pid, (0, ""))[0] == lead_server and pid not in lead_chain
+    ]
+
+    return (lead_server, matches[0]) if len(matches) == 1 else None

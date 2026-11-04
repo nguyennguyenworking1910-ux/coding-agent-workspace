@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -40,8 +41,11 @@ STATE_DIR_ENV_VAR = "CLAUDE_RUNTIME_STATE_DIR"
 LOCK_TIMEOUT_SECONDS = 10.0
 
 IS_WINDOWS = os.name == "nt"
-REPLACE_RETRY_ATTEMPTS = 5
-REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08)
+# Windows denies os.replace while another process (an indexer, antivirus or
+# a concurrent hook reader) holds the destination open. A live denial
+# outlasted ~150 ms, so retry for about 1.3 s before failing.
+REPLACE_RETRY_ATTEMPTS = 10
+REPLACE_RETRY_BACKOFF_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25, 0.25)
 
 # A session id reaches us from the harness and is used to build a file name, so
 # everything outside this set is replaced rather than trusted.
@@ -50,6 +54,35 @@ _UNSAFE_CHARACTERS = re.compile(r"[^A-Za-z0-9_-]")
 _MAX_SESSION_ID_LENGTH = 64
 
 _SECRET_PLACEHOLDER = "[redacted]"
+
+
+def read_hook_payload(stream: Any = None) -> Any:
+    """Parse one hook's JSON input, decoded as strict UTF-8.
+
+    Claude Code writes UTF-8 bytes to the hook's stdin, but on Windows a
+    piped ``sys.stdin`` decodes with the ANSI code page (cp1252), which turns
+    Vietnamese text into mojibake without any error. Decode the raw bytes
+    instead. Invalid UTF-8 raises ``UnicodeDecodeError``: every caller must
+    fail closed on it, never fall back to another encoding. A stream without
+    a byte buffer (an in-process test's StringIO) is already text.
+    """
+
+    stream = sys.stdin if stream is None else stream
+    buffer = getattr(stream, "buffer", None)
+    text = (
+        buffer.read().decode("utf-8", errors="strict")
+        if buffer is not None
+        else stream.read()
+    )
+    return json.loads(text)
+
+
+def configure_utf8_output() -> None:
+    """Write hook stdout/stderr as UTF-8, which Claude Code reads."""
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="strict")
 
 # How the run obtained its Merchant confirmation. MANUAL is the default for
 # every session and means the user pasted the exact `--merchant-confirmation`
@@ -143,6 +176,7 @@ def new_state(
     merchant_confirmation_mode: str = MERCHANT_CONFIRMATION_MODE_MANUAL,
     run_id: str = "",
     merchant_scope: dict[str, Any] | None = None,
+    merchant_read_target: str | None = None,
 ) -> dict[str, Any]:
     """Build the state document for a freshly classified run.
 
@@ -180,6 +214,13 @@ def new_state(
         # Trusted user-authorized scope; written only by the intent gate.
         state["merchant_scope"] = dict(merchant_scope)
 
+    if merchant_read_target is not None:
+        # Trusted target of an unscoped Merchant run, derived by the intent
+        # gate from the user's own request text; written only there.
+        if merchant_read_target not in MERCHANT_DATABASE_TARGETS:
+            raise ValueError("unknown Merchant database target")
+        state["merchant_read_target"] = merchant_read_target
+
     if merchant_confirmation is not None:
         allowed_fields = (
             "contract_version",
@@ -209,6 +250,30 @@ def new_state(
         )
 
     return state
+
+
+MERCHANT_DATABASE_TARGETS = frozenset({"runtime", "test"})
+
+
+def merchant_database_target(state: Any) -> str | None:
+    """The trusted Merchant database target of a run; None if unverifiable.
+
+    A user-typed scope is authoritative; otherwise the intent gate's read
+    target, defaulting to runtime. Never derived from teammate or lead text.
+    """
+
+    if not isinstance(state, dict):
+        return None
+
+    scope = state.get("merchant_scope")
+
+    if scope is not None:
+        target = scope.get("database_target") if isinstance(scope, dict) else None
+        return target if target in MERCHANT_DATABASE_TARGETS else None
+
+    target = state.get("merchant_read_target", "runtime")
+
+    return target if target in MERCHANT_DATABASE_TARGETS else None
 
 
 def load_state(session_id: Any) -> dict[str, Any] | None:

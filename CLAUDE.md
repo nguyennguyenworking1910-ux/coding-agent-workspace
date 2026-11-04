@@ -101,6 +101,15 @@ path:
 If the tmux teammate backend is unavailable or pane creation fails, `/solve` stops without
 dispatching invisible replacement agents.
 
+This is enforced after every spawn. The `PostToolUse(Agent)` hook (`teammate_backend_gate.py`)
+accepts a teammate only if the harness team config records `backendType: tmux` and a
+`tmuxPaneId` for it, and the process table shows that pane as the teammate's own pane under the
+lead's nearest psmux server, for a dispatch already bound to the current run. Otherwise the
+task ends FAILED, so the teammate cannot deliver a result or be reused, and the lead must stop
+it and report. Reuse through `SendMessage` re-checks that the same pane process still holds that
+pane id. A `TaskStop` result labelled `in_process_teammate` is the harness task-registry type of
+every teammate, pane-backed ones included; it is not the backend.
+
 Claude Code owns the team state, task list, mailbox, and pane lifecycle. Do not manually
 pre-author team configuration, edit mailbox files, create panes, or kill teammate panes.
 
@@ -296,7 +305,8 @@ python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments
 ```
 
 The adapter fixes the database target to `runtime`. It exposes no database-selection,
-connection, or credential arguments. For runtime it is read-only: it accepts the allowlisted
+connection, or credential arguments; the one exception is `project preview --test-database`, a
+read of the Merchant test database. For runtime it is read-only: it accepts the allowlisted
 reads and `completeness check`, and rejects every write mode including `--propose`, `--apply`,
 and `--execute`.
 
@@ -326,12 +336,24 @@ The reserved Create executor also refuses unless the spent authority names its r
 
 Runtime (production) Direct EXECUTE is disabled in code (`RUNTIME_DIRECT_EXECUTE_ENABLED = False`
 in `.claude/hooks/merchant_direct_handoff.py`) until separately approved. The user may select the
-test database for one Create with `/solve --confirm --merchant-target test --merchant-scope [...]`;
+test database for one `merchant create` or `project create` with
+`/solve --confirm --merchant-target test --merchant-scope [...]`;
 the target is bound into the scope and confirmation hashes, staged request, reservation, spent
 authority and receipt, and a read-only preflight verifies `coding_agent_merchant_test` /
 `merchant_test` before anything is reserved or spent. A refused preflight (invalid
 configuration, database unavailable, runtime disabled, unsupported test-mode command) spends
-nothing.
+nothing. A `project create` scope must carry the `--project-id` and `--expected-basis` of a
+`project preview`; the preview is recomputed from current state in that preflight and again
+inside the write transaction, and any change (Merchant, its Projects, template, operation)
+refuses it. The preview itself grants nothing.
+
+An unscoped Merchant run's database target is derived by the intent gate from the user's own
+words (`merchant_database_target` in the envelope); every `agent_cli.py` read must hit it, and
+the lead's assignment may not declare another. A previewed `project create` carries
+`--merchant-code` (the user's confirmation of the Merchant, re-checked before spend and in the
+write transaction) and an explicit procurement flag, in one canonical argv order. The preview's
+`requested_operation` reaches the lead only as the exact CLI-captured object after
+`MERCHANT_PREVIEW_OPERATION_JSON:`; the lead shows its `confirmation_command` verbatim.
 
 A boolean, CLI flag, environment variable, task assignment, teammate message, or
 `TEAM_RESULT_JSON` cannot grant runtime-write authority. A request whose arguments differ from

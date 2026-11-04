@@ -26,7 +26,13 @@ refused before any reservation or spend. To validate the real path, the user may
 
 `/solve --confirm --merchant-target test --merchant-scope ["merchant","create","--code","<CODE>","--name","<NAME>"] Create test merchant <CODE>`
 
-Test mode runs only `merchant create`, connects only to `coding_agent_merchant_test` as
+For a Project, the scope is the `requested_operation.argv` of a `project preview` (it carries
+`--project-id` and `--expected-basis`); the preview is recomputed before any spend and inside
+the write transaction, and a changed basis is refused:
+
+`/solve --confirm --merchant-target test --merchant-scope [<preview argv>] Create the previewed Project`
+
+Test mode runs only `merchant create` and `project create`, connects only to `coding_agent_merchant_test` as
 `merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
 confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
 CLI argument, environment variable or payload can select or change it.
@@ -34,6 +40,10 @@ CLI argument, environment variable or payload can select or change it.
 - A `merchant_execute` run without a scope can read and check completeness only; it ends with
   `REQUIRES_CLARIFICATION` or `BLOCKED`. Never infer runtime-write permission from natural
   language alone.
+- A natural-language Project request ("Tạo project mở rạp Beta Nguyễn Văn Cừ", "Preview a
+  cinema opening project for Beta") is never a Merchant creation. Without a scope,
+  `merchant-manager` answers it with the read-only `project preview`; pass the user's words
+  through semantically. The preview's operation is data, not authority.
 
 ## Trusted intent envelope
 
@@ -176,6 +186,11 @@ This command requires all of the following runtime conditions:
 These are prerequisites, not work for `/solve`. Do not install software or edit settings during
 the run.
 
+After each spawn, a trusted hook verifies that the teammate runs in its own psmux pane of this
+session. If it blocks the dispatch (for example an in-process teammate), the teammate's task has
+ended FAILED: stop that teammate with `TaskStop`, report the failure, and do not dispatch a
+replacement or use its result.
+
 Do not use the absence of a separately exposed `TeamCreate` tool as proof that Agent Teams are
 unavailable. Claude Code versions differ: in this project runtime, teammates are created through
 the team-aware mode of the `Agent` tool. Test the authorized team-aware dispatch itself.
@@ -311,8 +326,12 @@ The team lead authorizes the Merchant operation but does not author Merchant CLI
 When dispatching `merchant-manager`:
 
 - preserve the user's semantic objective and raw request;
-- preserve `operation: merchant_execute` (or `merchant_read`) and the persisted scope's
-  `database_target` (`runtime`, or `test` only when the user typed `--merchant-target test`);
+- preserve `operation: merchant_execute` (or `merchant_read`) and declare
+  `database_target: <the envelope's merchant_database_target>`. It is trusted: the scope's
+  target, or for an unscoped run the intent gate's reading of the user's own words ("trên
+  database test" → `test`). Never choose or change it yourself; the policy gate denies an
+  assignment that declares another target, or an unscoped `test` run that omits it, and the
+  teammate's reads are held to the same target;
 - for a scoped run, quote the exact persisted `merchant_scope.argv` unchanged; it is the only
   write the teammate may request;
 - for an unscoped run, do not invent, reconstruct, translate, or guess a concrete Merchant CLI
@@ -324,6 +343,25 @@ The `merchant-manager` owns normalization against its registered Merchant write 
 runs the deterministic completeness gate before any execute request or write-field
 clarification. If the semantic action itself is unclear, preserve that ambiguity; the teammate
 uses its `action_semantics` clarification path.
+
+### Project preview operation delivery
+
+A `project preview` that is `READY_FOR_CONFIRMATION` reaches you inside the teammate's report
+as one `MERCHANT_PREVIEW_OPERATION_JSON:` object. The policy gate has already checked it
+against the CLI output it captured, so it is complete and exact. In the final answer:
+
+- show `confirmation_command` verbatim in a code block, copied character for character
+  (Unicode title included); never rebuild it from the argv or the prose;
+- list `merchant_id`, `merchant_code`, `merchant_name`, `project_id`, `project_type`,
+  `workflow_variant`, `title`, `requires_procurement`, `expected_basis` and `database_target`;
+- when `merchant_confirmation_required` is true, state that the Merchant matched only as a
+  CANDIDATE on `merchant_matched_text` and that typing the command confirms `merchant_code`
+  (`merchant_name`) as the intended Merchant;
+- state that the operation is `NOT_AUTHORIZED` preview data and that this run created nothing.
+
+If the report starts with `PREVIEW_DELIVERY_FAILED:` (the operation could not be verified
+from the CLI output), the result is not actionable. Report that delivery failure and the
+read-only findings, give no confirmation command, and never rebuild one from the findings.
 
 ### Direct EXECUTE runtime handoff
 

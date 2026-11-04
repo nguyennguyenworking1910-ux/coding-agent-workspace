@@ -19,9 +19,12 @@ confirmation hash, the staged handoff, the reservation, the spent authority
 and the execution receipt.
 
 Before any reservation or spend, the target is checked: runtime execution is
-disabled in code, test mode supports only ``merchant create``, and a
-read-only preflight verifies the effective database name and user. A
-preflight failure leaves no footprint and spends nothing.
+disabled in code, test mode supports only ``merchant create`` and
+``project create``, and a read-only preflight verifies the effective
+database name and user. ``project create`` must carry the confirmed
+preview's Project ID and basis, which are recomputed from current state
+here and again inside the write transaction. A preflight failure leaves no
+footprint and spends nothing.
 """
 
 from __future__ import annotations
@@ -52,14 +55,16 @@ from claude.hooks.team_lifecycle import locked_team_state
 
 
 MERCHANT_CREATE_COMMAND = "merchant create"
+PROJECT_CREATE_COMMAND = "project create"
 
 # Runtime (production) Direct EXECUTE stays disabled until separately
 # approved. This is code, not configuration: no environment variable or
 # agent input can enable it.
 RUNTIME_DIRECT_EXECUTE_ENABLED = False
 
-# Test mode exists to validate the real Create path end to end.
-TEST_MODE_COMMANDS = frozenset({MERCHANT_CREATE_COMMAND})
+# Test mode validates the real write paths end to end: the reserved
+# Merchant Create, and Project creation from a confirmed preview.
+TEST_MODE_COMMANDS = frozenset({MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND})
 
 PREFLIGHT_STAGE = "PREFLIGHT"
 
@@ -303,7 +308,10 @@ def _scope_outcome(
     return SCOPE_EXECUTION_FAILED
 
 
-def _create_payload(argv: tuple[str, ...]) -> dict[str, Any]:
+def _create_payload(
+    argv: tuple[str, ...],
+    command: str = MERCHANT_CREATE_COMMAND,
+) -> dict[str, Any]:
     from claude.agents.tools.merchant.cli import (
         build_argument_parser,
         build_write_payload,
@@ -313,7 +321,29 @@ def _create_payload(argv: tuple[str, ...]) -> dict[str, Any]:
         ["--database", "runtime", *argv]
     )
 
-    return build_write_payload(args, MERCHANT_CREATE_COMMAND)
+    return build_write_payload(args, command)
+
+
+def _verify_project_preview(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+) -> None:
+    """Recompute the confirmed preview read-only; refuse before any spend."""
+
+    from claude.agents.tools.merchant.project_preview import (
+        ProjectPreviewMismatch,
+        verify_project_create,
+    )
+    from claude.clients.merchant.read_repository import (
+        MerchantReadRepository,
+    )
+
+    payload = _create_payload(tuple(attempt.arguments), PROJECT_CREATE_COMMAND)
+
+    try:
+        verify_project_create(MerchantReadRepository(repository), payload)
+    except ProjectPreviewMismatch as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
 
 
 def _execute_reserved_create(
@@ -465,8 +495,10 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
 
     Raises DirectPreflightRefused with RUNTIME_EXECUTION_DISABLED,
     TEST_MODE_COMMAND_UNSUPPORTED, TERMINAL_REPORT_ALREADY_SENT,
-    INVALID_CONFIGURATION or DATABASE_UNAVAILABLE. The one-use authority
-    stays unspent.
+    INVALID_CONFIGURATION, DATABASE_UNAVAILABLE or, for ``project create``,
+    a preview reason (PREVIEW_BASIS_REQUIRED, PREVIEW_BASIS_CHANGED,
+    PROJECT_NOT_READY, PROJECT_ID_MISMATCH). The one-use authority stays
+    unspent.
     """
 
     from claude.hooks.merchant_reserved_execution import (
@@ -491,9 +523,14 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
         raise DirectPreflightRefused("TERMINAL_REPORT_ALREADY_SENT")
 
     try:
-        return _target_repository(target)
+        repository = _target_repository(target)
     except DatabasePreflightError as exc:
         raise DirectPreflightRefused(exc.reason) from exc
+
+    if attempt.command == PROJECT_CREATE_COMMAND:
+        _verify_project_preview(attempt, repository)
+
+    return repository
 
 
 def invoke_direct_merchant_execute(

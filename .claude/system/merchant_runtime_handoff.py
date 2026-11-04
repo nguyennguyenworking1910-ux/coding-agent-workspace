@@ -84,7 +84,8 @@ _UUID_TOKEN = re.compile(
 MERCHANT_SCOPE_STATE_KEY = "merchant_scope"
 # Targets a user may select for one scope. The physical database and role
 # for each are pinned by merchant_reserved_execution.DATABASE_IDENTITIES.
-DIRECT_DATABASE_TARGETS = frozenset({RUNTIME_DATABASE_TARGET, "test"})
+TEST_DATABASE_TARGET = "test"
+DIRECT_DATABASE_TARGETS = frozenset({RUNTIME_DATABASE_TARGET, TEST_DATABASE_TARGET})
 DIRECT_SCOPE_FORBIDDEN_TOKENS = frozenset(
     {"--apply", "--propose", "--execute", "--proposal-hash"}
 )
@@ -179,6 +180,9 @@ def validate_direct_scope(
             + ", ".join(completeness.missing_fields)
         )
 
+    if command == "project create" and payload.get("expected_basis_hash") is not None:
+        _require_canonical_preview_argv(tokens, payload)
+
     envelope = build_confirmation_envelope(
         command,
         database_target,
@@ -195,6 +199,41 @@ def validate_direct_scope(
         "proposal_hash": envelope.proposal_hash,
         "payload_sha256": _payload_hash(payload),
     }
+
+
+def _require_canonical_preview_argv(
+    tokens: Sequence[str],
+    payload: Mapping[str, Any],
+) -> None:
+    """A preview-confirmed Project create must be the preview's exact argv.
+
+    The user confirms the Merchant code with the operation (P2) and every
+    field is explicit in the canonical order (P4), so a reordered, partial or
+    reconstructed scope is refused before anything is staged or spent.
+    """
+
+    from claude.agents.tools.merchant.project_preview import (
+        canonical_create_argv,
+    )
+
+    if not payload.get("merchant_code"):
+        raise MerchantRuntimeHandoffError(
+            "A previewed project create must confirm the Merchant with "
+            "--merchant-code"
+        )
+
+    expected = canonical_create_argv(
+        {
+            **payload,
+            "expected_basis": payload["expected_basis_hash"],
+        }
+    )
+
+    if list(tokens) != expected:
+        raise MerchantRuntimeHandoffError(
+            "A previewed project create scope must be the preview's exact "
+            "argv, in order, with every field explicit"
+        )
 
 
 def _payload_hash(payload: Mapping[str, Any]) -> str:
@@ -700,6 +739,33 @@ def invoke_authorized_scope_apply(
             raise MerchantRuntimeHandoffError(
                 "Spent authority does not match this reservation"
             )
+
+    if scope["database_target"] == TEST_DATABASE_TARGET:
+        # The test target has no runtime capability: the CLI refuses a
+        # runtime write without one, and the test repository validates its
+        # own database identity. The reservation guard still runs, last,
+        # before the CLI starts the mutation.
+        try:
+            execution_guard()
+        except Exception as exc:
+            raise MerchantRuntimeHandoffStageError(
+                "ISSUE_AUTHORIZATION", exc
+            ) from exc
+
+        try:
+            return merchant_cli_main(
+                (
+                    "--database",
+                    TEST_DATABASE_TARGET,
+                    *scope["argv"],
+                    "--execute",
+                ),
+                write_command_factory=write_command_factory,
+            )
+        except Exception as exc:
+            raise MerchantRuntimeHandoffStageError(
+                "CLI_INVOKE", exc
+            ) from exc
 
     # At this point the one-use reservation has been persisted.
     # Issuance failure can no longer restore the spent authorization.

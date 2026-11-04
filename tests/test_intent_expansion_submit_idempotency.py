@@ -128,170 +128,80 @@ def _payload(
     }
 
 
-def test_expansion_classifies_and_persists_once(
+def test_submit_classifies_and_persists_once(
     isolated_runtime,
 ):
     calls: list[str] = []
 
     output = intent_gate.run(
-        _payload(
-            "UserPromptExpansion"
-        ),
-        parser_factory=lambda: FakeParser(
-            calls
-        ),
+        _payload("UserPromptSubmit"),
+        parser_factory=lambda: FakeParser(calls),
         env={},
     )
 
-    assert calls == [
-        REQUEST,
-    ]
+    assert calls == [REQUEST]
+    assert output["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert "INTENT_ENVELOPE_JSON" in output["hookSpecificOutput"]["additionalContext"]
 
-    assert (
-        output[
-            "hookSpecificOutput"
-        ][
-            "hookEventName"
-        ]
-        == "UserPromptExpansion"
-    )
-
-    assert (
-        "additionalContext"
-        not in output[
-            "hookSpecificOutput"
-        ]
-    )
-
-    state = runtime_state.load_state(
-        SESSION_ID
-    )
-
-    envelope = (
-        intent_envelope_bridge
-        .load_intent_envelope(
-            SESSION_ID
-        )
-    )
-
-    assert state is not None
-    assert envelope is not None
+    state = runtime_state.load_state(SESSION_ID)
+    envelope = intent_envelope_bridge.load_intent_envelope(SESSION_ID)
 
     assert state["request"] == REQUEST
     assert state["run_id"]
-
-    assert (
-        envelope["request_id"]
-        == "request-expansion-1"
-    )
-
-    assert (
-        envelope["raw_request"]
-        == REQUEST
-    )
+    assert envelope["run_id"] == state["run_id"]
+    assert envelope["request_id"] == "request-expansion-1"
+    assert envelope["raw_request"] == REQUEST
+    assert state["intent_claim"]["consumed_at"] is None
 
 
-def test_submit_exact_expansion_request_is_silent_and_does_not_reclassify(
+def test_expansion_after_submit_is_silent_and_does_not_reclassify(
     isolated_runtime,
 ):
+    intent_gate.run(
+        _payload("UserPromptSubmit"),
+        parser_factory=lambda: FakeParser([]),
+        env={},
+    )
+
+    before_state = runtime_state.load_state(SESSION_ID)
+    before_envelope = intent_envelope_bridge.load_intent_envelope(SESSION_ID)
+
     expansion_calls: list[str] = []
 
-    intent_gate.run(
-        _payload(
-            "UserPromptExpansion"
-        ),
-        parser_factory=lambda: FakeParser(
-            expansion_calls
-        ),
-        env={},
-    )
-
-    before_state = (
-        runtime_state.load_state(
-            SESSION_ID
-        )
-    )
-
-    before_envelope = (
-        intent_envelope_bridge
-        .load_intent_envelope(
-            SESSION_ID
-        )
-    )
-
-    submit_calls: list[str] = []
-
     output = intent_gate.run(
-        _payload(
-            "UserPromptSubmit"
-        ),
+        _payload("UserPromptExpansion"),
         parser_factory=lambda: FakeParser(
-            submit_calls,
-            request_id="request-submit-2",
+            expansion_calls,
+            request_id="request-expansion-2",
         ),
         env={},
     )
 
-    after_state = (
-        runtime_state.load_state(
-            SESSION_ID
-        )
-    )
-
-    after_envelope = (
-        intent_envelope_bridge
-        .load_intent_envelope(
-            SESSION_ID
-        )
-    )
+    after_state = runtime_state.load_state(SESSION_ID)
 
     assert output == {}
-
-    assert submit_calls == []
-
-    assert after_state == before_state
-    assert after_envelope == before_envelope
-
-    assert (
-        after_envelope[
-            "request_id"
-        ]
-        == "request-expansion-1"
-    )
+    assert expansion_calls == []
+    assert after_state["run_id"] == before_state["run_id"]
+    assert after_state["intent_claim"]["consumed_at"] is not None
+    assert intent_envelope_bridge.load_intent_envelope(SESSION_ID) == before_envelope
 
 
-def test_submit_does_not_emit_second_intent_envelope_context(
+def test_expansion_does_not_emit_second_intent_envelope_context(
     isolated_runtime,
 ):
     intent_gate.run(
-        _payload(
-            "UserPromptExpansion"
-        ),
-        parser_factory=lambda: FakeParser(
-            []
-        ),
+        _payload("UserPromptSubmit"),
+        parser_factory=lambda: FakeParser([]),
         env={},
     )
 
     output = intent_gate.run(
-        _payload(
-            "UserPromptSubmit"
-        ),
-        parser_factory=lambda: FakeParser(
-            []
-        ),
+        _payload("UserPromptExpansion"),
+        parser_factory=lambda: FakeParser([]),
         env={},
     )
 
-    encoded = json.dumps(
-        output,
-        ensure_ascii=False,
-    )
-
-    assert (
-        "INTENT_ENVELOPE_JSON"
-        not in encoded
-    )
+    assert "INTENT_ENVELOPE_JSON" not in json.dumps(output, ensure_ascii=False)
 
 
 def test_stale_envelope_without_matching_run_state_is_not_reused(
@@ -360,7 +270,7 @@ def test_stop_clears_run_state_and_intent_envelope(
 ):
     intent_gate.run(
         _payload(
-            "UserPromptExpansion"
+            "UserPromptSubmit"
         ),
         parser_factory=lambda: FakeParser(
             []
@@ -433,7 +343,7 @@ def test_session_end_clears_intent_envelope(
 ):
     intent_gate.run(
         _payload(
-            "UserPromptExpansion"
+            "UserPromptSubmit"
         ),
         parser_factory=lambda: FakeParser(
             []

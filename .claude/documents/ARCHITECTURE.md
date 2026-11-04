@@ -107,6 +107,9 @@ Root configuration and orchestration for all agents and tools.
 │   │                        merchant-manager's exact shell allowlist
 │   ├── harness_team_identity.py
 │   │                        Verifies a teammate pane from the harness team config
+│   ├── teammate_backend_gate.py
+│   │                        After each spawn, accepts only a teammate in its own
+│   │                        psmux pane of the lead's server (no in-process)
 │   ├── merchant_direct_handoff.py
 │   │                        Persists the reservation, then runs one Direct EXECUTE
 │   └── runtime_state.py     Locks and persists the session-scoped authority state

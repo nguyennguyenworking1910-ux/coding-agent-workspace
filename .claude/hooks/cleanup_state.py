@@ -33,6 +33,7 @@ if __package__ in (None, ""):
     from runtime_state import (  # noqa: E402
         clear_state,
         load_state,
+        read_hook_payload,
     )
 
     from team_lifecycle import (  # noqa: E402
@@ -50,6 +51,7 @@ else:
     from .runtime_state import (
         clear_state,
         load_state,
+        read_hook_payload,
     )
 
     from .team_lifecycle import (
@@ -132,9 +134,15 @@ def active_teammate_owns_run(
 
 def main() -> int:
     try:
-        payload = json.load(
-            sys.stdin
+        payload = read_hook_payload()
+    except UnicodeDecodeError:
+        # Keep all state (the conservative outcome) and do not block the
+        # Stop/SessionEnd event: the session id cannot be read exactly.
+        print(
+            "Hook input is not valid UTF-8; no state was cleaned.",
+            file=sys.stderr,
         )
+        return 0
     except (
         json.JSONDecodeError,
         ValueError,

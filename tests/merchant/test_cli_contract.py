@@ -60,6 +60,7 @@ def test_command_allowlists_are_complete_and_disjoint():
         "project blockers",
         "project history",
         "project list",
+        "project preview",
         "project show",
         "step resolve",
         "document resolve",

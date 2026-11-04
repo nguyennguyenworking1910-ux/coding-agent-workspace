@@ -320,6 +320,30 @@ class MerchantReadRepository:
                     normalized_limit,
                 )
 
+    def get_workflow_template(
+        self,
+        template_id: str,
+    ) -> dict[str, Any] | None:
+        """Return installed workflow template metadata, if any."""
+
+        template_uuid = _uuid(template_id, "template_id")
+
+        with self.repository.connection(
+            read_only=True
+        ) as connection:
+            with connection.transaction():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, name, version, variant, is_active
+                        FROM merchant_ops.workflow_templates
+                        WHERE id = %s
+                        """,
+                        (template_uuid,),
+                    )
+                    rows = _records(cursor.fetchall())
+                    return rows[0] if rows else None
+
     @staticmethod
     def _get_project(
         connection: Any,

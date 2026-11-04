@@ -20,9 +20,12 @@ import json
 import re
 import sys
 import shlex
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any
+
+from filelock import Timeout
 
 if __package__ in (None, ""):
     sys.path.insert(
@@ -33,7 +36,10 @@ if __package__ in (None, ""):
     )
 
     from runtime_state import (  # noqa: E402
+        configure_utf8_output,
         locked_state,
+        merchant_database_target,
+        read_hook_payload,
     )
 
     from team_lifecycle import (  # noqa: E402
@@ -41,9 +47,11 @@ if __package__ in (None, ""):
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
         allocate_teammate,
+        discard_unbound_teammate,
         find_unique_active_teammate_owner,
         mark_teammate_running,
         reserve_reusable_teammate,
+        reused_teammate_pane_matches,
         load_team_state,
     )
 
@@ -85,7 +93,10 @@ if __package__ in (None, ""):
 
 else:
     from .runtime_state import (
+        configure_utf8_output,
         locked_state,
+        merchant_database_target,
+        read_hook_payload,
     )
 
     from .team_lifecycle import (
@@ -93,9 +104,11 @@ else:
         TeammateAllocationDecision,
         TeammateLifecycleStatus,
         allocate_teammate,
+        discard_unbound_teammate,
         find_unique_active_teammate_owner,
         mark_teammate_running,
         reserve_reusable_teammate,
+        reused_teammate_pane_matches,
         load_team_state,
     )
 
@@ -3005,6 +3018,16 @@ def _check_teammate_message(
                 f"max_members limit of {max_members}."
             )
 
+    # Reuse only the psmux pane verified when this teammate was spawned: a
+    # closed or recycled pane id, or a teammate never verified, is refused.
+    if not reused_teammate_pane_matches(session_id, recipient):
+        return deny(
+            f"Blocked: teammate '{recipient}' is not running in the psmux pane "
+            "verified when it was spawned (the pane is gone, was recycled, or "
+            "was never verified). /solve does not reuse it. Nothing was sent; "
+            "report this and stop."
+        )
+
     reserved, prior_status = reserve_reusable_teammate(
         session_id,
         recipient,
@@ -3225,30 +3248,39 @@ def _check_agent_dispatch(
                 f"'{subagent_type}'. Request a fresh dispatch."
             )
 
-        if not mark_teammate_running(
-            session_id,
-            requested_teammate_name,
-            str(
-                state.get(
-                    "run_id"
-                )
-                or ""
-            ),
-            task_id,
-            operations=[
-                str(operation)
-                for operation in (
+        try:
+            bound = mark_teammate_running(
+                session_id,
+                requested_teammate_name,
+                str(
                     state.get(
-                        "operations"
+                        "run_id"
                     )
-                    or []
-                )
-            ],
-            selected_agents=selected_agents,
-        ):
+                    or ""
+                ),
+                task_id,
+                operations=[
+                    str(operation)
+                    for operation in (
+                        state.get(
+                            "operations"
+                        )
+                        or []
+                    )
+                ],
+                selected_agents=selected_agents,
+            )
+        except (OSError, Timeout):
+            # e.g. Windows denied the team-state replace on every retry.
+            bound = False
+
+        if not bound:
+            # No teammate is spawned, so drop the unbound allocation and
+            # let the role be dispatched again.
+            discard_unbound_teammate(session_id, requested_teammate_name)
             return deny(
                 "Blocked: the new teammate could not be bound to the current "
-                "run safely. Nothing may rely on this dispatch result."
+                "run safely. Nothing was dispatched; retry the dispatch."
             )
 
     if requested_teammate_name not in members_used:
@@ -3266,6 +3298,46 @@ def _check_agent_dispatch(
 
     if merchant_execute_decision is not None:
         return merchant_execute_decision
+
+    return None
+
+
+_DECLARED_TARGET_PATTERN = re.compile(
+    r"\bdatabase_target\b\W{0,3}(runtime|test)\b", re.IGNORECASE
+)
+
+
+def _merchant_assignment_target_error(
+    state: dict[str, Any],
+    assignment: str,
+) -> str | None:
+    """Why the lead's declared database target contradicts the trusted one.
+
+    The trusted target comes from the user's scope or request text (intent
+    gate). Every target the assignment declares must equal it, and a
+    test-database run must declare it so the teammate is told.
+    """
+
+    trusted = merchant_database_target(state)
+
+    if trusted is None:
+        return "has no trusted database target in the run state"
+
+    declared = {
+        match.lower()
+        for match in _DECLARED_TARGET_PATTERN.findall(assignment or "")
+    }
+
+    if declared - {trusted}:
+        return (
+            f"declares database_target {sorted(declared)} but the trusted "
+            f"target is {trusted!r}"
+        )
+
+    # A scope's target is enforced at staging and handoff; an unscoped test
+    # read is only known to the teammate through this declaration.
+    if trusted == "test" and not declared and state.get("merchant_scope") is None:
+        return "must declare database_target: test"
 
     return None
 
@@ -3343,6 +3415,15 @@ def _check_merchant_dispatch(
         return deny(
             "Blocked: only merchant-manager may receive a Merchant operational "
             "assignment. Nothing was dispatched."
+        )
+
+    target_error = _merchant_assignment_target_error(state, assignment)
+
+    if target_error is not None:
+        return deny(
+            f"Blocked: the Merchant assignment {target_error}. Declare exactly "
+            "the run's trusted database_target (the envelope's "
+            "merchant_database_target). Nothing was dispatched."
         )
 
     if merchant_operations != {MERCHANT_EXECUTE_OPERATION}:
@@ -3670,8 +3751,35 @@ def merchant_runtime_bypass_decision(
 
 
 def main() -> int:
+    """Fail closed: a check that cannot complete never allows the call.
+
+    An uncaught exception exits 1, which Claude Code treats as a
+    non-blocking error and runs the tool anyway.
+    """
+
+    configure_utf8_output()
+
     try:
-        payload = json.load(sys.stdin)
+        return _main()
+    except Exception as error:  # noqa: BLE001 - any failure must deny
+        traceback.print_exc()
+        print(json.dumps(deny(
+            "Blocked: the policy gate could not complete its check "
+            f"({type(error).__name__}). Nothing was run; retry the call."
+        )))
+        return 0
+
+
+def _main() -> int:
+    try:
+        payload = read_hook_payload()
+    except UnicodeDecodeError:
+        # A tool call whose input cannot be read exactly is never allowed.
+        print(json.dumps(deny(
+            "Blocked: the tool input is not valid UTF-8 and cannot be "
+            "checked. Nothing was run."
+        )))
+        return 0
     except (json.JSONDecodeError, ValueError):
         return 0
 
@@ -3754,6 +3862,21 @@ def main() -> int:
         )
 
         return 0
+
+    # P1/P4 (CP12H.NL2E): a Merchant read must hit the trusted database
+    # target, and a Project preview operation reaches the lead only as the
+    # exact CLI-captured object. Both only restrict.
+    from claude.hooks.merchant_preview_delivery import (
+        preview_delivery_decision,
+        teammate_target_decision,
+    )
+
+    for preview_check in (teammate_target_decision, preview_delivery_decision):
+        preview_decision = preview_check(payload, deny)
+
+        if preview_decision is not None:
+            print(json.dumps(preview_decision, ensure_ascii=False))
+            return 0
 
     # A Merchant terminal report must agree with trusted execution
     # evidence before it can reach the lead.

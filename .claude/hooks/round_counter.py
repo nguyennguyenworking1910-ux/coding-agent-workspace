@@ -20,9 +20,9 @@ from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from runtime_state import locked_state  # noqa: E402
+    from runtime_state import locked_state, read_hook_payload  # noqa: E402
 else:
-    from .runtime_state import locked_state
+    from .runtime_state import locked_state, read_hook_payload
 
 AGENT_TOOL_NAMES = frozenset({"Agent", "Task"})
 
@@ -107,7 +107,11 @@ def record_round(session_id: Any) -> int | None:
 
 def main() -> int:
     try:
-        payload = json.load(sys.stdin)
+        payload = read_hook_payload()
+    except UnicodeDecodeError:
+        # The round cannot be attributed; report it rather than guess.
+        print("Hook input is not valid UTF-8; round not counted.", file=sys.stderr)
+        return 2
     except (json.JSONDecodeError, ValueError):
         return 0
 
