@@ -224,6 +224,27 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
     )
 
 
+# Role labels that may precede a Merchant name ("cho Merchant Beta Cinemas").
+_ROLE_LABELS = (("merchant",), ("merchants",), ("doi", "tac"), ("partner",), ("nha", "cung", "cap"))
+
+
+def without_role_label(phrase: str | None) -> str | None:
+    """``phrase`` minus a leading role label, or None when it has none.
+
+    Only a label followed by more words; the caller tries the phrase as
+    written first, so a Merchant actually named "Partner Cinemas" keeps it.
+    """
+
+    words = (phrase or "").split()
+    folded = [fold(word) for word in words]
+
+    for label in _ROLE_LABELS:
+        if tuple(folded[: len(label)]) == label and len(words) > len(label):
+            return " ".join(words[len(label):])
+
+    return None
+
+
 def fold_keep_question(value: str) -> str:
     """fold() but keep '?' so question-shaped patterns can see it."""
 
@@ -276,9 +297,16 @@ def _project_type(text: str) -> tuple[str | None, int | None]:
 
 
 def _requires_procurement(text: str) -> bool | None:
-    noun = r"(?:procurement|purchase request|mua sam|de nghi mua|\bpr\b)"
+    # Purchase Requisition (PR) only: Purchase Order and Payment Request are
+    # later, always-present steps and say nothing about procurement.
+    noun = (
+        r"(?:procurement|purchase requisitions?|purchase requests?|mua sam|"
+        r"de nghi mua|\bpr\b)"
+    )
+    # "bỏ (qua) bước": a bare "bo" also folds from "bộ" (department).
     if re.search(
-        rf"\b(?:khong|no|without|not|chua|ko)\b(?: \w+){{0,3}} {noun}", text
+        rf"\b(?:khong|no|without|not|chua|ko|skip|bo qua|bo buoc)\b(?: \w+){{0,3}} {noun}",
+        text,
     ):
         return False
     if re.search(noun, text):

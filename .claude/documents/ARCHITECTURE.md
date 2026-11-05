@@ -112,6 +112,9 @@ Root configuration and orchestration for all agents and tools.
 │   │                        psmux pane of the lead's server (no in-process)
 │   ├── merchant_direct_handoff.py
 │   │                        Persists the reservation, then runs one Direct EXECUTE
+│   ├── merchant_pending_confirmation.py
+│   │                        Trusted pending Project create from a verified preview;
+│   │                        the user's "/solve Xác nhận tạo" spends exactly one
 │   └── runtime_state.py     Locks and persists the session-scoped authority state
 │
 ├── system/                  [SHARED SYSTEM LOGIC]

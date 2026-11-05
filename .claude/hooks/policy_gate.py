@@ -3812,6 +3812,18 @@ def _main() -> int:
     ):
         tool_input = {}
 
+    # CP12H.NL3: a scheduled prompt is model-written text later submitted as
+    # if the user typed it; it can never start or confirm a controlled run.
+    from claude.hooks.merchant_pending_confirmation import (
+        scheduled_prompt_denial,
+    )
+
+    scheduled = scheduled_prompt_denial(tool_name, tool_input)
+
+    if scheduled is not None:
+        print(json.dumps(deny(scheduled), ensure_ascii=False))
+        return 0
+
     # -------------------------------------------------
     # Gate 12B.6.1:
     # once a teammate has already delivered its result,

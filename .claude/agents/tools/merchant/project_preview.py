@@ -31,6 +31,7 @@ from .project_nl import (
     PROJECT_CREATE,
     fold,
     interpret_project_request,
+    without_role_label,
 )
 from .workflow import (
     PROJECT_TYPES,
@@ -456,6 +457,10 @@ def _resolve_merchant(
     if phrase:
         # "Beta | Nguyễn Văn Cừ": the rest of the phrase is the site.
         resolution, matched_text, rest = _leading_merchant(catalog, phrase)
+        unlabelled = without_role_label(phrase)
+        if resolution is None and unlabelled:
+            # "Merchant Beta Cinemas": the label is syntax, not the name.
+            resolution, matched_text, rest = _leading_merchant(catalog, unlabelled)
         if resolution is not None:
             site = site or rest
 

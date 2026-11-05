@@ -283,6 +283,17 @@ def record_preview_evidence(payload: dict[str, Any]) -> bool:
             **preview,
         }
 
+    if preview["status"] == VERIFIED and preview["requested_operation"] is not None:
+        # CP12H.NL3: the only creator of a pending conversational confirmation.
+        from claude.hooks.merchant_pending_confirmation import record_pending
+
+        record_pending(
+            owner,
+            preview["requested_operation"],
+            run_id=record["current_run_id"],
+            task_id=record["current_task_id"],
+        )
+
     return preview["status"] == VERIFIED
 
 
@@ -304,6 +315,12 @@ def _operation_blocks(message: str) -> list[Any]:
 
 
 _READY_CLAIM = re.compile(r"ready[\s_-]*for[\s_-]*confirmation", re.IGNORECASE)
+# "the outcome is not READY_FOR_CONFIRMATION" states the opposite of a claim.
+_NEGATED_READY = re.compile(
+    r"\b(?:not|never|no|isn't|không|chưa|khong|chua)\s+(?:\w+\s+){0,2}?"
+    r"ready[\s_-]*for[\s_-]*confirmation",
+    re.IGNORECASE,
+)
 # Operation text a teammate could only have retyped or rebuilt.
 _OPERATION_TEXT = re.compile(
     r"--merchant-scope|confirmation_command|\"--merchant-id\"|\[\s*\"project\"\s*,\s*\"create\"",
@@ -459,9 +476,29 @@ def preview_delivery_decision(payload: dict[str, Any], deny: Deny) -> dict[str, 
             )
         return None
 
-    claims_ready = _READY_CLAIM.search(message.replace(PREVIEW_DELIVERY_FAILED, ""))
+    claims_ready = _READY_CLAIM.search(
+        _NEGATED_READY.sub("", message.replace(PREVIEW_DELIVERY_FAILED, ""))
+    )
+    actionable = blocks or claims_ready or _OPERATION_TEXT.search(message)
 
-    if blocks or claims_ready or _OPERATION_TEXT.search(message):
+    # CP12H.NL3A: a verified non-READY preview (NEEDS_CLARIFICATION, BLOCKED)
+    # was delivered correctly; it is that outcome, never a delivery failure.
+    if evidence is not None and evidence.get("status") == VERIFIED:
+        outcome = evidence.get("outcome")
+        if actionable or PREVIEW_DELIVERY_FAILED in message:
+            return deny(
+                f"Blocked: the verified preview outcome is {outcome}. It was "
+                "captured correctly, so this is not a delivery failure and not an "
+                f"actionable result. Send the report again ONCE as the {outcome} "
+                "result: relay its clarifications or conflicts and the read-only "
+                f"findings, without `{PREVIEW_DELIVERY_FAILED}`, a "
+                "READY_FOR_CONFIRMATION claim, any "
+                f"{PREVIEW_OPERATION_MARKER} block, argv, --merchant-scope or "
+                "confirmation command. Do not run the preview again."
+            )
+        return None
+
+    if actionable:
         reason = (
             "the preview output could not be verified from the CLI for this task"
             if evidence is not None and evidence.get("status") == UNVERIFIED

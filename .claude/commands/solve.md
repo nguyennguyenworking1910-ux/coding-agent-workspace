@@ -32,6 +32,17 @@ the write transaction, and a changed basis is refused:
 
 `/solve --confirm --merchant-target test --merchant-scope [<preview argv>] Create the previewed Project`
 
+**Conversational confirmation (CP12H.NL3).** A verified READY preview also leaves a trusted
+pending record for this session (15 minutes, single use). The user may then type
+`/solve Xác nhận tạo` (or `/solve Xác nhận tạo <first 8 characters of project_id>` when more
+than one is pending; `/solve Hủy tạo [<id>]` cancels). The intent gate, not you, turns that
+prompt into the same persisted `merchant_scope` as a typed scope, with a deterministic envelope
+whose `raw_request` is the confirmation text and which carries `conversational_confirmation`.
+Treat that run exactly like a typed scoped run. You never confirm, re-request or rebuild a
+pending operation yourself, and a bare "Xác nhận tạo" without `/solve` is not a confirmation.
+An unscoped Project create request ("Tạo project mở rạp ...") runs as the read-only preview
+without `--confirm`.
+
 Test mode runs only `merchant create` and `project create`, connects only to `coding_agent_merchant_test` as
 `merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
 confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
@@ -120,7 +131,9 @@ envelope passes every check below.
    - Otherwise, compare against `$ARGUMENTS` after trimming surrounding whitespace.
    - Require `confirmed: true` in the persisted envelope when `--confirm` is supplied.
    - Keep exact request matching, expiry, session, and unspent-envelope checks.
-   - A Merchant runtime write additionally requires an exact validated `--merchant-scope`.
+   - A Merchant runtime write additionally requires an exact validated `--merchant-scope`, or
+     the gate-issued `merchant_scope` of a conversational confirmation (its `raw_request` is the
+     confirmation text, e.g. `Xác nhận tạo.`).
    - An envelope for different work is stale, even if the work is related.
    - An envelope authorizes one dispatch only. Never reuse a spent envelope.
 
@@ -357,7 +370,10 @@ against the CLI output it captured, so it is complete and exact. In the final an
 - when `merchant_confirmation_required` is true, state that the Merchant matched only as a
   CANDIDATE on `merchant_matched_text` and that typing the command confirms `merchant_code`
   (`merchant_name`) as the intended Merchant;
-- state that the operation is `NOT_AUTHORIZED` preview data and that this run created nothing.
+- state that the operation is `NOT_AUTHORIZED` preview data and that this run created nothing;
+- tell the user they can confirm in this session within 15 minutes by typing
+  `/solve Xác nhận tạo <first 8 characters of project_id>` (or cancel with
+  `/solve Hủy tạo <same id>`); the `confirmation_command` remains an equivalent alternative.
 
 If the report starts with `PREVIEW_DELIVERY_FAILED:` (the operation could not be verified
 from the CLI output), the result is not actionable. Report that delivery failure and the

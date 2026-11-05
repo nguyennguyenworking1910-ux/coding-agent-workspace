@@ -433,6 +433,113 @@ def _limits_to_dict(limits: Any) -> dict[str, Any]:
     raise ValueError("Envelope limits are missing or malformed")
 
 
+def confirm_pending_project(
+    session_id: Any,
+    command: str,
+    request: str,
+    run_id: str,
+) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]] | None:
+    """CP12H.NL3: the user's own "/solve Xác nhận tạo" spends one pending create.
+
+    None: the request is not exactly a confirmation phrase (classify as usual).
+    A dict: the hook output refusing or cancelling; nothing is dispatched.
+    A tuple: (merchant_scope, envelope) of the trusted pending operation, the
+    same authority shape as a typed --merchant-scope. No model classifies it.
+    """
+    from claude.hooks import merchant_pending_confirmation as pending
+
+    parsed = pending.parse_confirmation(request)
+
+    if parsed is None:
+        return None
+
+    if command != "solve":
+        return block(
+            "A Project confirmation is accepted only as `/solve Xác nhận tạo`. "
+            "Nothing was created."
+        )
+
+    action, code = parsed
+    record, refusal = pending.resolve(session_id, action, code, run_id)
+
+    if refusal is not None:
+        return block(refusal)
+
+    operation = record["operation"]
+
+    if action == pending.CANCEL:
+        return block(
+            f"Cancelled the pending Project create {operation.get('title')!r} "
+            f"({record['project_id'][:8]}). Nothing was created."
+        )
+
+    try:
+        from claude.agents.tools.merchant.project_preview import (
+            validate_requested_operation,
+        )
+        from claude.system.merchant_runtime_handoff import validate_direct_scope
+
+        validate_requested_operation(operation)
+
+        if (
+            operation["project_id"] != record["project_id"]
+            or operation["database_target"] != record["database_target"]
+        ):
+            raise ValueError("pending record fields disagree")
+
+        validated = validate_direct_scope(
+            operation["argv"], operation["database_target"]
+        )
+    except Exception:  # noqa: BLE001 - a damaged record never runs
+        return block(
+            "The pending Project create could not be verified, so it was not "
+            "confirmed. Nothing was created. Preview the Project again."
+        )
+
+    merchant_scope = {
+        "argv": list(validated["argv"]),
+        "command": validated["command"],
+        "database_target": validated["database_target"],
+        "scope_hash": validated["scope_hash"],
+    }
+
+    orchestration = json.loads(
+        (CLAUDE_DIR / "agents.json").read_text(encoding="utf-8")
+    )["orchestration"]
+    task_class = orchestration["default_task_class"]
+
+    envelope = {
+        "request_id": str(uuid.uuid4()),
+        "raw_request": request,
+        "task_class": task_class,
+        "risk_level": "external_write",
+        "confidence": 1.0,
+        "complexity_score": 0,
+        "score_breakdown": {},
+        "domains": ["merchant"],
+        "operations": [MERCHANT_EXECUTE_OPERATION],
+        "candidate_agents": ["merchant-manager"],
+        "selected_agents": ["merchant-manager"],
+        "limits": dict(orchestration["task_classes"][task_class]),
+        "reasons": [
+            "The user confirmed the trusted pending Project create "
+            f"{record['project_id']} in their own prompt; the operation comes "
+            "from verified preview evidence, not from a model."
+        ],
+        "requires_clarification": False,
+        "requires_confirmation": True,
+        "conversational_confirmation": {
+            "project_id": record["project_id"],
+            "title": operation["title"],
+            "merchant_code": operation["merchant_code"],
+            "source_run_id": record["source_run_id"],
+            "pending_created_at": record["created_at"],
+        },
+    }
+
+    return merchant_scope, envelope
+
+
 def run(
     payload: dict[str, Any],
     *,
@@ -482,6 +589,21 @@ def run(
         )
 
     if parsed is None:
+        # CP12H.NL3: a bare "Xác nhận tạo" is never a confirmation; when one
+        # is pending, say how to confirm instead of letting the model act.
+        if hook_event_name == HOOK_EVENT_NAME:
+            try:
+                from claude.hooks.merchant_pending_confirmation import (
+                    bare_phrase_guidance,
+                )
+
+                guidance = bare_phrase_guidance(payload.get("session_id"), prompt.strip())
+            except Exception:  # noqa: BLE001 - an ordinary prompt stays ordinary
+                guidance = None
+
+            if guidance:
+                return block(guidance)
+
         return {}
 
     (
@@ -590,24 +712,40 @@ def run(
     # classifying, so a failed Submit cannot leave a consumable claim behind.
     revoke_intent_claim(session_id)
 
-    try:
-        preparsed = load_preparsed_envelope(request, dict(environment))
+    run_id = str(uuid.uuid4())
+    conversational = None
 
-        if preparsed is not None:
-            envelope_payload = envelope_to_payload(preparsed)
-        else:
-            factory = parser_factory or build_parser
-            envelope_payload = envelope_to_payload(factory().parse(request))
-
-        # Run identity, scope, target and confirmation are set only below,
-        # by this hook; a parsed or pre-parsed envelope cannot supply them.
-        for trusted_field in TRUSTED_ENVELOPE_FIELDS:
-            envelope_payload.pop(trusted_field, None)
-    except Exception as error:  # noqa: BLE001 - fail closed on anything
-        return block(
-            f"Intent classification failed, so /{command} did not run: {error} "
-            "No agents were dispatched. Fix the cause and resubmit."
+    if merchant_scope is None and merchant_confirmation_token is None:
+        conversational = confirm_pending_project(
+            session_id, command, request, run_id
         )
+
+    if isinstance(conversational, dict):
+        return conversational  # refused or cancelled; nothing dispatched
+
+    if conversational is not None:
+        merchant_scope, envelope_payload = conversational
+        confirmed = True
+    else:
+        try:
+            preparsed = load_preparsed_envelope(request, dict(environment))
+
+            if preparsed is not None:
+                envelope_payload = envelope_to_payload(preparsed)
+            else:
+                factory = parser_factory or build_parser
+                envelope_payload = envelope_to_payload(factory().parse(request))
+
+            # Run identity, scope, target and confirmation are set only
+            # below, by this hook; a parsed or pre-parsed envelope cannot
+            # supply them.
+            for trusted_field in TRUSTED_ENVELOPE_FIELDS:
+                envelope_payload.pop(trusted_field, None)
+        except Exception as error:  # noqa: BLE001 - fail closed on anything
+            return block(
+                f"Intent classification failed, so /{command} did not run: {error} "
+                "No agents were dispatched. Fix the cause and resubmit."
+            )
 
     if envelope_payload.get("requires_clarification"):
         reasons = envelope_payload.get("reasons") or []
@@ -656,6 +794,36 @@ def run(
             "<description>`. Nothing was dispatched."
         )
 
+    # CP12H.NL3: an unscoped Project create request ("Tạo project mở rạp ...")
+    # can only be previewed in this run, so it runs as the read-only preview
+    # without --confirm. Strictly a downgrade: creating needs the user's
+    # separate "/solve Xác nhận tạo" of the verified preview.
+    if (
+        merchant_scope is None
+        and conversational is None
+        and selected_for_confirmation == ["merchant-manager"]
+        and operations
+        and operations <= {MERCHANT_EXECUTE_OPERATION, MERCHANT_READ_OPERATION}
+    ):
+        from claude.agents.tools.merchant.project_nl import (
+            PROJECT_CREATE,
+            interpret_project_request,
+        )
+
+        if interpret_project_request(request).kind == PROJECT_CREATE:
+            operations = {MERCHANT_READ_OPERATION}
+            envelope_payload.update(
+                operations=[MERCHANT_READ_OPERATION],
+                risk_level="read_only",
+                requires_confirmation=False,
+            )
+            envelope_payload["reasons"] = list(
+                envelope_payload.get("reasons") or []
+            ) + [
+                "Unscoped Project create request runs as the read-only "
+                "preview; creating needs the user's separate confirmation."
+            ]
+
     if envelope_payload.get("requires_confirmation") and not confirmed:
         risk_level = envelope_payload.get("risk_level", "unknown")
 
@@ -673,8 +841,6 @@ def run(
 
     envelope_payload["limits"] = limits
     envelope_payload["confirmed"] = confirmed
-
-    run_id = str(uuid.uuid4())
 
     if merchant_scope is not None:
         merchant_scope["run_id"] = run_id
@@ -780,11 +946,22 @@ def run(
             "additionalContext"
         ] = additional_context
 
-    return {
+    output: dict[str, Any] = {
         "hookSpecificOutput": (
             hook_specific_output
         )
     }
+
+    if conversational is not None:
+        # Shown to the user by this hook, not rendered by the model.
+        detail = envelope_payload["conversational_confirmation"]
+        output["systemMessage"] = (
+            f"Confirmed Project create {detail['title']!r} for Merchant "
+            f"{detail['merchant_code']} (project_id {detail['project_id']}) on the "
+            f"{merchant_scope['database_target']} database. It runs once now."
+        )
+
+    return output
 
 def main() -> int:
     configure_utf8_output()

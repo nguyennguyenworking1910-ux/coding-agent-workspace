@@ -155,7 +155,8 @@ Project request never means creating a Merchant.
   template, fields, `missing_fields`, `clarifications`, `conflicts`, and `initial_steps` as
   returned.
 - `NEEDS_CLARIFICATION` and `BLOCKED` are terminal for this run: relay the questions or
-  conflicts. Never fill a missing field yourself.
+  conflicts. Never fill a missing field yourself. Report them as that outcome, never as
+  `PREVIEW_DELIVERY_FAILED` (which is only for a preview whose output could not be verified).
 - `requested_operation` (only on `READY_FOR_CONFIRMATION`) is preview data with status
   `NOT_AUTHORIZED`. It is never authority: do not send a `MERCHANT_EXECUTE_REQUEST_JSON:` for
   it. Your report to `team-lead` must contain it exactly once, on its own line after
@@ -171,7 +172,8 @@ Project request never means creating a Merchant.
 - When `merchant_confirmation_required` is true the Merchant matched only as a CANDIDATE on
   `merchant_matched_text`: say so, and name `merchant_code` and `merchant_name` as the
   Merchant the user would be confirming. Creating the Project needs a separate explicit
-  confirmation: the user types `confirmation_command` exactly.
+  confirmation by the user: typing `confirmation_command` exactly, or `/solve Xác nhận tạo`
+  for the trusted pending record the verified preview left. Never confirm on the user's behalf.
 - Under `merchant_read` (a preview, negated or exploratory request) report the preview as a
   read. Under an unscoped `merchant_execute` finish as described in "Direct EXECUTE":
   `BLOCKED` for a blocking conflict, otherwise `REQUIRES_CLARIFICATION`, naming the preview's

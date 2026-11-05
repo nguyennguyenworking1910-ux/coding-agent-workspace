@@ -312,8 +312,12 @@ and `--execute`.
 
 Merchant writes use Direct EXECUTE only (`merchant_execute`). `merchant_propose`,
 `merchant_apply`, and `--merchant-confirmation` are removed and rejected. The only runtime-write
-authority is an exact scope the user types with `/solve --confirm --merchant-scope [...]`. The
-policy gate records one dispatch receipt for it. The scope must satisfy the deterministic
+authority is an exact scope the user types with `/solve --confirm --merchant-scope [...]`, or the
+user's own `/solve Xác nhận tạo [<id>]` prompt, which the intent gate turns into the same scope
+from exactly one trusted pending Project create (created only from a verified preview capture,
+owned by that session, 15-minute single use; see `merchant_pending_confirmation.py`). No model
+classifies a confirmation, and a scheduled (`CronCreate`/`ScheduleWakeup`/`RemoteTrigger`) prompt
+can never carry one. The policy gate records one dispatch receipt for it. The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
 the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an
