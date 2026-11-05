@@ -369,6 +369,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
     project_preview.add_argument("--merchant-hint")
     project_preview.add_argument("--type-hint")
     project_preview.add_argument("--title-hint")
+    # Read-only natural-language Project discovery and workflow status.
+    project_status = project_actions.add_parser("status")
+    project_status.add_argument("--request", required=True)
 
     project_resolve = project_actions.add_parser("resolve")
     project_resolve.add_argument(
@@ -626,6 +629,11 @@ def dispatch_read_command(
             merchant_hint=args.merchant_hint,
             project_type_hint=args.type_hint,
             title_hint=args.title_hint,
+            database_target=args.database,
+        )
+    if command == "project status":
+        return commands.project_status(
+            request=args.request,
             database_target=args.database,
         )
     if command == "step resolve":

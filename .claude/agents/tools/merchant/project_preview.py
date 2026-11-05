@@ -138,7 +138,7 @@ def build_project_preview(
         return preview
 
     merchants = reader.list_merchants()
-    merchant, site, merchant_question = _resolve_merchant(
+    merchant, site, merchant_question = resolve_merchant(
         merchants,
         interpretation.merchant_phrase,
         interpretation.site_phrase,
@@ -442,7 +442,7 @@ def _leading_merchant(catalog, phrase: str):
     return None, None, phrase
 
 
-def _resolve_merchant(
+def resolve_merchant(
     merchants: list[dict[str, Any]],
     phrase: str | None,
     site: str | None,

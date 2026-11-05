@@ -357,6 +357,26 @@ runs the deterministic completeness gate before any execute request or write-fie
 clarification. If the semantic action itself is unclear, preserve that ambiguity; the teammate
 uses its `action_semantics` clarification path.
 
+### Project status delivery (CP12H.NL4A)
+
+A Project status or list question ("Project … đến bước nào?", "Liệt kê các Project của …") is a
+read-only run (`merchant_read`, no `--confirm`). `merchant-manager` answers it with
+`project status --request "<user words>"`, and its report carries the CLI result once after
+`MERCHANT_PROJECT_STATUS_JSON:`; the policy gate has checked that object against the CLI output
+it captured. Build your summary only from that object:
+
+- the Project's `project_id`, `title`, `status`, Merchant `code`, `project_type`,
+  `workflow_variant` and `last_updated_at`, and `database_target`;
+- `step_counts`; `current_steps` (actionable: READY or IN_PROGRESS); `waiting_steps` with their
+  `unmet_predecessors`; `dependency_ready_steps` (unlocked but still PENDING); `completed_steps`
+  and `skipped_steps` separately (SKIPPED is never COMPLETED); `approval_gates`; `evidence`;
+- for `NEEDS_CLARIFICATION`, the question and any `candidates` (never choose one);
+- for `PROJECT_LIST`, the Projects with their status.
+
+Never add, infer or change a step state from the conversation. State what a step waits on only
+from its own `unmet_predecessors`; steps sharing predecessors are parallel, never a range. A `STATUS_DELIVERY_FAILED` report
+is not a status: report the failure only.
+
 ### Project preview operation delivery
 
 A `project preview` that is `READY_FOR_CONFIRMATION` reaches you inside the teammate's report

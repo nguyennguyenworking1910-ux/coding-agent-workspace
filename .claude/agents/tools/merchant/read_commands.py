@@ -275,6 +275,23 @@ class MerchantReadCommands:
             **resolution.to_dict(),
         }
 
+    def project_status(
+        self,
+        *,
+        request: str,
+        database_target: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only natural-language Project discovery and status."""
+
+        from .project_status import build_project_status
+
+        result = build_project_status(
+            request,
+            self.repository,
+            database_target=database_target,
+        )
+        return cast(dict[str, Any], redact_payload(result))
+
     def project_list(
         self,
         *,

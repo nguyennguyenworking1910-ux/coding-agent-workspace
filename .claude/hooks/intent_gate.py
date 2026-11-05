@@ -807,10 +807,17 @@ def run(
     ):
         from claude.agents.tools.merchant.project_nl import (
             PROJECT_CREATE,
+            PROJECT_LIST,
+            PROJECT_STATUS,
             interpret_project_request,
         )
 
-        if interpret_project_request(request).kind == PROJECT_CREATE:
+        # CP12H.NL4A: Project status and list questions are reads too.
+        if interpret_project_request(request).kind in {
+            PROJECT_CREATE,
+            PROJECT_STATUS,
+            PROJECT_LIST,
+        }:
             operations = {MERCHANT_READ_OPERATION}
             envelope_payload.update(
                 operations=[MERCHANT_READ_OPERATION],
@@ -820,8 +827,9 @@ def run(
             envelope_payload["reasons"] = list(
                 envelope_payload.get("reasons") or []
             ) + [
-                "Unscoped Project create request runs as the read-only "
-                "preview; creating needs the user's separate confirmation."
+                "Unscoped Project create, status or list request runs as a "
+                "read-only preview or status read; creating needs the user's "
+                "separate confirmation."
             ]
 
     if envelope_payload.get("requires_confirmation") and not confirmed:

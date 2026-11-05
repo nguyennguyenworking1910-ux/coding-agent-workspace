@@ -47,13 +47,13 @@ TABLES = (
 )
 
 
-def _delete_fixtures(repository, merchant_ids):
+def _delete_fixtures(repository, merchant_ids, prefix=CODE_PREFIX):
     with repository.connection() as connection:
         with connection.transaction():
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT id FROM merchant_ops.merchants WHERE code LIKE %s",
-                    (CODE_PREFIX + "%",),
+                    (prefix + "%",),
                 )
                 ids = {row["id"] for row in cursor.fetchall()} | set(merchant_ids)
                 for merchant_id in ids:

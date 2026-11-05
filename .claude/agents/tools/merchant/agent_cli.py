@@ -53,6 +53,8 @@ except ModuleNotFoundError:
 RUNTIME_DATABASE_TARGET = "runtime"
 TEST_DATABASE_TARGET = "test"
 TEST_PREVIEW_OPTION = "--test-database"
+# The only reads that may name the Merchant test database.
+TEST_DATABASE_READS = frozenset({("project", "preview"), ("project", "status")})
 
 CREDENTIAL_OR_TARGET_OPTIONS = frozenset(
     {
@@ -87,9 +89,9 @@ def prepare_agent_cli_argv(
     values = _normalized_arguments(arguments)
     target = RUNTIME_DATABASE_TARGET
 
-    # The read-only Project preview may read the Merchant test database,
-    # for a user who asked about test data. It grants no write.
-    if values[:2] == ("project", "preview") and TEST_PREVIEW_OPTION in values:
+    # The read-only Project preview and status may read the Merchant test
+    # database, for a user who asked about test data. They grant no write.
+    if values[:2] in TEST_DATABASE_READS and TEST_PREVIEW_OPTION in values:
         values = tuple(value for value in values if value != TEST_PREVIEW_OPTION)
         target = TEST_DATABASE_TARGET
 

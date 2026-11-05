@@ -115,6 +115,7 @@ The registered read command families are:
 - `project preview`
 - `project resolve`
 - `project show`
+- `project status`
 - `project history`
 - `project blockers`
 - `project alerts`
@@ -136,6 +137,29 @@ Only these read commands are authorized:
 | Show project blockers | `project blockers <project_id>` |
 | Show project alerts | `project alerts [<project_id>] [--merchant-id <merchant_id>] [--project-id <project_id>]` |
 | Preview a Project creation from the user's words | `project preview --request "<user request text>" [--test-database] [--merchant-hint "<text>"] [--type-hint <PROJECT_TYPE>] [--title-hint "<text>"]` |
+| Project status, current steps or a Merchant's Projects, from the user's words | `project status --request "<user request text>" [--test-database]` |
+
+### Natural-language Project status (CP12H.NL4A)
+
+For a question about an existing Project's status, workflow progress, pending, completed or
+blocked steps, or a Merchant's list of Projects ("Project Beta Nguyễn Văn Cừ hiện tại đến bước
+nào?", "Liệt kê các Project của Merchant Beta Cinemas"), run `project status` once with the
+user's request text verbatim. Add `--test-database` exactly when the assignment's
+`database_target` is `test`. It is read-only and never authorizes a write.
+
+- The CLI binds the Project only from the repository (exact ID, exact title, or Merchant plus
+  title). `NEEDS_CLARIFICATION` with `candidates` means several matched or none did: relay the
+  question and candidates; never pick one yourself and never run another read to guess.
+- Report step state only from the result. A user's claim that a step is done does not make it
+  COMPLETED; SKIPPED is not COMPLETED; a PENDING step is actionable only when it appears in
+  `current_steps` (READY or IN_PROGRESS). `dependency_ready_steps` are unlocked but still PENDING.
+- Describe what a step waits on only from its own `unmet_predecessors`; never merge steps into
+  one range or chain. Steps with the same predecessors run in parallel ("2 and 3 wait on 1; 4
+  waits on 2 and 3", not "2–4 wait on 1").
+- Your report must contain the CLI's result exactly once, on its own line after
+  `MERCHANT_PROJECT_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
+  precede it. If the gate says the output could not be verified, send the report once starting
+  with `STATUS_DELIVERY_FAILED:` and the reason, without the block or step state.
 
 ### Natural-language Project preview
 

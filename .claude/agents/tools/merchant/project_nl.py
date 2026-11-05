@@ -64,31 +64,66 @@ _EXPLORATORY = (
     r"lam (?:sao|the nao)|nhu the nao|what if|neu tao|is it possible|"
     r"co the tao .* khong|can we\b.*\?)"
 )
-_STEP_UPDATE = (
+# An update verb that names the step: never inferred from a state word.
+_STEP_UPDATE_EXPLICIT = (
     r"\b(?:(?:cap nhat|hoan thanh|danh dau|chuyen) buoc|"
-    r"buoc .{0,40} (?:da )?(?:xong|hoan thanh)|"
     r"(?:update|complete|mark|finish|close) (?:the )?(?:\w+ ){0,3}step)\b"
+)
+# The explicit verbs, or a step stated as done ("bước X đã xong").
+_STEP_UPDATE = (
+    _STEP_UPDATE_EXPLICIT + r"|\bbuoc .{0,40} (?:da )?(?:xong|hoan thanh)\b"
+)
+# A question about steps ("Những bước nào đã hoàn thành ...?") is a read.
+_STEP_QUESTION = (
+    r"\b(?:buoc nao|nhung buoc|cac buoc|buoc dang cho|dang cho|con vuong|"
+    r"vuong o dau|bi vuong|which steps?|what steps?|pending steps|"
+    r"remaining steps|(?:list|show)(?: me)?(?: all)?(?: the)? steps)\b"
 )
 _STATUS = (
     r"\b(?:dang o buoc nao|o buoc nao|buoc nao|buoc hien tai|tien do|"
     r"trang thai|which step|what step|current step|status of|progress of|"
     r"where is)\b"
 )
+# A collection operation over Projects: a list verb, or a plural/"all"
+# determiner, whose object is the Project noun. The words in between may not
+# name steps ("liệt kê các bước của Project X" is about one Project). English
+# needs the plural ("show me the status of project X" is one Project);
+# Vietnamese nouns have none.
+_NOT_STEP = r"(?: (?!buoc\b|steps?\b)\w+)"
+_LIST_OPERATION = (
+    rf"\b(?:(?:liet ke|danh sach){_NOT_STEP}{{0,3}} {_PROJECT_NOUN}"
+    rf"|(?:list|show(?: me)? all){_NOT_STEP}{{0,3}} projects"
+    rf"|(?:tat ca|cac|nhung){_NOT_STEP}{{0,2}} {_PROJECT_NOUN}"
+    rf"|all{_NOT_STEP}{{0,2}} projects)\b"
+)
+# Weaker list wording, after status: "project hiện có", "which projects".
 _LIST = (
-    r"\b(?:(?:cac|nhung|danh sach|liet ke)(?: \w+){0,2} " + _PROJECT_NOUN
-    + r"|" + _PROJECT_NOUN + r" (?:hien tai|hien co|dang chay)"
+    r"\b(?:" + _PROJECT_NOUN + r" (?:hien tai|hien co|dang chay)"
     + r"|(?:list|show|what|which|current|existing)(?: \w+){0,2} projects)\b"
 )
+# "trạng thái từng Project", "each project's step": fields asked per item.
+_PER_ITEM = r"\b(?:tung|each|every|all|tat ca|moi(?= (?:projects?|du an)\b))\b"
 
 # Words that end a name phrase.
 _STOP_WORDS = frozenset(
     "cho cua o tai la gi va for of at in to with and is are dang nao "
     "project projects please nhe nha giup minh toi khong without co can "
-    "khi voi under thuoc tren on database db".split()
+    "khi voi under thuoc tren on database db "
+    # A verb after a name: "Project X depends on ...", "Project X bị vướng".
+    "depend depends waiting waits blocked bi".split()
 )
 _STOP_PAIRS = frozenset({"hien tai", "hien co", "du an", "la gi"})
 # Words skipped at the start of a name phrase.
 _LEAD_WORDS = frozenset({"the", "a", "rap", "cinema", "project", "projects"})
+# Anchor collocations that are not "owned by" / "for": "phụ thuộc" (depends),
+# "thuộc vào" (depends on), "cho biết" (tell). Folded words.
+_NOT_NAME_BEFORE = {"thuoc": frozenset({"phu", "le", "tuy"})}
+_NOT_NAME_AFTER = {
+    "thuoc": frozenset({"vao"}),
+    "cho": frozenset({"biet", "xem", "hoi"}),
+}
+# A step is never a Merchant or Project name ("của bước khác").
+_STEP_NOUNS = frozenset({"buoc", "step", "steps"})
 
 
 @dataclass(frozen=True)
@@ -163,20 +198,7 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         text,
     ) is not None
 
-    if re.search(_STEP_UPDATE, text):
-        kind = STEP_UPDATE
-    elif creates_merchant and creates_project:
-        kind = MIXED
-    elif creates_merchant:
-        kind = MERCHANT_CREATE
-    elif creates_project:
-        kind = PROJECT_CREATE
-    elif has_project and re.search(_STATUS, text):
-        kind = PROJECT_STATUS
-    elif re.search(_LIST, text):
-        kind = PROJECT_LIST
-    else:
-        kind = UNKNOWN
+    kind = _classify(text, has_project, creates_merchant, creates_project)
 
     merchant_phrase = site_phrase = project_phrase = None
 
@@ -197,11 +219,14 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
             # "mở rạp Beta Nguyễn Văn Cừ": the merchant leads the site name.
             merchant_phrase, site_phrase = site_phrase, None
     elif kind == PROJECT_LIST:
-        merchant_phrase = words.phrase_after_word(("cua", "of", "for", "cho"))
+        # The first owner in reading order: "projects for Beta ... status of each".
+        merchant_phrase = words.owner_phrase(("cua", "of", "for", "cho", "thuoc", "under"))
     elif kind == PROJECT_STATUS:
         project_phrase = words.phrase_after_word(
             ("project", "projects", "du an")
         ) or words.phrase_after_word(("of",))
+        # "Project X của Lotte Cinema": the owner, not "của Project X".
+        merchant_phrase = words.owner_phrase(("cua", "of", "thuoc", "under"))
 
     write_requested = (
         kind in {PROJECT_CREATE, MERCHANT_CREATE, STEP_UPDATE, MIXED}
@@ -278,6 +303,43 @@ def requests_test_database(request: str) -> bool:
             return True
 
     return False
+
+
+def _classify(
+    text: str, has_project: bool, creates_merchant: bool, creates_project: bool
+) -> str:
+    """The primary operation, in precedence order. Writes first, then reads.
+
+    For reads, the operation is decided by its object, not by the fields the
+    user asks to see: "liệt kê tất cả Project ... trạng thái từng Project"
+    lists Projects (with their status); a step question about one Project
+    ("liệt kê các bước của Project X") is a status read. A list verb plus a
+    step question without a per-item word ("liệt kê Project X đang ở bước
+    nào") stays a single-Project status read, which asks when no Project is
+    named rather than guessing.
+    """
+
+    step_question = re.search(_STEP_QUESTION, text) is not None
+
+    if re.search(_STEP_UPDATE_EXPLICIT, text) or (
+        re.search(_STEP_UPDATE, text) and not step_question
+    ):
+        return STEP_UPDATE
+    if creates_merchant and creates_project:
+        return MIXED
+    if creates_merchant:
+        return MERCHANT_CREATE
+    if creates_project:
+        return PROJECT_CREATE
+    if re.search(_LIST_OPERATION, text) and (
+        not step_question or re.search(_PER_ITEM, text)
+    ):
+        return PROJECT_LIST
+    if step_question or (has_project and re.search(_STATUS, text)):
+        return PROJECT_STATUS
+    if re.search(_LIST, text):
+        return PROJECT_LIST
+    return UNKNOWN
 
 
 def _project_type(text: str) -> tuple[str | None, int | None]:
@@ -375,11 +437,48 @@ class _Words:
         for anchor in anchors:
             parts = anchor.split()
             for index in range(len(self.folded_words) - len(parts) + 1):
-                if self.folded_words[index:index + len(parts)] == parts:
+                if self.folded_words[index:index + len(parts)] == parts and (
+                    self._introduces_name(index, len(parts))
+                ):
                     phrase = self._phrase(index + len(parts))
                     if phrase:
                         return phrase
         return None
+
+    def owner_phrase(self, anchors: tuple[str, ...]) -> str | None:
+        """Phrase after an anchor that does not introduce a Project noun."""
+
+        for index, word in enumerate(self.folded_words):
+            following = index + 1
+            if (
+                word in anchors
+                and self._introduces_name(index, 1)
+                and self.folded_words[following] not in ("project", "projects")
+                and self._pair(following) != "du an"
+            ):
+                phrase = self._phrase(following)
+                if phrase:
+                    return phrase
+        return None
+
+    def _introduces_name(self, index: int, length: int) -> bool:
+        """Whether the anchor at ``index`` introduces a name, by its context.
+
+        "thuộc Beta Cinemas" names an owner; "phụ thuộc vào bước khác",
+        "tùy thuộc vào", "cho biết" and "của bước khác" do not.
+        """
+
+        anchor = " ".join(self.folded_words[index:index + length])
+        following = index + length
+        if following >= len(self.folded_words):
+            return False
+        before = self.folded_words[index - 1] if index else None
+        after = self.folded_words[following]
+        return not (
+            before in _NOT_NAME_BEFORE.get(anchor, ())
+            or after in _NOT_NAME_AFTER.get(anchor, ())
+            or after in _STEP_NOUNS
+        )
 
     def _pair(self, index: int) -> str:
         return " ".join(self.folded_words[index:index + 2])
