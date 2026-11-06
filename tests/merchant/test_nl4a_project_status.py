@@ -377,14 +377,21 @@ def test_status_requests_run_read_only_without_confirm(isolated, text, target):
     assert run.get("merchant_scope") is None
 
 
-def test_explicit_step_update_still_needs_confirmation(isolated):
+def test_explicit_step_update_runs_only_as_a_read_only_preview(isolated):
+    # CP12H.NL4B changed this on purpose: an unscoped Step update was blocked
+    # for --confirm; it now runs only as the read-only `step preview`, with no
+    # write scope (Step Update confirmation does not exist yet).
     output = intent_gate.run(
         {"hook_event_name": "UserPromptSubmit", "session_id": LEAD,
          "prompt": "/solve Cập nhật bước Legal review của project Beta là xong"},
         parser_factory=ExecuteParser, env={},
     )
 
-    assert output.get("decision") == "block"
+    assert output.get("decision") != "block", output
+    run = runtime_state.load_state(LEAD)
+    assert run["operations"] == ["merchant_read"]
+    assert run["risk_level"] == "read_only"
+    assert run.get("merchant_scope") is None
 
 
 # ------------------------------------------------- database target isolation

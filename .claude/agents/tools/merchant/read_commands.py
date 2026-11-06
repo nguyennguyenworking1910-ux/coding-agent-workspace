@@ -292,6 +292,23 @@ class MerchantReadCommands:
         )
         return cast(dict[str, Any], redact_payload(result))
 
+    def step_preview(
+        self,
+        *,
+        request: str,
+        database_target: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only natural-language Step Update preview (CP12H.NL4B)."""
+
+        from .step_preview import build_step_update_preview
+
+        result = build_step_update_preview(
+            request,
+            self.repository,
+            database_target=database_target,
+        )
+        return cast(dict[str, Any], redact_payload(result))
+
     def project_list(
         self,
         *,

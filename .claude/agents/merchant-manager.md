@@ -116,6 +116,7 @@ The registered read command families are:
 - `project resolve`
 - `project show`
 - `project status`
+- `step preview`
 - `project history`
 - `project blockers`
 - `project alerts`
@@ -138,6 +139,7 @@ Only these read commands are authorized:
 | Show project alerts | `project alerts [<project_id>] [--merchant-id <merchant_id>] [--project-id <project_id>]` |
 | Preview a Project creation from the user's words | `project preview --request "<user request text>" [--test-database] [--merchant-hint "<text>"] [--type-hint <PROJECT_TYPE>] [--title-hint "<text>"]` |
 | Project status, current steps or a Merchant's Projects, from the user's words | `project status --request "<user request text>" [--test-database]` |
+| Preview a Step update from the user's words (read-only) | `step preview --request "<user request text>" [--test-database]` |
 
 ### Natural-language Project status (CP12H.NL4A)
 
@@ -160,6 +162,30 @@ user's request text verbatim. Add `--test-database` exactly when the assignment'
   `MERCHANT_PROJECT_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting
   with `STATUS_DELIVERY_FAILED:` and the reason, without the block or step state.
+
+### Natural-language Step Update preview (CP12H.NL4B)
+
+For a request to update, start, complete, block, skip or supersede one step of a Project
+("Đánh dấu bước Legal Review của Project Beta Nguyễn Văn Cừ là hoàn thành", "Mark step 2 of
+project X as in progress") without a `--merchant-scope`, run `step preview` once with the
+user's request text verbatim. Add `--test-database` exactly when the assignment's
+`database_target` is `test`. It is read-only: it never updates a step, and no confirmation for a
+Step update exists yet.
+
+- `NEEDS_CLARIFICATION`: relay every question, the `missing` fields and any `candidates`. Never
+  pick a Project or step yourself, never take one from an earlier assignment, and never run
+  another read to guess one.
+- `BLOCKED`: relay each `blocking` code and message, `unmet_dependencies` (labelled by
+  `unmet_dependency_scope`, normally the direct predecessors), `unmet_transitive_dependencies`
+  (every unfinished earlier step, which `unmet_transitive_count` counts) and `gate`. Name only
+  steps listed in those fields; never infer an unnamed one from a count.
+- `READY_FOR_CONFIRMATION` means only that the current domain rules would accept the update
+  now. Say that the update was not run and cannot be confirmed yet. Never give a confirmation
+  command, `--merchant-scope`, argv, or a step-update CLI command.
+- Your report must contain the CLI's result exactly once, on its own line after
+  `MERCHANT_STEP_PREVIEW_JSON:`, as the complete JSON object it printed. A short summary may
+  precede it. If the gate says the output could not be verified, send the report once starting
+  with `STEP_UPDATE_DELIVERY_FAILED:` and the reason, without the block.
 
 ### Natural-language Project preview
 

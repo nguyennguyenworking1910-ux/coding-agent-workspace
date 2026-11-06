@@ -235,7 +235,10 @@ calling a dispatch tool:
    complete new assignment directly to that exact canonical teammate with
    `SendMessage`.
 3. If its status is `CREATED`, `DISPATCHED`, `RUNNING`, `REPORT_RECEIVED`,
-   `ACKNOWLEDGED`, `FAILED`, or unknown, stop and report the conflict. A report
+   `ACKNOWLEDGED`, `FAILED`, `STALE_DEFINITION`, or unknown, stop and report the
+   conflict. `STALE_DEFINITION` is an idle teammate started before its
+   `.claude/agents/` definition changed; it would run stale instructions, so the
+   user needs a fresh Claude Code session. A report
    can arrive just before the prior task becomes idle, so only
    `IDLE_REUSABLE` is safe. Do not create a replacement or suffixed name.
 4. In either create or reuse path, supply the same complete bounded assignment,
@@ -376,6 +379,24 @@ it captured. Build your summary only from that object:
 Never add, infer or change a step state from the conversation. State what a step waits on only
 from its own `unmet_predecessors`; steps sharing predecessors are parallel, never a range. A `STATUS_DELIVERY_FAILED` report
 is not a status: report the failure only.
+
+### Step Update preview delivery (CP12H.NL4B)
+
+An unscoped request to update one Project step is a read-only run (`merchant_read`, no
+`--confirm`). `merchant-manager` answers it with `step preview --request "<user words>"`; its
+report carries the CLI result once after `MERCHANT_STEP_PREVIEW_JSON:`, checked by the policy
+gate against the captured CLI output. Build your summary only from that object: `outcome`,
+`project` (id, title, `version`), `step` (sequence, name, status, `version`), `transition`,
+`unmet_dependencies` (scope in `unmet_dependency_scope`, normally direct predecessors) and
+`unmet_transitive_dependencies` (all unfinished earlier steps, counted by
+`unmet_transitive_count`), `gate`, `blocking`, `project_state`, and for `NEEDS_CLARIFICATION`
+every question, the `missing` fields and `candidates`. Name only steps those lists contain;
+never infer one from a count. Nothing was updated. `READY_FOR_CONFIRMATION` means the domain rules
+would accept the update now; Step Update confirmation does not exist yet, so never offer a
+confirmation, scope or command. A `STEP_UPDATE_DELIVERY_FAILED` report is not a preview:
+report the failure only. An idle notice's `RESULT_DELIVERED` means only that a report was
+sent; the outcome is what that report says, so a delivery failure or refusal is still a
+failure.
 
 ### Project preview operation delivery
 

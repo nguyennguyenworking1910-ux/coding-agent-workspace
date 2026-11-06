@@ -403,12 +403,52 @@ def new_team_state() -> dict[str, Any]:
     }
 
 
+def agent_definition_fingerprint(role: Any) -> str | None:
+    """sha256 of the agent definition the harness loads when a pane starts.
+
+    A teammate keeps the definition it started with for its whole life, so a
+    reused teammate whose definition has since changed runs stale
+    instructions. None when the role is not a plain agent id or the file
+    cannot be read.
+    """
+
+    import hashlib
+    import re
+
+    if not isinstance(role, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", role):
+        return None
+
+    try:
+        return hashlib.sha256((CLAUDE_DIR / "agents" / f"{role}.md").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def teammate_definition_current(record: Any) -> bool:
+    """True only if the teammate started with today's definition file.
+
+    A record with no fingerprint (spawned before fingerprints existed) is
+    never current: it fails closed.
+    """
+
+    if not isinstance(record, dict):
+        return False
+
+    stored = record.get("definition_sha256")
+    return stored is not None and stored == agent_definition_fingerprint(record.get("role"))
+
+
 def init_teammate_record(
     role: str,
     teammate_name: str,
 ) -> dict[str, Any]:
-    """Create a new teammate record for a given role."""
+    """Create a new teammate record for a given role.
+
+    Allocation happens before the harness starts the pane, so the recorded
+    definition fingerprint is never newer than what the teammate loads.
+    """
     return {
+        "definition_sha256": agent_definition_fingerprint(role),
         "role": role,
         "canonical_name": teammate_name,
         "status": TeammateLifecycleStatus.CREATED.value,

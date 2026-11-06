@@ -409,6 +409,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--allow-reopen",
         action="store_true",
     )
+    # CP12H.NL4B: read-only natural-language Step Update preview.
+    step_preview = step_actions.add_parser("preview")
+    step_preview.add_argument("--request", required=True)
     step_resolve = (
         step_actions.add_parser(
             "resolve"
@@ -633,6 +636,11 @@ def dispatch_read_command(
         )
     if command == "project status":
         return commands.project_status(
+            request=args.request,
+            database_target=args.database,
+        )
+    if command == "step preview":
+        return commands.step_preview(
             request=args.request,
             database_target=args.database,
         )

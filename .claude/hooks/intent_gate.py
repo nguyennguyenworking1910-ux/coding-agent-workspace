@@ -39,6 +39,7 @@ if __package__ in (None, ""):
     )
     from team_lifecycle import (  # noqa: E402
         load_team_state,
+        teammate_definition_current,
     )
     from intent_envelope_bridge import (
         load_intent_envelope,
@@ -56,6 +57,7 @@ else:
     )
     from .team_lifecycle import (
         load_team_state,
+        teammate_definition_current,
     )
     from .intent_envelope_bridge import (
         load_intent_envelope,
@@ -374,9 +376,14 @@ def build_team_state_snapshot(
     for agent_id in selected_agents:
         for teammate_name, record in teammates.items():
             if record.get("role") == agent_id:
+                status = record.get("status", "UNKNOWN")
+                # CP12H.NL4B-FIX1: an idle teammate started with an older
+                # definition is not reusable (the policy gate refuses it too).
+                if status == "IDLE_REUSABLE" and not teammate_definition_current(record):
+                    status = "STALE_DEFINITION"
                 snapshot[agent_id] = {
                     "canonical_name": teammate_name,
-                    "status": record.get("status", "UNKNOWN"),
+                    "status": status,
                     "exists": True,
                 }
                 break
@@ -747,17 +754,6 @@ def run(
                 "No agents were dispatched. Fix the cause and resubmit."
             )
 
-    if envelope_payload.get("requires_clarification"):
-        reasons = envelope_payload.get("reasons") or []
-        detail = f" Parser notes: {'; '.join(str(r) for r in reasons[:3])}" if reasons else ""
-
-        return block(
-            f"/{command} needs a clearer request before it can run: the intent "
-            "parser flagged missing information that would change what gets "
-            f"done.{detail} Resubmit with the target and expected outcome stated. "
-            f"`{CONFIRM_FLAG}` does not substitute for this."
-        )
-
     operations = {
         str(operation)
         for operation in envelope_payload.get("operations") or []
@@ -809,14 +805,20 @@ def run(
             PROJECT_CREATE,
             PROJECT_LIST,
             PROJECT_STATUS,
+            STEP_UPDATE,
             interpret_project_request,
         )
 
         # CP12H.NL4A: Project status and list questions are reads too.
-        if interpret_project_request(request).kind in {
+        # CP12H.NL4B: an unscoped Step update runs only as the read-only
+        # `step preview`; no Step Update confirmation exists yet (NL4C).
+        kind = interpret_project_request(request).kind
+
+        if kind in {
             PROJECT_CREATE,
             PROJECT_STATUS,
             PROJECT_LIST,
+            STEP_UPDATE,
         }:
             operations = {MERCHANT_READ_OPERATION}
             envelope_payload.update(
@@ -824,13 +826,30 @@ def run(
                 risk_level="read_only",
                 requires_confirmation=False,
             )
+
+            # CP12H.NL4B-FIX2B: a missing Project/Step/status is answered by
+            # the step preview's own NEEDS_CLARIFICATION, not by a block here.
+            if kind == STEP_UPDATE:
+                envelope_payload["requires_clarification"] = False
+
             envelope_payload["reasons"] = list(
                 envelope_payload.get("reasons") or []
             ) + [
-                "Unscoped Project create, status or list request runs as a "
-                "read-only preview or status read; creating needs the user's "
-                "separate confirmation."
+                "Unscoped Project create, status, list or Step update request "
+                "runs as a read-only preview or status read; any write needs "
+                "the user's separate confirmation."
             ]
+
+    if envelope_payload.get("requires_clarification"):
+        reasons = envelope_payload.get("reasons") or []
+        detail = f" Parser notes: {'; '.join(str(r) for r in reasons[:3])}" if reasons else ""
+
+        return block(
+            f"/{command} needs a clearer request before it can run: the intent "
+            "parser flagged missing information that would change what gets "
+            f"done.{detail} Resubmit with the target and expected outcome stated. "
+            f"`{CONFIRM_FLAG}` does not substitute for this."
+        )
 
     if envelope_payload.get("requires_confirmation") and not confirmed:
         risk_level = envelope_payload.get("risk_level", "unknown")

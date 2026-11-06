@@ -52,6 +52,7 @@ if __package__ in (None, ""):
         mark_teammate_running,
         reserve_reusable_teammate,
         reused_teammate_pane_matches,
+        teammate_definition_current,
         load_team_state,
     )
 
@@ -109,6 +110,7 @@ else:
         mark_teammate_running,
         reserve_reusable_teammate,
         reused_teammate_pane_matches,
+        teammate_definition_current,
         load_team_state,
     )
 
@@ -3026,6 +3028,20 @@ def _check_teammate_message(
             "verified when it was spawned (the pane is gone, was recycled, or "
             "was never verified). /solve does not reuse it. Nothing was sent; "
             "report this and stop."
+        )
+
+    # CP12H.NL4B-FIX1: a teammate keeps the definition its pane loaded at
+    # spawn; one started before .claude/agents/<role>.md changed runs stale
+    # instructions (and was never fingerprinted if it predates this check).
+    if not teammate_definition_current(
+        ((load_team_state(session_id) or {}).get("teammates") or {}).get(recipient)
+    ):
+        return deny(
+            f"Blocked: teammate '{recipient}' was started with an older "
+            f"definition than the current .claude/agents/ file, so it would run "
+            "stale instructions. /solve does not reuse it. Nothing was sent; "
+            "report this and stop. A fresh Claude Code session starts a "
+            "teammate with the current definition."
         )
 
     reserved, prior_status = reserve_reusable_teammate(

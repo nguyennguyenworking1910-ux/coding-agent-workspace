@@ -11,6 +11,7 @@ exploratory, preview-only and question wording never requests one.
 
 from __future__ import annotations
 
+import copy
 import re
 import unicodedata
 from dataclasses import asdict, dataclass
@@ -66,8 +67,8 @@ _EXPLORATORY = (
 )
 # An update verb that names the step: never inferred from a state word.
 _STEP_UPDATE_EXPLICIT = (
-    r"\b(?:(?:cap nhat|hoan thanh|danh dau|chuyen) buoc|"
-    r"(?:update|complete|mark|finish|close) (?:the )?(?:\w+ ){0,3}step)\b"
+    r"\b(?:(?:cap nhat|hoan thanh|danh dau|chuyen|bat dau|bo qua) buoc|"
+    r"(?:update|complete|mark|finish|close|start|skip) (?:the )?(?:\w+ ){0,6}step)\b"
 )
 # The explicit verbs, or a step stated as done ("bước X đã xong").
 _STEP_UPDATE = (
@@ -77,7 +78,9 @@ _STEP_UPDATE = (
 _STEP_QUESTION = (
     r"\b(?:buoc nao|nhung buoc|cac buoc|buoc dang cho|dang cho|con vuong|"
     r"vuong o dau|bi vuong|which steps?|what steps?|pending steps|"
-    r"remaining steps|(?:list|show)(?: me)?(?: all)?(?: the)? steps)\b"
+    r"remaining steps|(?:list|show)(?: me)?(?: all)?(?: the)? steps|"
+    # "Bước X đã hoàn thành chưa?" asks; it does not mark anything.
+    r"(?:xong|hoan thanh) chua|(?:is|has) (?:the )?(?:\w+ ){0,4}step)\b"
 )
 _STATUS = (
     r"\b(?:dang o buoc nao|o buoc nao|buoc nao|buoc hien tai|tien do|"
@@ -96,6 +99,64 @@ _LIST_OPERATION = (
     rf"|(?:tat ca|cac|nhung){_NOT_STEP}{{0,2}} {_PROJECT_NOUN}"
     rf"|all{_NOT_STEP}{{0,2}} projects)\b"
 )
+# CP12H.NL4B: the state a step update asks for. Folded phrases, longest first
+# within a state; values are the domain's step statuses (state_machine).
+_TARGET_STATES = (
+    ("IN_PROGRESS", r"dang thuc hien|dang tien hanh|dang lam|in progress|in-progress|started"),
+    ("COMPLETED", r"hoan thanh|da xong|xong|completed|complete|done|finished"),
+    ("READY", r"san sang|ready"),
+    ("BLOCKED", r"bi chan|tam chan|blocked"),
+    ("SKIPPED", r"bo qua|skipped|skip"),
+    ("SUPERSEDED", r"bi thay the|superseded"),
+)
+# "... là hoàn thành", "... thành đang thực hiện", "... as in progress".
+_STATE_CONNECTOR = r"(?:la|thanh|sang|ve|as|to|into)"
+_ANY_STATE = "|".join(pattern for _, pattern in _TARGET_STATES)
+# CP12H.NL4B-FIX2: "Đánh dấu Legal Review là hoàn thành", "Mark X as completed":
+# an explicit mark verb and a connector clause name a step without the noun.
+_MARK_AS = (
+    rf"\b(?:danh dau|mark) (?:\w+ ){{1,8}}?{_STATE_CONNECTOR} "
+    rf"(?:(?:da|duoc|the|be) )?(?:{_ANY_STATE})\b"
+)
+# A state stated right after the name with no connector ("Đánh dấu bước Legal
+# Review hoàn thành"). Only phrases that already end a name phrase (stop words
+# and pairs), so a state word inside a step title ("Complete UAT acceptance")
+# is never read as the target.
+_BARE_STATES = (
+    ("COMPLETED", r"(?:da )?(?:hoan thanh|xong)"),
+    ("IN_PROGRESS", r"(?:dang thuc hien|dang tien hanh|dang lam)"),
+    ("BLOCKED", r"bi chan"),
+)
+_BARE_STATE_VERB = r"\b(?:danh dau|cap nhat|chuyen) buoc\b"
+# A yes/no question about a step's state is a read, even with an update verb
+# ("Đã đánh dấu bước X hoàn thành chưa?", "Did you mark ... ?").
+_DONE_QUESTION = r"\b(?:xong|hoan thanh) chua\b|^(?:did|have|has|was|is) "
+# Hedged wording never requests a write: "Có lẽ đánh dấu ...", "Maybe mark ...".
+_STEP_UNCERTAIN = (
+    r"\b(?:co le|hinh nhu|chac la|khong biet co|co nen|maybe|perhaps|"
+    r"not sure|should (?:i|we)|i think)\b"
+)
+# CP12H.NL4B-FIX2B: a second action joined to a step update ("... và lên lịch
+# họp", "... rồi xóa merchant", "... and then delete ...") makes the request
+# MIXED: it is never downgraded to the single-step read-only preview.
+_FURTHER_ACTION = (
+    r"\b(?:va|roi|sau do|dong thoi|and|then|also|plus)(?: \w+){0,2}? "
+    r"(?:tao|xoa|sua|them|gui|len lich|dat lich|cap nhat|danh dau|chuyen|duyet|"
+    r"kich hoat|thuc thi|trien khai|chay|huy|doi|thay doi|nhap|gan|hoan thanh|"
+    r"bat dau|bo qua|create|delete|remove|fix|update|add|send|schedule|book|"
+    r"deploy|run|set|change|approve|activate|execute|cancel|mark|complete|start|"
+    r"skip|import|assign|email|notify|edit|refactor|implement)\b"
+)
+# A verb that itself names the state: "Hoàn thành bước X", "Start step 2".
+_STATE_VERBS = (
+    ("COMPLETED", r"^(?:hoan thanh|complete|finish|close)$"),
+    ("IN_PROGRESS", r"^(?:bat dau|start)$"),
+    ("SKIPPED", r"^(?:bo qua|skip)$"),
+)
+_STEP_NEGATION = (
+    r"\b(?:khong|dung|chua|ko|do not|don t|dont|never|not)\b(?: \w+){0,2}? "
+    r"(?:cap nhat|danh dau|hoan thanh|chuyen|bat dau|update|mark|complete|start|set)\b"
+)
 # Weaker list wording, after status: "project hiện có", "which projects".
 _LIST = (
     r"\b(?:" + _PROJECT_NOUN + r" (?:hien tai|hien co|dang chay)"
@@ -110,9 +171,14 @@ _STOP_WORDS = frozenset(
     "project projects please nhe nha giup minh toi khong without co can "
     "khi voi under thuoc tren on database db "
     # A verb after a name: "Project X depends on ...", "Project X bị vướng".
-    "depend depends waiting waits blocked bi".split()
+    "depend depends waiting waits blocked bi "
+    # "Project X completed?", "Project X đã hoàn thành chưa?" (pairs below:
+    # a bare "da" also folds from "Đà" as in "Đà Nẵng").
+    "completed finished done".split()
 )
-_STOP_PAIRS = frozenset({"hien tai", "hien co", "du an", "la gi"})
+_STOP_PAIRS = frozenset(
+    {"hien tai", "hien co", "du an", "la gi", "da hoan", "da xong", "hoan thanh"}
+)
 # Words skipped at the start of a name phrase.
 _LEAD_WORDS = frozenset({"the", "a", "rap", "cinema", "project", "projects"})
 # Anchor collocations that are not "owned by" / "for": "phụ thuộc" (depends),
@@ -124,6 +190,10 @@ _NOT_NAME_AFTER = {
 }
 # A step is never a Merchant or Project name ("của bước khác").
 _STEP_NOUNS = frozenset({"buoc", "step", "steps"})
+# Update verbs that end an English name read backwards from "step".
+_STEP_VERBS = frozenset(
+    {"mark", "update", "complete", "finish", "close", "set", "start", "skip", "move"}
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +212,10 @@ class ProjectRequestInterpretation:
     project_phrase: str | None
     requires_procurement: bool | None
     media_document: str | None
+    # CP12H.NL4B, STEP_UPDATE only: the step as written ("Legal Review", "1")
+    # and the requested domain status, or None when unclear or conflicting.
+    step_reference: str | None = None
+    target_status: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -199,6 +273,8 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
     ) is not None
 
     kind = _classify(text, has_project, creates_merchant, creates_project)
+    if kind == STEP_UPDATE and re.search(_FURTHER_ACTION, text):
+        kind = MIXED
 
     merchant_phrase = site_phrase = project_phrase = None
 
@@ -228,6 +304,23 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         # "Project X của Lotte Cinema": the owner, not "của Project X".
         merchant_phrase = words.owner_phrase(("cua", "of", "thuoc", "under"))
 
+    step_reference = target_status = None
+    if kind == STEP_UPDATE:
+        negated = negated or re.search(_STEP_NEGATION, text) is not None
+        exploratory = exploratory or re.search(_STEP_UNCERTAIN, text) is not None
+        target_status, clause_start = _target_status(text)
+        # Names end where the state clause begins: "... Test thành đang thực hiện".
+        subject = words.before(clause_start) if clause_start is not None else words
+        step_reference = subject.step_reference()
+        if step_reference is None and not set(subject.folded_words) & _STEP_NOUNS:
+            # "Mark Legal Review as completed": the name follows the mark verb.
+            step_reference = subject.marked_name()
+        # "... hoàn thành cho Project X": a Project may follow the state.
+        project_phrase = subject.phrase_after_word(
+            ("project", "projects", "du an")
+        ) or words.phrase_after_word(("project", "projects", "du an"))
+        merchant_phrase = subject.owner_phrase(("cua", "of", "thuoc", "under"))
+
     write_requested = (
         kind in {PROJECT_CREATE, MERCHANT_CREATE, STEP_UPDATE, MIXED}
         and not (negated or preview_only or exploratory)
@@ -246,7 +339,50 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         project_phrase=project_phrase,
         requires_procurement=_requires_procurement(text),
         media_document=_media_document(text),
+        step_reference=step_reference,
+        target_status=target_status,
     )
+
+
+def _target_status(text: str) -> tuple[str | None, int | None]:
+    """(requested status, folded offset where its clause starts).
+
+    A connector clause ("là hoàn thành", "as in progress") decides; otherwise
+    a verb that names the state ("Hoàn thành bước X"). Several different
+    states, or none, give None: the preview asks instead of guessing.
+    """
+
+    found = []
+    for status, pattern in _TARGET_STATES:
+        for match in re.finditer(
+            rf"\b{_STATE_CONNECTOR}(?: (?:da|duoc|the|be))? ({pattern})\b", text
+        ):
+            found.append((match.start(), status))
+
+    step_noun = re.search(_BARE_STATE_VERB, text)
+    if step_noun:
+        # The bare state after "bước <name>"; never the verb "hoàn thành bước".
+        for status, pattern in _BARE_STATES:
+            for match in re.finditer(rf"\b{pattern}\b(?! buoc\b)", text):
+                if match.start() > step_noun.end():
+                    found.append((match.start(), status))
+
+    if found:
+        states = {status for _, status in found}
+        start = min(offset for offset, _ in found)
+        return (states.pop() if len(states) == 1 else None), start
+
+    verb = re.search(
+        r"\b(hoan thanh|bat dau|bo qua) buoc\b"
+        r"|\b(complete|finish|close|start|skip) (?:the )?(?:\w+ ){0,3}step\b",
+        text,
+    )
+    if verb:
+        word = verb.group(1) or verb.group(2)
+        for status, pattern in _STATE_VERBS:
+            if re.search(pattern, word):
+                return status, None
+    return None, None
 
 
 # Role labels that may precede a Merchant name ("cho Merchant Beta Cinemas").
@@ -321,8 +457,9 @@ def _classify(
 
     step_question = re.search(_STEP_QUESTION, text) is not None
 
-    if re.search(_STEP_UPDATE_EXPLICIT, text) or (
-        re.search(_STEP_UPDATE, text) and not step_question
+    if not re.search(_DONE_QUESTION, text) and (
+        re.search(_STEP_UPDATE_EXPLICIT, text)
+        or (re.search(_STEP_UPDATE + "|" + _MARK_AS, text) and not step_question)
     ):
         return STEP_UPDATE
     if creates_merchant and creates_project:
@@ -460,6 +597,72 @@ class _Words:
                 if phrase:
                     return phrase
         return None
+
+    def before(self, end: int) -> "_Words":
+        """The words whose folded text starts before folded offset ``end``."""
+
+        prefix = copy.copy(self)
+        count = sum(1 for start in self.starts if start < end)
+        for name in ("original", "folded_words", "starts", "breaks"):
+            setattr(prefix, name, getattr(self, name)[:count])
+        prefix.folded = " ".join(prefix.folded_words)
+        return prefix
+
+    def step_reference(self) -> str | None:
+        """The step as written: "bước Legal Review", "step 1", "the X step".
+
+        A number after "bước số" / "step number" / "step #" is kept as digits;
+        it is matched against the stored sequence number, never a title.
+        """
+
+        found = []
+        for index, word in enumerate(self.folded_words):
+            if word in ("buoc", "step"):
+                reference = self._step_at(index)
+                if reference and reference not in found:
+                    found.append(reference)
+        # "bước 1 và bước 2": several steps in one request ask instead.
+        return found[0] if len(found) == 1 else None
+
+    def marked_name(self) -> str | None:
+        """The name after "đánh dấu" / "mark" when no step noun is written.
+
+        Never a Project or Merchant: "Mark project X as done" names no step.
+        """
+
+        for index, word in enumerate(self.folded_words):
+            pair = self._pair(index)
+            start = index + 2 if pair == "danh dau" else index + 1 if word == "mark" else None
+            if start is None or start >= len(self.folded_words):
+                continue
+            first = self.folded_words[start]
+            if first in ("project", "projects", "merchant", "merchants") or self._pair(start) in (
+                "du an", "doi tac",
+            ):
+                return None
+            return self._phrase(start)
+        return None
+
+    def _step_at(self, index: int) -> str | None:
+        following = index + 1
+        while following < len(self.folded_words) and self.folded_words[following] in (
+            "so", "number", "no",
+        ):
+            following += 1
+        if following < len(self.folded_words) and self.folded_words[following].isdigit():
+            return self.folded_words[following]
+        phrase = self._phrase(following)
+        if phrase:
+            return phrase
+        # "Mark the Legal review step of ...": the name precedes "step".
+        # Never "bước": "Đánh dấu bước hoàn thành" names no step (FIX2B).
+        if self.folded_words[index] != "step":
+            return None
+        start = index
+        while start > 0 and self.folded_words[start - 1] not in _STEP_VERBS:
+            start -= 1
+        name = [w for w in self.original[start:index] if fold(w) not in ("the", "a")]
+        return " ".join(name) or None
 
     def _introduces_name(self, index: int, length: int) -> bool:
         """Whether the anchor at ``index`` introduces a name, by its context.

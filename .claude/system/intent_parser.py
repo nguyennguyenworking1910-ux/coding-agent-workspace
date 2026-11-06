@@ -18,6 +18,7 @@ from openai import OpenAI
 
 try:
     from claude.agents.tools.merchant.project_nl import (
+        STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
         interpret_project_request,
     )
@@ -27,6 +28,7 @@ except ModuleNotFoundError:
         0, str(Path(__file__).resolve().parents[1] / "agents" / "tools" / "merchant")
     )
     from project_nl import (  # type: ignore
+        STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
         interpret_project_request,
     )
@@ -1179,7 +1181,14 @@ class IntentParser:
         # A Merchant Project request names a Project type ("mở rạp",
         # "cinema opening", "media top-up") even without the word Merchant.
         project_request = interpret_project_request(text)
-        merchant_project = project_request.project_type is not None
+        # CP12H.NL4B-FIX1/FIX2B: so is any recognized Step update, with or
+        # without a Project ("Đánh dấu bước X hoàn thành"); without this the
+        # model alone decided ownership and routed it to bug-fixer. MIXED
+        # requests (a second action) are not claimed here.
+        merchant_project = (
+            project_request.project_type is not None
+            or project_request.kind == STEP_UPDATE_REQUEST
+        )
 
         if not merchant_project and not any(
             re.search(pattern, text)

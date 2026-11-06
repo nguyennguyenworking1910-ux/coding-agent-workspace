@@ -126,7 +126,8 @@ def test_project_create_request_runs_as_the_read_only_preview(isolated):
     [
         "Tạo merchant Beta Cinemas mã BETA2",                     # a Merchant create
         "Tạo merchant Beta và project mở rạp Beta Nguyễn Văn Cừ",  # mixed
-        "Cập nhật bước Legal review của project Beta là xong",      # a step update
+        # CP12H.NL4B: an unscoped step update is now the read-only
+        # `step preview` (tests/merchant/test_nl4b_step_preview.py).
     ],
 )
 def test_other_writes_still_need_explicit_confirmation(isolated, request_text):

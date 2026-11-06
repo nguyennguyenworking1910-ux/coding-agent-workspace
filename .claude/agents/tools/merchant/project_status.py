@@ -80,17 +80,10 @@ def build_project_status(request: str, reads: Any, *, database_target: str | Non
 
     merchant = None
     if interpretation.merchant_phrase:
-        merchant, _, question = resolve_merchant(
-            reads.list_merchants(), interpretation.merchant_phrase, None, None
-        )
+        merchant, question = resolve_merchant_phrase(reads, interpretation.merchant_phrase)
         if merchant is None:
             return _ask(result, question)
-        result["merchant"] = {
-            "merchant_id": _text(merchant["merchant_id"]),
-            "code": merchant["code"],
-            "name": merchant["name"],
-            "match_kind": merchant["match_kind"],
-        }
+        result["merchant"] = merchant
 
     if interpretation.kind == PROJECT_LIST and project_uuid is None:
         return _project_list(result, reads, merchant, fold(request))
@@ -98,36 +91,63 @@ def build_project_status(request: str, reads: Any, *, database_target: str | Non
     if interpretation.kind != PROJECT_STATUS and project_uuid is None:
         return _ask(result, "Is this a question about one Project's status? Which Project?")
 
+    project, match_kind, candidates, question = resolve_project(
+        reads, merchant, result["query"]["project_id"], interpretation.project_phrase
+    )
+    if project is None:
+        result["candidates"] = candidates
+        return _ask(result, question)
+
+    return _project_status(result, reads, project, match_kind)
+
+
+def resolve_merchant_phrase(reads: Any, phrase: str) -> tuple[dict[str, Any] | None, str | None]:
+    """(Merchant summary, None) or (None, question), from the repository only."""
+
+    merchant, _, question = resolve_merchant(reads.list_merchants(), phrase, None, None)
+    if merchant is None:
+        return None, question
+    return {
+        "merchant_id": _text(merchant["merchant_id"]),
+        "code": merchant["code"],
+        "name": merchant["name"],
+        "match_kind": merchant["match_kind"],
+    }, None
+
+
+def resolve_project(
+    reads: Any, merchant: dict[str, Any] | None, project_id: str | None, phrase: str | None
+) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]], str | None]:
+    """(project row, match kind, [], None) for exactly one Project, else
+    (None, None, candidates, question). Never picks one of several, and never
+    binds a partial title without a Merchant.
+    """
+
     projects = reads.list_projects(
         merchant_id=_text(merchant["merchant_id"]) if merchant else None, status=None
     )
-    found, match_kind = _find_project(
-        projects, merchant, result["query"]["project_id"], interpretation.project_phrase
-    )
+    found, match_kind = _find_project(projects, merchant, project_id, phrase)
 
     if found is None:
-        return _ask(
-            result,
+        return None, None, [], (
             "Which Project do you mean? Name its title (and Merchant) or its Project ID."
-            if not (result["query"]["project_id"] or interpretation.project_phrase)
+            if not (project_id or phrase)
             else "No Project matches "
-            + repr(result["query"]["project_id"] or interpretation.project_phrase)
+            + repr(project_id or phrase)
             + (f" for Merchant {merchant['code']}" if merchant else "")
-            + ". Which Project do you mean?",
+            + ". Which Project do you mean?"
         )
 
     if len(found) > 1 or (merchant is None and match_kind == "CANDIDATE"):
         # Several matches, or a partial title with no Merchant named: offer
         # candidates and never bind one.
-        result["candidates"] = [_summary(p) for p in found]
-        return _ask(
-            result,
+        return None, None, [_summary(p) for p in found], (
             ("Several Projects match: " if len(found) > 1 else "Did you mean: ")
             + "; ".join(f"{p['title']} ({p['merchant_code']}, {_text(p['id'])})" for p in found)
-            + "?" + (" Which one?" if len(found) > 1 else ""),
+            + "?" + (" Which one?" if len(found) > 1 else "")
         )
 
-    return _project_status(result, reads, found[0], match_kind)
+    return found[0], match_kind, [], None
 
 
 def _find_project(projects, merchant, project_id, phrase):

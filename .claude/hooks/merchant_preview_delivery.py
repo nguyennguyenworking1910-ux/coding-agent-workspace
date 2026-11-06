@@ -17,6 +17,7 @@ status NOT_AUTHORIZED; it never grants execution authority.
 """
 
 from __future__ import annotations
+from dataclasses import dataclass
 
 import json
 import re
@@ -33,8 +34,48 @@ UNVERIFIED = "UNVERIFIED"
 STATUS_RESULT_MARKER = "MERCHANT_PROJECT_STATUS_JSON:"
 STATUS_EVIDENCE_FIELD = "project_status_evidence"
 STATUS_DELIVERY_FAILED = "STATUS_DELIVERY_FAILED"
+# CP12H.NL4B: the read-only Step Update preview, delivered the same way.
+STEP_PREVIEW_MARKER = "MERCHANT_STEP_PREVIEW_JSON:"
+STEP_PREVIEW_EVIDENCE_FIELD = "step_preview_evidence"
+STEP_PREVIEW_DELIVERY_FAILED = "STEP_UPDATE_DELIVERY_FAILED"
 # Reads that may name the Merchant test database (mirrors agent_cli).
-TEST_DATABASE_READS = frozenset({("project", "preview"), ("project", "status")})
+TEST_DATABASE_READS = frozenset(
+    {("project", "preview"), ("project", "status"), ("step", "preview")}
+)
+
+
+@dataclass(frozen=True)
+class ReadResultContract:
+    """A read whose report must carry the exact CLI-captured result object."""
+
+    command: tuple[str, str]
+    mode: str
+    marker: str
+    field: str
+    failed: str
+    label: str
+    # Output flags a VERIFIED capture must carry exactly.
+    required: tuple[tuple[str, Any], ...]
+    # True: a verified delivery ends the check, and the report may never carry
+    # Project-preview, confirmation or argv content (NL4B has no confirmation).
+    terminal: bool
+
+
+READ_RESULT_CONTRACTS = (
+    ReadResultContract(
+        ("project", "status"), "PROJECT_STATUS", STATUS_RESULT_MARKER,
+        STATUS_EVIDENCE_FIELD, STATUS_DELIVERY_FAILED, "Project status",
+        (("read_only", True), ("authorization", None)), terminal=False,
+    ),
+    ReadResultContract(
+        ("step", "preview"), "STEP_UPDATE_PREVIEW", STEP_PREVIEW_MARKER,
+        STEP_PREVIEW_EVIDENCE_FIELD, STEP_PREVIEW_DELIVERY_FAILED, "Step Update preview",
+        (("read_only", True), ("authorization", None), ("executable", False),
+         ("confirmation_available", False)),
+        terminal=True,
+    ),
+)
+_DELIVERED = object()  # a terminal read contract accepted the report
 
 MERCHANT_MANAGER_AGENT = "merchant-manager"
 AGENT_CLI_SCRIPT = ".claude/agents/tools/merchant/agent_cli.py"
@@ -178,34 +219,35 @@ def teammate_target_decision(payload: dict[str, Any], deny: Deny) -> dict[str, A
 
 
 def _preview_arguments(
-    payload: dict[str, Any], action: str = "preview"
+    payload: dict[str, Any], command: tuple[str, str] = ("project", "preview")
 ) -> tuple[str, ...] | None:
-    """Arguments of merchant-manager's exact ``agent_cli.py project <action>``."""
+    """Arguments of merchant-manager's exact ``agent_cli.py <resource> <action>``."""
 
     if not _is_merchant_manager(payload, "Bash"):
         return None
 
     arguments = _agent_cli_arguments(_tool_input(payload).get("command"))
 
-    if arguments is None or tuple(arguments[:2]) != ("project", action):
+    if arguments is None or tuple(arguments[:2]) != command:
         return None
 
     return arguments
 
 
-def record_status_evidence(payload: dict[str, Any]) -> bool:
-    """PostToolUse(Bash): bind a ``project status`` result to the live task.
+def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) -> bool:
+    """PostToolUse(Bash): bind a read contract's CLI result to the live task.
 
-    VERIFIED only for the exact CLI JSON of a read-only status result on the
-    trusted target, printed in the teammate's verified pane; anything else is
-    an UNVERIFIED marker, so its report can only be a delivery failure.
+    VERIFIED only for the exact CLI JSON of that read (its mode and every
+    required read-only flag) on the trusted target, printed in the teammate's
+    verified pane; anything else is an UNVERIFIED marker, so its report can
+    only be a delivery failure. Never creates a pending confirmation.
     """
 
     from claude.hooks.harness_team_identity import verified_teammate_pane
     from claude.hooks.merchant_tool_result_contract import _exact_json_object
     from claude.hooks.team_lifecycle import locked_team_state
 
-    arguments = _preview_arguments(payload, "status")
+    arguments = _preview_arguments(payload, contract.command)
     binding = _owner_binding() if arguments is not None else None
 
     if binding is None:
@@ -216,10 +258,11 @@ def record_status_evidence(payload: dict[str, Any]) -> bool:
     output = _exact_json_object(payload)
     verified = (
         isinstance(output, dict)
-        and output.get("mode") == "PROJECT_STATUS"
+        and output.get("mode") == contract.mode
         and output.get("database_target") == target == trusted
-        and output.get("read_only") is True
-        and output.get("authorization") is None
+        and all(
+            key in output and output[key] is value for key, value in contract.required
+        )
         and verified_teammate_pane(owner, MERCHANT_MANAGER_AGENT) is not None
     )
 
@@ -237,7 +280,7 @@ def record_status_evidence(payload: dict[str, Any]) -> bool:
         ):
             return False
 
-        current[STATUS_EVIDENCE_FIELD] = {
+        current[contract.field] = {
             "run_id": current["current_run_id"],
             "task_id": current["current_task_id"],
             "status": VERIFIED if verified else UNVERIFIED,
@@ -304,8 +347,11 @@ def record_preview_evidence(payload: dict[str, Any]) -> bool:
     from claude.hooks.harness_team_identity import verified_teammate_pane
     from claude.hooks.team_lifecycle import locked_team_state
 
-    if _preview_arguments(payload, "status") is not None:
-        return record_status_evidence(payload)
+    for contract in READ_RESULT_CONTRACTS:
+        # Read-only results: never reach the Project-preview branch below,
+        # the only caller of record_pending.
+        if _preview_arguments(payload, contract.command) is not None:
+            return record_read_evidence(payload, contract)
 
     arguments = _preview_arguments(payload)
 
@@ -495,46 +541,92 @@ def _message_contract_decision(
     return _PREVIEW_CONTRACT
 
 
-def _status_delivery_decision(message: str, record: Any, deny: Deny) -> dict[str, Any] | None:
-    """CP12H.NL4A: a status report carries exactly the captured CLI result.
+def _without_blocks(message: str, marker: str) -> str:
+    """The message with every ``marker`` + JSON object removed (the prose)."""
 
-    - VERIFIED capture: the exact object once, after STATUS_RESULT_MARKER.
-    - UNVERIFIED capture: no status object; a STATUS_DELIVERY_FAILED report.
-    - No status capture for the task: no status object at all.
+    decoder = json.JSONDecoder()
+    parts = message.split(marker)
+    prose = [parts[0]]
+
+    for part in parts[1:]:
+        stripped = part.lstrip()
+        try:
+            _, end = decoder.raw_decode(stripped)
+        except ValueError:
+            end = 0
+        prose.append(stripped[end:])
+
+    return "".join(prose)
+
+
+def _read_delivery_decision(
+    message: str, record: Any, contract: ReadResultContract, deny: Deny
+) -> Any:
+    """CP12H.NL4A/NL4B: a read report carries exactly the captured CLI result.
+
+    - VERIFIED capture: the exact object once, after the contract marker.
+    - UNVERIFIED capture: no object; a report naming the contract's failure.
+    - No capture for the task: no object at all.
+
+    A terminal contract (the Step Update preview) also refuses any Project
+    preview operation, argv, scope or confirmation text, and a READY claim
+    the captured outcome does not support; a report it accepts returns
+    ``_DELIVERED`` and is judged by nothing else.
     """
 
-    blocks = _operation_blocks(message, STATUS_RESULT_MARKER)
-    evidence = _current_evidence(record, STATUS_EVIDENCE_FIELD)
-    resend = " Resend the report once; do not run the status read again."
+    marker, failed, label = contract.marker, contract.failed, contract.label
+    blocks = _operation_blocks(message, marker)
+    evidence = _current_evidence(record, contract.field)
+    resend = f" Resend the report once; do not run the {label} read again."
 
-    if evidence is not None and evidence.get("status") == VERIFIED:
-        if len(blocks) != 1 or blocks[0] != evidence.get("result"):
+    if evidence is None:
+        if blocks:
             return deny(
-                "Blocked: the Project status report must contain the CLI's status "
-                f"result exactly once, after {STATUS_RESULT_MARKER}, as the complete "
-                "JSON object it printed (same fields, values and Unicode). It was "
-                "missing, duplicated, truncated or altered." + resend
+                f"Blocked: no {label} read ran for this task, so the report cannot "
+                f"carry a {marker} block. A result is never rebuilt from prose." + resend
             )
         return None
 
-    if evidence is not None:
-        if blocks or STATUS_DELIVERY_FAILED not in message:
-            return deny(
-                "Blocked: the Project status output could not be verified from the "
-                f"CLI for this task. Begin the report with `{STATUS_DELIVERY_FAILED}:` "
-                f"and the reason, without any {STATUS_RESULT_MARKER} block or step "
-                "state presented as database fact." + resend
-            )
-        return None
+    verified = evidence.get("status") == VERIFIED
 
-    if blocks:
+    if verified and (len(blocks) != 1 or blocks[0] != evidence.get("result")):
         return deny(
-            "Blocked: no Project status read ran for this task, so the report "
-            f"cannot carry a {STATUS_RESULT_MARKER} block. Status is never rebuilt "
-            "from prose." + resend
+            f"Blocked: the {label} report must contain the CLI's result exactly "
+            f"once, after {marker}, as the complete JSON object it printed (same "
+            "fields, values and Unicode). It was missing, duplicated, truncated or "
+            "altered." + resend
         )
 
-    return None
+    if not verified and (blocks or failed not in message):
+        return deny(
+            f"Blocked: the {label} output could not be verified from the CLI for "
+            f"this task. Begin the report with `{failed}:` and the reason, without "
+            f"any {marker} block or state presented as database fact." + resend
+        )
+
+    if not contract.terminal:
+        return None
+
+    prose = _without_blocks(message, marker)
+    outcome = (evidence.get("result") or {}).get("outcome") if verified else None
+    claims_ready = _READY_CLAIM.search(_NEGATED_READY.sub("", prose))
+
+    if (
+        PREVIEW_OPERATION_MARKER in message
+        or PREVIEW_DELIVERY_FAILED in message
+        or "confirmation_command" in message
+        or _OPERATION_TEXT.search(prose)
+        or (claims_ready and outcome != READY)
+    ):
+        return deny(
+            f"Blocked: a {label} is read-only and has no confirmation yet. The "
+            "report may not carry a Project preview operation, argv, "
+            "--merchant-scope or confirmation command, nor claim "
+            "READY_FOR_CONFIRMATION unless the captured outcome is exactly that "
+            f"(captured: {outcome or 'none'})." + resend
+        )
+
+    return _DELIVERED
 
 
 def preview_delivery_decision(payload: dict[str, Any], deny: Deny) -> dict[str, Any] | None:
@@ -566,12 +658,14 @@ def preview_delivery_decision(payload: dict[str, Any], deny: Deny) -> dict[str, 
     if routed is not _PREVIEW_CONTRACT:
         return routed
 
-    status_decision = _status_delivery_decision(
-        message, run[1] if run is not None else None, deny
-    )
-
-    if status_decision is not None:
-        return status_decision
+    for contract in READ_RESULT_CONTRACTS:
+        decision = _read_delivery_decision(
+            message, run[1] if run is not None else None, contract, deny
+        )
+        if decision is _DELIVERED:
+            return None
+        if decision is not None:
+            return decision
 
     blocks = _operation_blocks(message)
     evidence = _current_evidence(run[1] if run is not None else None)
