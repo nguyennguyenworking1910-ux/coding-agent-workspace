@@ -70,8 +70,9 @@ READ_RESULT_CONTRACTS = (
     ReadResultContract(
         ("step", "preview"), "STEP_UPDATE_PREVIEW", STEP_PREVIEW_MARKER,
         STEP_PREVIEW_EVIDENCE_FIELD, STEP_PREVIEW_DELIVERY_FAILED, "Step Update preview",
-        (("read_only", True), ("authorization", None), ("executable", False),
-         ("confirmation_available", False)),
+        # confirmation_available is checked against the outcome and target
+        # in _step_operation_consistent (CP12H.NL4C).
+        (("read_only", True), ("authorization", None), ("executable", False)),
         terminal=True,
     ),
 )
@@ -240,7 +241,12 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
     VERIFIED only for the exact CLI JSON of that read (its mode and every
     required read-only flag) on the trusted target, printed in the teammate's
     verified pane; anything else is an UNVERIFIED marker, so its report can
-    only be a delivery failure. Never creates a pending confirmation.
+    only be a delivery failure.
+
+    CP12H.NL4C1: a Step preview is VERIFIED only when READY carries exactly
+    one valid ``requested_operation`` on the trusted target (and no other
+    outcome carries one); a VERIFIED READY capture is the only creator of a
+    pending Step Update. No other read creates a pending confirmation.
     """
 
     from claude.hooks.harness_team_identity import verified_teammate_pane
@@ -265,6 +271,11 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
         )
         and verified_teammate_pane(owner, MERCHANT_MANAGER_AGENT) is not None
     )
+    operation = None
+
+    if verified and contract.command == ("step", "preview"):
+        operation = output.get("requested_operation")
+        verified = _step_operation_consistent(output, operation, target)
 
     with locked_team_state(owner) as state:
         current = (
@@ -288,7 +299,45 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
             "result": output if verified else None,
         }
 
+    if verified and operation is not None:
+        # CP12H.NL4C1: the only creator of a pending Step Update.
+        from claude.hooks.merchant_pending_confirmation import record_pending_step
+
+        record_pending_step(
+            owner,
+            operation,
+            run_id=record["current_run_id"],
+            task_id=record["current_task_id"],
+        )
+
     return verified
+
+
+def _step_operation_consistent(output: dict[str, Any], operation: Any, target: str | None) -> bool:
+    """READY carries exactly one valid operation on the target; nothing else carries one.
+
+    ``confirmation_available`` must be exactly true for a READY preview on a
+    confirmable target and exactly false otherwise (CP12H.NL4C).
+    """
+
+    from claude.agents.tools.merchant.step_preview import (
+        CONFIRMABLE_TARGETS,
+        validate_step_operation,
+    )
+
+    if (output.get("outcome") == READY) != (operation is not None):
+        return False
+    confirmable = operation is not None and target in CONFIRMABLE_TARGETS
+    if output.get("confirmation_available") is not confirmable:
+        return False
+    if operation is None:
+        return True
+
+    try:
+        validate_step_operation(operation)
+    except ValueError:
+        return False
+    return operation.get("database_target") == target
 
 
 def preview_from_tool_response(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -619,7 +668,7 @@ def _read_delivery_decision(
         or (claims_ready and outcome != READY)
     ):
         return deny(
-            f"Blocked: a {label} is read-only and has no confirmation yet. The "
+            f"Blocked: a {label} is read-only and grants nothing. The "
             "report may not carry a Project preview operation, argv, "
             "--merchant-scope or confirmation command, nor claim "
             "READY_FOR_CONFIRMATION unless the captured outcome is exactly that "

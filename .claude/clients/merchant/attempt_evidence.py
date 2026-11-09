@@ -298,3 +298,152 @@ def resolve_attempt(
         return NOT_COMMITTED
 
     return UNCERTAIN
+
+
+STEP_RECEIPT_CONTRACT = "step_update_receipt_v1"
+
+
+def step_update_receipt(
+    repository: MerchantRepository,
+    identity: AttemptIdentity,
+    step_id: str,
+) -> dict[str, Any]:
+    """Reconcile one committed Step Update from its three durable records.
+
+    The ledger row, the execution claim and the STEP event are read
+    independently. They must name the same attempt, and all three must
+    have been written by one PostgreSQL transaction (equal ``xmin``), so
+    the receipt never rests on a reported result. Raises
+    EvidenceBindingError when they do not reconcile.
+    """
+
+    with repository.connection(read_only=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ledger.payload_hash, ledger.result,
+                       ledger.xmin::text AS ledger_tx,
+                       claims.payload_hash AS claim_hash,
+                       claims.execution_attempt_id::text AS claim_attempt,
+                       claims.claim_status, claims.xmin::text AS claim_tx
+                FROM merchant_ops.merchant_execution_ledger AS ledger
+                JOIN merchant_ops.merchant_execution_claims AS claims
+                  ON claims.operation_key = ledger.operation_key
+                WHERE ledger.operation_key = %s
+                """,
+                (identity.operation_key,),
+            )
+            evidence = cursor.fetchone()
+
+            if evidence is None:
+                raise EvidenceBindingError("No ledger and claim for the attempt")
+
+            cursor.execute(
+                """
+                SELECT events.id::text AS event_id,
+                       events.merchant_id::text AS merchant_id,
+                       events.project_id::text AS project_id,
+                       events.entity_id::text AS step_id,
+                       events.old_values, events.new_values,
+                       steps.sequence_number
+                FROM merchant_ops.project_events AS events
+                JOIN merchant_ops.project_steps AS steps
+                  ON steps.id = events.entity_id
+                 AND steps.project_id = events.project_id
+                WHERE events.entity_type = 'STEP'
+                  AND events.entity_id::text = %s
+                  AND events.xmin::text = %s
+                """,
+                (str(step_id), evidence["ledger_tx"]),
+            )
+            events = cursor.fetchall()
+
+    attempt = str(identity.execution_attempt_id)
+    result = evidence["result"]
+
+    if (
+        evidence["payload_hash"] != identity.payload_hash
+        or evidence["claim_hash"] != identity.payload_hash
+        or evidence["claim_attempt"] != attempt
+        or evidence["claim_status"] != "COMPLETED"
+        or evidence["claim_tx"] != evidence["ledger_tx"]
+        or not isinstance(result, dict)
+        or result.get("execution_attempt_id") != attempt
+        or result.get("command") != identity.command
+    ):
+        raise EvidenceBindingError("Ledger and claim do not name this attempt")
+
+    if len(events) != 1:
+        raise EvidenceBindingError(
+            "The attempt's transaction did not write exactly one STEP event"
+        )
+
+    (event,) = events
+    old, new = event["old_values"] or {}, event["new_values"] or {}
+
+    if (
+        not isinstance(old.get("version"), int)
+        or new.get("version") != old["version"] + 1
+        or old.get("status") == new.get("status")
+    ):
+        raise EvidenceBindingError("STEP event is not one transition")
+
+    return {
+        "contract": STEP_RECEIPT_CONTRACT,
+        "merchant_id": event["merchant_id"],
+        "project_id": event["project_id"],
+        "step_id": event["step_id"],
+        "step_sequence": event["sequence_number"],
+        "previous_status": old.get("status"),
+        "new_status": new.get("status"),
+        "previous_version": old["version"],
+        "new_version": new["version"],
+        "event_id": event["event_id"],
+        "execution_attempt_id": attempt,
+        "operation_key": identity.operation_key,
+        "payload_hash": identity.payload_hash,
+        "claim_status": evidence["claim_status"],
+        "ledger_command": result["command"],
+        "transaction_id": evidence["ledger_tx"],
+    }
+
+
+def recover_step_update_receipts(
+    repository: MerchantRepository,
+    step_id: str,
+) -> list[dict[str, Any]]:
+    """Rebuild every evidenced Step Update receipt of ``step_id`` from PostgreSQL alone.
+
+    Post-commit recovery when local run or team state is lost: each ledger
+    row written by the same transaction as a STEP event of the step yields
+    its attempt identity, which ``step_update_receipt`` then reconciles in
+    full. A transition without execution evidence (written outside Direct
+    EXECUTE) yields nothing.
+    """
+
+    with repository.connection(read_only=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT ledger.operation_key, ledger.payload_hash, ledger.result
+            FROM merchant_ops.merchant_execution_ledger AS ledger
+            JOIN merchant_ops.project_events AS events
+              ON events.xmin = ledger.xmin
+            WHERE events.entity_type = 'STEP'
+              AND events.entity_id::text = %s
+            ORDER BY events.created_at, ledger.operation_key
+            """,
+            (str(step_id),),
+        ).fetchall()
+
+    receipts = []
+    for row in rows:
+        result = row["result"] if isinstance(row["result"], dict) else {}
+        identity = AttemptIdentity(
+            operation_key=row["operation_key"],
+            payload_hash=str(row["payload_hash"]),
+            execution_attempt_id=uuid.UUID(str(result.get("execution_attempt_id"))),
+            command=str(result.get("command")),
+        )
+        receipts.append(step_update_receipt(repository, identity, step_id))
+
+    return receipts

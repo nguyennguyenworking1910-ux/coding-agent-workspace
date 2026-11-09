@@ -409,6 +409,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--allow-reopen",
         action="store_true",
     )
+    # CP12H.NL4C1: a confirmed Step Update preview names its Project, the
+    # Merchant the user confirmed and the basis it was judged on; the write
+    # transaction re-judges it and refuses when anything changed.
+    step_update.add_argument("--project-id")
+    step_update.add_argument("--merchant-code")
+    step_update.add_argument("--expected-basis", dest="expected_basis_hash")
     # CP12H.NL4B: read-only natural-language Step Update preview.
     step_preview = step_actions.add_parser("preview")
     step_preview.add_argument("--request", required=True)
@@ -891,7 +897,7 @@ def build_write_payload(
         )
 
     if command == "step update":
-        return _selected_fields(
+        payload = _selected_fields(
             args,
             (
                 "step_id",
@@ -903,6 +909,11 @@ def build_write_payload(
                 "allow_reopen",
             ),
         )
+        # Present only when confirming a preview (CP12H.NL4C1).
+        for name in ("project_id", "merchant_code", "expected_basis_hash"):
+            if getattr(args, name, None) is not None:
+                payload[name] = getattr(args, name)
+        return payload
 
     if command == "document revision-create":
         return _selected_fields(

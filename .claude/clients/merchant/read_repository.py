@@ -46,6 +46,23 @@ class AlertCandidateLimitExceededError(RuntimeError):
     """Raised rather than returning a silently truncated alert scan."""
 
 
+class TransactionDetailReader:
+    """``get_project_detail`` served by an open write transaction (CP12H.NL4C1).
+
+    Lets a confirmed Step Update preview be re-checked inside the same
+    transaction that applies it, after the Project and its steps are locked.
+    """
+
+    def __init__(self, repository: "MerchantReadRepository", connection: Any) -> None:
+        self.reads = repository
+        self.connection = connection
+
+    def get_project_detail(self, project_id: str) -> dict[str, Any]:
+        return self.reads.project_detail_in(
+            self.connection, _uuid(project_id, "project_id"), project_id
+        )
+
+
 class MerchantReadRepository:
     """Serve deterministic CLI reads through one repository connection."""
 
@@ -236,63 +253,73 @@ class MerchantReadRepository:
             read_only=True
         ) as connection:
             with connection.transaction():
-                project = self._get_project(
+                return self.project_detail_in(connection, project_uuid, project_id)
+
+    def project_detail_in(
+        self,
+        connection: Any,
+        project_uuid: uuid.UUID,
+        project_id: str,
+    ) -> dict[str, Any]:
+        """The same detail read, on a caller's open connection/transaction."""
+
+        project = self._get_project(
+            connection,
+            project_uuid,
+        )
+
+        if project is None:
+            raise ProjectNotFoundError(
+                "Merchant project not found: "
+                f"{project_id}"
+            )
+
+        merchant_id = project["merchant_id"]
+
+        return {
+            "project": project,
+            "merchant_contacts": self._get_contacts(
+                connection,
+                merchant_id,
+            ),
+            "steps": (
+                self.repository._get_project_steps(
                     connection,
                     project_uuid,
                 )
-
-                if project is None:
-                    raise ProjectNotFoundError(
-                        "Merchant project not found: "
-                        f"{project_id}"
-                    )
-
-                merchant_id = project["merchant_id"]
-
-                return {
-                    "project": project,
-                    "merchant_contacts": self._get_contacts(
-                        connection,
-                        merchant_id,
-                    ),
-                    "steps": (
-                        self.repository._get_project_steps(
-                            connection,
-                            project_uuid,
-                        )
-                    ),
-                    "dependencies": (
-                        self.repository._get_dependencies(
-                            connection,
-                            project_uuid,
-                        )
-                    ),
-                    "document_revisions": (
-                        self.repository._get_document_revisions(
-                            connection,
-                            project_uuid,
-                        )
-                    ),
-                    "document_approvals": (
-                        self.repository._get_document_approvals(
-                            connection,
-                            project_uuid,
-                        )
-                    ),
-                    "procurement_records": (
-                        self.repository._get_procurement_records(
-                            connection,
-                            project_uuid,
-                        )
-                    ),
-                    "integration_identifiers": (
-                        self._get_integration_identifiers(
-                            connection,
-                            merchant_id,
-                            project_uuid,
-                        )
-                    ),
-                }
+            ),
+            "dependencies": (
+                self.repository._get_dependencies(
+                    connection,
+                    project_uuid,
+                )
+            ),
+            "document_revisions": (
+                self.repository._get_document_revisions(
+                    connection,
+                    project_uuid,
+                )
+            ),
+            "document_approvals": (
+                self.repository._get_document_approvals(
+                    connection,
+                    project_uuid,
+                )
+            ),
+            "procurement_records": (
+                self.repository._get_procurement_records(
+                    connection,
+                    project_uuid,
+                )
+            ),
+            "integration_identifiers": (
+                self._get_integration_identifiers(
+                    connection,
+                    merchant_id,
+                    project_uuid,
+                )
+            ),
+        }
 
     def get_project_history(
         self,

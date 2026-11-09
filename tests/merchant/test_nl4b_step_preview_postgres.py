@@ -117,7 +117,8 @@ def test_eligible_update_is_ready_and_writes_nothing(fixtures):
     assert result["project"]["title"] == FRESH and result["project"]["version"] >= 1
     assert result["step"]["name"] == "Draft or renew document" and result["step"]["version"] == 1
     assert result["transition"]["expected_version"] == 1 and result["transition"]["new_version"] == 2
-    assert result["executable"] is False and result["confirmation_available"] is False
+    # CP12H.NL4C (intentional change): confirmable by the user, not authorized.
+    assert result["executable"] is False and result["confirmation_available"] is True
     assert result["authorization"] is None
 
 

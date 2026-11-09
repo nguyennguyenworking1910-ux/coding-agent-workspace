@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -89,12 +89,17 @@ class MerchantStepTransitionRepository:
         allow_reopen: bool = False,
         gate_required: bool = False,
         gate_result: GateValidationResult | None = None,
+        precondition: Callable[[Any], None] | None = None,
     ) -> StepTransitionResult:
         """Lock project state, validate, update, and audit.
 
         ``assigned_to`` is optional. A supplied value must be a UUID and
         replaces the stored assignment. Omitting it, or passing ``None``,
         preserves whatever assignment is already persisted.
+
+        ``precondition(connection)`` runs after the Project and its steps
+        are locked and before any change; raising rolls everything back
+        (CP12H.NL4C1: the confirmed preview's re-check).
         """
 
         normalized_step_id = _uuid(
@@ -127,6 +132,10 @@ class MerchantStepTransitionRepository:
                         cursor,
                         project["id"],
                     )
+
+                    if precondition is not None:
+                        precondition(connection)
+
                     dependencies = (
                         self._read_project_dependencies(
                             cursor,

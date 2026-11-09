@@ -183,6 +183,12 @@ def validate_direct_scope(
     if command == "project create" and payload.get("expected_basis_hash") is not None:
         _require_canonical_preview_argv(tokens, payload)
 
+    if command == "step update" and any(
+        payload.get(name) is not None
+        for name in ("expected_basis_hash", "project_id", "merchant_code")
+    ):
+        _require_canonical_step_argv(tokens, payload)
+
     envelope = build_confirmation_envelope(
         command,
         database_target,
@@ -233,6 +239,42 @@ def _require_canonical_preview_argv(
         raise MerchantRuntimeHandoffError(
             "A previewed project create scope must be the preview's exact "
             "argv, in order, with every field explicit"
+        )
+
+
+def _require_canonical_step_argv(
+    tokens: Sequence[str],
+    payload: Mapping[str, Any],
+) -> None:
+    """CP12H.NL4C1: a preview-bound Step Update is the preview's exact argv.
+
+    Project, Merchant code and basis are all present, in canonical order,
+    with nothing else (no reopen, assignment or timestamp override).
+    """
+
+    from claude.agents.tools.merchant.step_preview import canonical_step_argv
+
+    try:
+        expected = canonical_step_argv(
+            {
+                "step_id": payload["step_id"],
+                "target_status": payload["status"],
+                "step_version": payload["expected_version"],
+                "project_id": payload["project_id"],
+                "merchant_code": payload["merchant_code"],
+                "expected_basis": payload["expected_basis_hash"],
+            }
+        )
+    except KeyError as error:
+        raise MerchantRuntimeHandoffError(
+            "A previewed step update must name its --project-id, "
+            "--merchant-code and --expected-basis"
+        ) from error
+
+    if list(tokens) != expected:
+        raise MerchantRuntimeHandoffError(
+            "A previewed step update scope must be the preview's exact argv, "
+            "in order, with every field explicit"
         )
 
 

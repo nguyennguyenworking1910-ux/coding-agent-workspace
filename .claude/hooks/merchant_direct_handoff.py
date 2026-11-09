@@ -19,11 +19,13 @@ confirmation hash, the staged handoff, the reservation, the spent authority
 and the execution receipt.
 
 Before any reservation or spend, the target is checked: runtime execution is
-disabled in code, test mode supports only ``merchant create`` and
-``project create``, and a read-only preflight verifies the effective
-database name and user. ``project create`` must carry the confirmed
-preview's Project ID and basis, which are recomputed from current state
-here and again inside the write transaction. A preflight failure leaves no
+disabled in code, test mode supports only ``merchant create``,
+``project create`` and ``step update``, and a read-only preflight verifies
+the effective database name and user. ``project create`` must carry the
+confirmed preview's Project ID and basis, which are recomputed from current
+state here and again inside the write transaction. ``step update`` must be
+the user's own confirmation of a verified preview, spent for this exact run
+(CP12H.NL4C2A), and is re-judged the same way. A preflight failure leaves no
 footprint and spends nothing.
 """
 
@@ -62,9 +64,28 @@ PROJECT_CREATE_COMMAND = "project create"
 # agent input can enable it.
 RUNTIME_DIRECT_EXECUTE_ENABLED = False
 
+# CP12H.NL4C1/NL4C2A: a Step Update runs only from the user's confirmation
+# of a verified preview (never a typed or model-built scope) and is re-judged
+# against its basis before any spend and in the write transaction.
+STEP_UPDATE_COMMAND = "step update"
+
 # Test mode validates the real write paths end to end: the reserved
-# Merchant Create, and Project creation from a confirmed preview.
-TEST_MODE_COMMANDS = frozenset({MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND})
+# Merchant Create, Project creation from a confirmed preview and (NL4C2A)
+# a confirmed Step Update. Runtime stays disabled above.
+TEST_MODE_COMMANDS = frozenset(
+    {MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND, STEP_UPDATE_COMMAND}
+)
+
+# Run-state key of the reconciled durable receipt of a Step Update.
+STEP_RECEIPT_STATE_KEY = "merchant_step_update_receipt"
+
+
+def direct_execute_enabled(command: str, target: str) -> bool:
+    """Whether Direct EXECUTE of ``command`` on ``target`` can run at all."""
+
+    if target == "runtime":
+        return RUNTIME_DIRECT_EXECUTE_ENABLED
+    return target == "test" and command in TEST_MODE_COMMANDS
 
 PREFLIGHT_STAGE = "PREFLIGHT"
 
@@ -270,6 +291,12 @@ def _execute_scoped_write(
     if settled is None:
         _finish_scope_execution(attempt, SCOPE_EXECUTION_UNCERTAIN)
 
+    if (
+        settled == SCOPE_EXECUTION_SUCCEEDED
+        and attempt.command == STEP_UPDATE_COMMAND
+    ):
+        _record_step_receipt(attempt, repository, identity)
+
     sys.stdout.write(stdout.getvalue())
     sys.stderr.write(stderr.getvalue())
 
@@ -279,6 +306,59 @@ def _execute_scoped_write(
         )
 
     return exit_code
+
+
+def _record_step_receipt(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+    identity: Any,
+) -> dict[str, Any]:
+    """CP12H.NL4C2A: persist the reconciled receipt of a SUCCEEDED Step Update.
+
+    Built only from durable evidence (ledger, claim and STEP event of one
+    transaction) and checked against the confirmed operation; never from
+    the CLI's or a teammate's report. An unreconciled receipt is recorded as
+    such: it never changes the settled outcome, which committed evidence
+    already decided.
+    """
+
+    from claude.clients.merchant.attempt_evidence import step_update_receipt
+    from claude.hooks.merchant_pending_confirmation import confirmed_step_record
+    from claude.hooks.runtime_state import locked_state
+
+    try:
+        operation = confirmed_step_record(
+            attempt.owner_session_id, attempt.run_id
+        )["operation"]
+        receipt = step_update_receipt(repository, identity, operation["step_id"])
+        confirmed = (
+            operation["merchant_id"], operation["project_id"],
+            operation["step_id"], operation["step_sequence"],
+            operation["current_status"], operation["target_status"],
+            operation["step_version"],
+        )
+        if confirmed != (
+            receipt["merchant_id"], receipt["project_id"],
+            receipt["step_id"], receipt["step_sequence"],
+            receipt["previous_status"], receipt["new_status"],
+            receipt["previous_version"],
+        ):
+            raise ValueError("receipt differs from the confirmed operation")
+        receipt["status"] = "RECONCILED"
+    except Exception as exc:  # noqa: BLE001 - recorded, never inferred
+        receipt = {"status": "UNRECONCILED", "error": type(exc).__name__}
+
+    receipt.update(
+        run_id=attempt.run_id,
+        task_id=attempt.task_id,
+        database_target=attempt.database_target,
+    )
+
+    with locked_state(attempt.owner_session_id) as state:
+        if isinstance(state, dict) and state.get("run_id") == attempt.run_id:
+            state[STEP_RECEIPT_STATE_KEY] = receipt
+
+    return receipt
 
 
 def _scope_outcome(
@@ -344,6 +424,64 @@ def _verify_project_preview(
         verify_project_create(MerchantReadRepository(repository), payload)
     except ProjectPreviewMismatch as exc:
         raise DirectPreflightRefused(exc.reason) from exc
+
+
+def _confirmed_step_operation(attempt: PreparedRuntimeHandoff) -> dict[str, Any]:
+    """CP12H.NL4C2A: the trusted pending Step Update this run confirmed.
+
+    A Step Update executes only as the exact operation of one verified
+    preview that the owner confirmed with their own prompt for this run, on
+    the same database target. Anything else (a typed or model-built scope,
+    another run's confirmation, an edited argv) is refused unspent.
+    """
+
+    from claude.agents.tools.merchant.step_preview import validate_step_operation
+    from claude.hooks.merchant_pending_confirmation import confirmed_step_record
+
+    try:
+        record = confirmed_step_record(attempt.owner_session_id, attempt.run_id)
+        operation = (record or {}).get("operation")
+        validate_step_operation(operation)
+    except Exception as exc:  # noqa: BLE001 - no trusted confirmation, no write
+        raise DirectPreflightRefused("STEP_CONFIRMATION_REQUIRED") from exc
+
+    if (
+        list(attempt.arguments) != operation["argv"]
+        or attempt.database_target != operation["database_target"]
+        or record.get("database_target") != operation["database_target"]
+        or record.get("step_id") != operation["step_id"]
+    ):
+        raise DirectPreflightRefused("STEP_CONFIRMATION_MISMATCH")
+
+    return operation
+
+
+def _verify_step_preview(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+) -> None:
+    """CP12H.NL4C1: re-judge the confirmed Step preview; refuse before any spend.
+
+    A Step Update scope without a preview basis is refused too, so no Step
+    write can skip the Project-version, dependency and gate re-check.
+    """
+
+    from claude.agents.tools.merchant.step_preview import (
+        StepPreviewMismatch,
+        verify_step_update,
+    )
+    from claude.clients.merchant.read_repository import (
+        MerchantReadRepository,
+    )
+
+    payload = _create_payload(tuple(attempt.arguments), STEP_UPDATE_COMMAND)
+
+    try:
+        verify_step_update(MerchantReadRepository(repository), payload)
+    except StepPreviewMismatch as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+    except Exception as exc:  # noqa: BLE001 - an unjudgeable step never runs
+        raise DirectPreflightRefused("STEP_PREVIEW_UNVERIFIABLE") from exc
 
 
 def _execute_reserved_create(
@@ -497,8 +635,10 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     TEST_MODE_COMMAND_UNSUPPORTED, TERMINAL_REPORT_ALREADY_SENT,
     INVALID_CONFIGURATION, DATABASE_UNAVAILABLE or, for ``project create``,
     a preview reason (PREVIEW_BASIS_REQUIRED, PREVIEW_BASIS_CHANGED,
-    PROJECT_NOT_READY, PROJECT_ID_MISMATCH). The one-use authority stays
-    unspent.
+    PROJECT_NOT_READY, PROJECT_ID_MISMATCH); for ``step update``,
+    STEP_CONFIRMATION_REQUIRED, STEP_CONFIRMATION_MISMATCH or a re-judgement
+    reason (STEP_BASIS_CHANGED, STEP_VERSION_CHANGED, STEP_NOT_READY, ...).
+    The one-use authority stays unspent.
     """
 
     from claude.hooks.merchant_reserved_execution import (
@@ -522,6 +662,9 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     if terminal_report_marker_matches(record):
         raise DirectPreflightRefused("TERMINAL_REPORT_ALREADY_SENT")
 
+    if attempt.command == STEP_UPDATE_COMMAND:
+        _confirmed_step_operation(attempt)
+
     try:
         repository = _target_repository(target)
     except DatabasePreflightError as exc:
@@ -529,6 +672,9 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
 
     if attempt.command == PROJECT_CREATE_COMMAND:
         _verify_project_preview(attempt, repository)
+
+    if attempt.command == STEP_UPDATE_COMMAND:
+        _verify_step_preview(attempt, repository)
 
     return repository
 

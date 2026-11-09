@@ -232,8 +232,9 @@ def test_new_paths_stay_read_only_without_authorization(text):
     assert result["read_only"] is True and result["executable"] is False
     assert result["confirmation_available"] is False and result["authorization"] is None
     dumped = json.dumps(result, default=str)
-    for forbidden in ("argv", "confirmation_command", "--merchant-scope",
-                      "requested_operation", "pending"):
+    # CP12H.NL4C1: only a READY preview names an operation (as data).
+    assert result["outcome"] != "READY_FOR_CONFIRMATION" and result["requested_operation"] is None
+    for forbidden in ("argv", "confirmation_command", "--merchant-scope", "pending"):
         assert forbidden not in dumped
     assert (reader.projects, reader.steps) == before
 

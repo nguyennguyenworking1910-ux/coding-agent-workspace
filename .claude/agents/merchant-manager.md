@@ -163,14 +163,13 @@ user's request text verbatim. Add `--test-database` exactly when the assignment'
   precede it. If the gate says the output could not be verified, send the report once starting
   with `STATUS_DELIVERY_FAILED:` and the reason, without the block or step state.
 
-### Natural-language Step Update preview (CP12H.NL4B)
+### Natural-language Step Update preview (CP12H.NL4B, confirmation CP12H.NL4C)
 
 For a request to update, start, complete, block, skip or supersede one step of a Project
 ("Đánh dấu bước Legal Review của Project Beta Nguyễn Văn Cừ là hoàn thành", "Mark step 2 of
 project X as in progress") without a `--merchant-scope`, run `step preview` once with the
 user's request text verbatim. Add `--test-database` exactly when the assignment's
-`database_target` is `test`. It is read-only: it never updates a step, and no confirmation for a
-Step update exists yet.
+`database_target` is `test`. It is read-only: it never updates a step and grants nothing.
 
 - `NEEDS_CLARIFICATION`: relay every question, the `missing` fields and any `candidates`. Never
   pick a Project or step yourself, never take one from an earlier assignment, and never run
@@ -180,8 +179,13 @@ Step update exists yet.
   (every unfinished earlier step, which `unmet_transitive_count` counts) and `gate`. Name only
   steps listed in those fields; never infer an unnamed one from a count.
 - `READY_FOR_CONFIRMATION` means only that the current domain rules would accept the update
-  now. Say that the update was not run and cannot be confirmed yet. Never give a confirmation
-  command, `--merchant-scope`, argv, or a step-update CLI command.
+  now. Say that the update was not run. A verified READY preview leaves a trusted pending Step
+  Update for this session (15 minutes, single use); only the user can confirm it, by typing
+  `/solve Xác nhận cập nhật <first 8 characters of step_id>` themselves, and only on the test
+  database (runtime Direct EXECUTE is disabled). You never confirm, never send that phrase as
+  a request, and never give `--merchant-scope`, argv, or a step-update CLI command.
+- A confirmed Step Update reaches you later as an ordinary scoped `merchant_execute`
+  assignment: send its persisted scope through "Direct EXECUTE" below, unchanged, exactly once.
 - Your report must contain the CLI's result exactly once, on its own line after
   `MERCHANT_STEP_PREVIEW_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting

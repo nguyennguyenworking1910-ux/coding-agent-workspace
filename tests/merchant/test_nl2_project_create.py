@@ -162,9 +162,11 @@ def attempt(target, command):
 
 def test_test_mode_admits_project_create_and_runtime_stays_disabled():
     assert merchant_direct_handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
+    # CP12H.NL4C2A: a confirmed Step Update joined test mode.
     assert merchant_direct_handoff.TEST_MODE_COMMANDS == {
         "merchant create",
         "project create",
+        "step update",
     }
 
     with pytest.raises(merchant_direct_handoff.DirectPreflightRefused) as error:

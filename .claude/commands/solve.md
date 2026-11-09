@@ -40,10 +40,16 @@ prompt into the same persisted `merchant_scope` as a typed scope, with a determi
 whose `raw_request` is the confirmation text and which carries `conversational_confirmation`.
 Treat that run exactly like a typed scoped run. You never confirm, re-request or rebuild a
 pending operation yourself, and a bare "Xác nhận tạo" without `/solve` is not a confirmation.
+A verified READY `step preview` works the same way in its own store: `/solve Xác nhận cập nhật
+[<first 8 characters of step_id>]` (cancel: `/solve Hủy cập nhật [<id>]`), test database only;
+its envelope's `conversational_confirmation.kind` is `step_update`. A Project confirmation never
+confirms a Step, nor the reverse.
 An unscoped Project create request ("Tạo project mở rạp ...") runs as the read-only preview
 without `--confirm`.
 
-Test mode runs only `merchant create` and `project create`, connects only to `coding_agent_merchant_test` as
+Test mode runs only `merchant create`, `project create` and (CP12H.NL4C2A) a `step update` that the
+user confirmed with `/solve Xác nhận cập nhật` from a verified preview (a typed Step scope is refused).
+It connects only to `coding_agent_merchant_test` as
 `merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
 confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
 CLI argument, environment variable or payload can select or change it.
@@ -392,8 +398,16 @@ gate against the captured CLI output. Build your summary only from that object: 
 `unmet_transitive_count`), `gate`, `blocking`, `project_state`, and for `NEEDS_CLARIFICATION`
 every question, the `missing` fields and `candidates`. Name only steps those lists contain;
 never infer one from a count. Nothing was updated. `READY_FOR_CONFIRMATION` means the domain rules
-would accept the update now; Step Update confirmation does not exist yet, so never offer a
-confirmation, scope or command. A `STEP_UPDATE_DELIVERY_FAILED` report is not a preview:
+would accept the update now; nothing was updated. `confirmation_available: true` (only on
+a READY test-database preview) means the user may confirm; it never means a write is
+authorized. When the verified block's
+`requested_operation.database_target` is `test`, tell the user they can confirm in this
+session within 15 minutes by typing `/solve Xác nhận cập nhật <first 8 characters of
+requested_operation.step_id>` (or cancel with `/solve Hủy cập nhật <same id>`), naming the step,
+its current and target status and the Project from that block. Only the user's own prompt
+confirms: never submit, schedule or relay it, never offer a `--merchant-scope` or argv (a typed
+Step scope is refused), and offer nothing for a runtime target (runtime Direct EXECUTE is
+disabled). A confirmed Step Update runs as an ordinary scoped `merchant_execute` run. A `STEP_UPDATE_DELIVERY_FAILED` report is not a preview:
 report the failure only. An idle notice's `RESULT_DELIVERED` means only that a report was
 sent; the outcome is what that report says, so a delivery failure or refusal is still a
 failure.

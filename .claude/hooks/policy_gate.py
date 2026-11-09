@@ -3614,14 +3614,22 @@ def _shell_text_is_literal(text: str) -> bool:
     """True when Bash would perform no expansion or chaining on ``text``.
 
     Single-quoted text is literal except for newlines. Double-quoted text
-    must not contain expansion or escape characters. Unterminated quotes
-    are rejected.
+    must not contain expansion characters; its only escapes are a
+    backslash before ``"`` or before another backslash (CP12H.NL4C2B-FIX).
+    Bash and POSIX ``shlex`` both read those two as the literal character,
+    so the argv this hook validates is the argv Bash runs. Any other
+    backslash is rejected. Unterminated quotes are rejected.
     """
 
     quote = None
+    escaped = False
 
     for char in text:
-        if quote == "'":
+        if escaped:
+            escaped = False
+            if char not in '"\\':
+                return False
+        elif quote == "'":
             if char == "'":
                 quote = None
             elif char in "\n\r":
@@ -3629,6 +3637,8 @@ def _shell_text_is_literal(text: str) -> bool:
         elif quote == '"':
             if char == '"':
                 quote = None
+            elif char == "\\":
+                escaped = True
             elif char in _DOUBLE_QUOTE_SPECIAL_CHARS:
                 return False
         elif char in "'\"":

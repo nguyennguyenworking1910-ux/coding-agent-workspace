@@ -336,10 +336,15 @@ def test_preview_is_data_and_never_authorizes_or_mutates():
 
     assert result["outcome"] == READY
     assert result["read_only"] is True and result["executable"] is False
-    assert result["confirmation_available"] is False and result["authorization"] is None
+    # CP12H.NL4C (intentional change): a READY test-database preview may be
+    # confirmed by the user; that is not authorization.
+    assert result["confirmation_available"] is True and result["authorization"] is None
     text = json.dumps(result, default=str)
-    for forbidden in ("argv", "confirmation_command", "--merchant-scope", "requested_operation"):
+    for forbidden in ("confirmation_command", "--merchant-scope"):
         assert forbidden not in text
+    # CP12H.NL4C1 (intentional change): a READY preview names its exact
+    # operation as data, never as authority.
+    assert result["requested_operation"]["status"] == "NOT_AUTHORIZED"
     assert (reader.projects, reader.steps, reader.revisions) == before
 
 

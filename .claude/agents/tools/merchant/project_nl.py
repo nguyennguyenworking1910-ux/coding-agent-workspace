@@ -114,8 +114,11 @@ _STATE_CONNECTOR = r"(?:la|thanh|sang|ve|as|to|into)"
 _ANY_STATE = "|".join(pattern for _, pattern in _TARGET_STATES)
 # CP12H.NL4B-FIX2: "Đánh dấu Legal Review là hoàn thành", "Mark X as completed":
 # an explicit mark verb and a connector clause name a step without the noun.
+# CP12H.NL4C2B-FIX: no word-count cap on the name: a long step title plus a
+# Project name ("Draft or renew document của Project Beta NL4C2B Step
+# Acceptance") is still a mark; the shortest name before a connector wins.
 _MARK_AS = (
-    rf"\b(?:danh dau|mark) (?:\w+ ){{1,8}}?{_STATE_CONNECTOR} "
+    rf"\b(?:danh dau|mark) (?:\w+ )+?{_STATE_CONNECTOR} "
     rf"(?:(?:da|duoc|the|be) )?(?:{_ANY_STATE})\b"
 )
 # A state stated right after the name with no connector ("Đánh dấu bước Legal
@@ -312,7 +315,7 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         # Names end where the state clause begins: "... Test thành đang thực hiện".
         subject = words.before(clause_start) if clause_start is not None else words
         step_reference = subject.step_reference()
-        if step_reference is None and not set(subject.folded_words) & _STEP_NOUNS:
+        if step_reference is None and not subject.names_a_step():
             # "Mark Legal Review as completed": the name follows the mark verb.
             step_reference = subject.marked_name()
         # "... hoàn thành cho Project X": a Project may follow the state.
@@ -616,13 +619,40 @@ class _Words:
         """
 
         found = []
+        covered = self._entity_name_words()
+        reference_end = 0
         for index, word in enumerate(self.folded_words):
-            if word in ("buoc", "step"):
-                reference = self._step_at(index)
+            # CP12H.NL4C2B-FIX: "Step" inside a Project or Merchant name
+            # ("Project Beta NL4C2B Step Acceptance") or inside the step
+            # title already found is part of that name, not another step.
+            if word in ("buoc", "step") and index not in covered and index >= reference_end:
+                reference, reference_end = self._step_at(index)
                 if reference and reference not in found:
                     found.append(reference)
         # "bước 1 và bước 2": several steps in one request ask instead.
         return found[0] if len(found) == 1 else None
+
+    def names_a_step(self) -> bool:
+        """Whether a step noun is written outside every Project/Merchant name."""
+
+        covered = self._entity_name_words()
+        return any(
+            word in _STEP_NOUNS and index not in covered
+            for index, word in enumerate(self.folded_words)
+        )
+
+    def _entity_name_words(self) -> set[int]:
+        """Indices of the words naming a Project or Merchant after its noun."""
+
+        covered: set[int] = set()
+        for index, word in enumerate(self.folded_words):
+            length = 2 if self._pair(index) == "du an" else 1 if word in (
+                "project", "projects", "merchant", "merchants",
+            ) else 0
+            if length and self._introduces_name(index, length):
+                start, end = self._span(index + length)
+                covered.update(range(start, end))
+        return covered
 
     def marked_name(self) -> str | None:
         """The name after "đánh dấu" / "mark" when no step noun is written.
@@ -643,26 +673,28 @@ class _Words:
             return self._phrase(start)
         return None
 
-    def _step_at(self, index: int) -> str | None:
+    def _step_at(self, index: int) -> tuple[str | None, int]:
+        """(reference, index just past it) for the step noun at ``index``."""
+
         following = index + 1
         while following < len(self.folded_words) and self.folded_words[following] in (
             "so", "number", "no",
         ):
             following += 1
         if following < len(self.folded_words) and self.folded_words[following].isdigit():
-            return self.folded_words[following]
-        phrase = self._phrase(following)
-        if phrase:
-            return phrase
+            return self.folded_words[following], following + 1
+        start, end = self._span(following)
+        if end > start:
+            return " ".join(self.original[start:end]), end
         # "Mark the Legal review step of ...": the name precedes "step".
         # Never "bước": "Đánh dấu bước hoàn thành" names no step (FIX2B).
         if self.folded_words[index] != "step":
-            return None
+            return None, index + 1
         start = index
         while start > 0 and self.folded_words[start - 1] not in _STEP_VERBS:
             start -= 1
         name = [w for w in self.original[start:index] if fold(w) not in ("the", "a")]
-        return " ".join(name) or None
+        return " ".join(name) or None, index + 1
 
     def _introduces_name(self, index: int, length: int) -> bool:
         """Whether the anchor at ``index`` introduces a name, by its context.
@@ -687,6 +719,12 @@ class _Words:
         return " ".join(self.folded_words[index:index + 2])
 
     def _phrase(self, start: int) -> str | None:
+        start, end = self._span(start)
+        return " ".join(self.original[start:end]) or None
+
+    def _span(self, start: int) -> tuple[int, int]:
+        """[start, end) of the name phrase beginning at word ``start``."""
+
         while start < len(self.original) and (
             self.folded_words[start] in _LEAD_WORDS
             or self._pair(start) == "du an"
@@ -701,4 +739,4 @@ class _Words:
         ):
             end += 1
 
-        return " ".join(self.original[start:end]) or None
+        return start, end

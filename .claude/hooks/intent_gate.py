@@ -503,6 +503,30 @@ def confirm_pending_project(
             "confirmed. Nothing was created. Preview the Project again."
         )
 
+    return _conversational_scope(
+        validated,
+        request,
+        "The user confirmed the trusted pending Project create "
+        f"{record['project_id']} in their own prompt; the operation comes "
+        "from verified preview evidence, not from a model.",
+        {
+            "project_id": record["project_id"],
+            "title": operation["title"],
+            "merchant_code": operation["merchant_code"],
+            "source_run_id": record["source_run_id"],
+            "pending_created_at": record["created_at"],
+        },
+    )
+
+
+def _conversational_scope(
+    validated: dict[str, Any],
+    request: str,
+    reason: str,
+    detail: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(merchant_scope, envelope) of one spent trusted pending record."""
+
     merchant_scope = {
         "argv": list(validated["argv"]),
         "command": validated["command"],
@@ -528,23 +552,116 @@ def confirm_pending_project(
         "candidate_agents": ["merchant-manager"],
         "selected_agents": ["merchant-manager"],
         "limits": dict(orchestration["task_classes"][task_class]),
-        "reasons": [
-            "The user confirmed the trusted pending Project create "
-            f"{record['project_id']} in their own prompt; the operation comes "
-            "from verified preview evidence, not from a model."
-        ],
+        "reasons": [reason],
         "requires_clarification": False,
         "requires_confirmation": True,
-        "conversational_confirmation": {
+        "conversational_confirmation": detail,
+    }
+
+    return merchant_scope, envelope
+
+
+STEP_CONFIRMATION_NOT_ENABLED = (
+    "Step Update execution is enabled only on the test database (runtime "
+    "Direct EXECUTE is disabled), so this pending Step Update was not "
+    "confirmed; it stays pending until it expires. Nothing was updated."
+)
+
+
+def confirm_pending_step(
+    session_id: Any,
+    command: str,
+    request: str,
+    run_id: str,
+) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]] | None:
+    """CP12H.NL4C1: "/solve Xác nhận cập nhật [<step id>]" spends one pending Step Update.
+
+    Same contract as ``confirm_pending_project``, on the separate Step store.
+    The target status, step, Project and database target all come from the
+    verified record; the prompt can only pick which record. While Step
+    execution is disabled for the record's target, it is refused unspent.
+    """
+    from claude.hooks import merchant_pending_confirmation as pending
+
+    parsed = pending.parse_step_confirmation(request)
+
+    if parsed is None:
+        return None
+
+    if command != "solve":
+        return block(
+            "A Step Update confirmation is accepted only as `/solve Xác nhận "
+            "cập nhật`. Nothing was updated."
+        )
+
+    from claude.hooks.merchant_direct_handoff import (
+        STEP_UPDATE_COMMAND,
+        direct_execute_enabled,
+    )
+
+    def allowed(record: dict[str, Any]) -> str | None:
+        if direct_execute_enabled(STEP_UPDATE_COMMAND, str(record.get("database_target"))):
+            return None
+        return STEP_CONFIRMATION_NOT_ENABLED
+
+    action, code = parsed
+    record, refusal = pending.resolve(
+        session_id, action, code, run_id, kind=pending.STEP_KIND, allowed=allowed
+    )
+
+    if refusal is not None:
+        return block(refusal)
+
+    operation = record["operation"]
+
+    if action == pending.CANCEL:
+        return block(
+            f"Cancelled the pending Step Update {pending._describe(record, pending.STEP_KIND)}. "
+            "Nothing was updated."
+        )
+
+    try:
+        from claude.agents.tools.merchant.step_preview import validate_step_operation
+        from claude.system.merchant_runtime_handoff import validate_direct_scope
+
+        validate_step_operation(operation)
+
+        if (
+            operation["step_id"] != record["step_id"]
+            or operation["project_id"] != record["project_id"]
+            or operation["database_target"] != record["database_target"]
+        ):
+            raise ValueError("pending record fields disagree")
+
+        validated = validate_direct_scope(
+            operation["argv"], operation["database_target"]
+        )
+    except Exception:  # noqa: BLE001 - a damaged record never runs
+        return block(
+            "The pending Step Update could not be verified, so it was not "
+            "confirmed. Nothing was updated. Preview the step again."
+        )
+
+    return _conversational_scope(
+        validated,
+        request,
+        "The user confirmed the trusted pending Step Update "
+        f"{record['step_id']} in their own prompt; the operation comes from "
+        "verified preview evidence, not from a model.",
+        {
+            "kind": "step_update",
             "project_id": record["project_id"],
-            "title": operation["title"],
+            "step_id": record["step_id"],
+            "project_title": operation["project_title"],
+            "step_sequence": operation["step_sequence"],
+            "step_name": operation["step_name"],
+            "current_status": operation["current_status"],
+            "target_status": operation["target_status"],
             "merchant_code": operation["merchant_code"],
             "source_run_id": record["source_run_id"],
             "pending_created_at": record["created_at"],
         },
-    }
-
-    return merchant_scope, envelope
+    )
 
 
 def run(
@@ -691,6 +808,16 @@ def run(
                 "Nothing was dispatched."
             )
 
+        # CP12H.NL4C2A: no general Step Update permission. A Step Update is
+        # authorized only by the user's confirmation of a verified preview.
+        if merchant_scope["command"] == "step update":
+            return block(
+                "A Step Update cannot be authorized with a typed "
+                "--merchant-scope. Preview the step (for example \"Bắt đầu "
+                "bước 2 của Project ... trên database test\"), then type "
+                "`/solve Xác nhận cập nhật`. Nothing was dispatched."
+            )
+
         if redact_secrets(request) != request:
             return block(
                 "Merchant scope description contains sensitive information. "
@@ -726,6 +853,11 @@ def run(
         conversational = confirm_pending_project(
             session_id, command, request, run_id
         )
+
+        if conversational is None:
+            conversational = confirm_pending_step(
+                session_id, command, request, run_id
+            )
 
     if isinstance(conversational, dict):
         return conversational  # refused or cancelled; nothing dispatched
@@ -811,7 +943,8 @@ def run(
 
         # CP12H.NL4A: Project status and list questions are reads too.
         # CP12H.NL4B: an unscoped Step update runs only as the read-only
-        # `step preview`; no Step Update confirmation exists yet (NL4C).
+        # `step preview`; only the user's later `/solve Xác nhận cập nhật`
+        # of that verified preview can authorize the write (NL4C).
         kind = interpret_project_request(request).kind
 
         if kind in {
@@ -983,7 +1116,13 @@ def run(
         # Shown to the user by this hook, not rendered by the model.
         detail = envelope_payload["conversational_confirmation"]
         output["systemMessage"] = (
-            f"Confirmed Project create {detail['title']!r} for Merchant "
+            f"Confirmed Step Update: step {detail['step_sequence']} "
+            f"{detail['step_name']!r} of Project {detail['project_title']!r} "
+            f"({detail['merchant_code']}) from {detail['current_status']} to "
+            f"{detail['target_status']} (step_id {detail['step_id']}) on the "
+            f"{merchant_scope['database_target']} database. It runs once now."
+            if detail.get("kind") == "step_update"
+            else f"Confirmed Project create {detail['title']!r} for Merchant "
             f"{detail['merchant_code']} (project_id {detail['project_id']}) on the "
             f"{merchant_scope['database_target']} database. It runs once now."
         )

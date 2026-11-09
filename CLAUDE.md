@@ -317,7 +317,17 @@ user's own `/solve Xác nhận tạo [<id>]` prompt, which the intent gate turns
 from exactly one trusted pending Project create (created only from a verified preview capture,
 owned by that session, 15-minute single use; see `merchant_pending_confirmation.py`). No model
 classifies a confirmation, and a scheduled (`CronCreate`/`ScheduleWakeup`/`RemoteTrigger`) prompt
-can never carry one. The policy gate records one dispatch receipt for it. The scope must satisfy the deterministic
+can never carry one. The policy gate records one dispatch receipt for it. CP12H.NL4C1 adds the same foundation for Step Updates in a separate store:
+a verified READY `step preview` records its exact `requested_operation` (argv bound to a basis
+hash of the judged Project snapshot), `/solve Xác nhận cập nhật [<step id>]` spends one into a
+scope, and `verify_step_update` re-judges it before any spend and inside the write transaction.
+CP12H.NL4C2A enables Step Update execution on the test database only: `step update` is in
+`TEST_MODE_COMMANDS`, but a typed Step `--merchant-scope` is refused, and the preflight requires the
+trusted pending Step Update this session confirmed for this exact run (same argv and target) before
+any spend. It runs through the unchanged scoped-write pipeline (claim, ledger and Step event in one
+transaction), and a SUCCEEDED attempt records a receipt reconciled from that durable evidence
+(`merchant_step_update_receipt` in the run state). A runtime-target Step confirmation is refused
+unspent. The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
 the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an
@@ -341,7 +351,8 @@ The reserved Create executor also refuses unless the spent authority names its r
 Runtime (production) Direct EXECUTE is disabled in code (`RUNTIME_DIRECT_EXECUTE_ENABLED = False`
 in `.claude/hooks/merchant_direct_handoff.py`) until separately approved. The user may select the
 test database for one `merchant create` or `project create` with
-`/solve --confirm --merchant-target test --merchant-scope [...]`;
+`/solve --confirm --merchant-target test --merchant-scope [...]` (a test-database Step Update comes
+only from `/solve Xác nhận cập nhật`);
 the target is bound into the scope and confirmation hashes, staged request, reservation, spent
 authority and receipt, and a read-only preflight verifies `coding_agent_merchant_test` /
 `merchant_test` before anything is reserved or spent. A refused preflight (invalid

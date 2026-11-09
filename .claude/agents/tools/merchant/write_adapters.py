@@ -206,7 +206,10 @@ class MerchantRepositoryWriteAdapters:
         )
 
     def update_step(self, payload: dict[str, Any]) -> Any:
+        precondition = _confirmed_step_precondition(self.repositories.steps, payload)
+        extra = {} if precondition is None else {"precondition": precondition}
         return self.repositories.steps.transition_step(
+            **extra,
             step_id=payload["step_id"],
             target_status=payload["status"],
             assigned_to=payload.get("assigned_to"),
@@ -528,5 +531,27 @@ def _confirmed_preview_precondition(payload: dict[str, Any]) -> Any:
         reader = TransactionPreviewReader(cursor)
         reader.lock_merchant(payload["merchant_id"])
         verify_project_create(reader, payload)
+
+    return precondition
+
+
+def _confirmed_step_precondition(steps: Any, payload: dict[str, Any]) -> Any:
+    """CP12H.NL4C1: re-judge a confirmed Step preview under the step locks."""
+
+    if payload.get("expected_basis_hash") is None:
+        return None
+
+    from claude.clients.merchant.read_repository import (
+        MerchantReadRepository,
+        TransactionDetailReader,
+    )
+
+    from .step_preview import verify_step_update
+
+    def precondition(connection: Any) -> None:
+        verify_step_update(
+            TransactionDetailReader(MerchantReadRepository(steps.repository), connection),
+            payload,
+        )
 
     return precondition

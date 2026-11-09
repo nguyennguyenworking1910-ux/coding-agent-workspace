@@ -380,7 +380,7 @@ def test_status_requests_run_read_only_without_confirm(isolated, text, target):
 def test_explicit_step_update_runs_only_as_a_read_only_preview(isolated):
     # CP12H.NL4B changed this on purpose: an unscoped Step update was blocked
     # for --confirm; it now runs only as the read-only `step preview`, with no
-    # write scope (Step Update confirmation does not exist yet).
+    # write scope (a Step Update needs the user's separate confirmation).
     output = intent_gate.run(
         {"hook_event_name": "UserPromptSubmit", "session_id": LEAD,
          "prompt": "/solve Cập nhật bước Legal review của project Beta là xong"},

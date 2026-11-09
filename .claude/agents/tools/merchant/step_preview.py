@@ -18,14 +18,26 @@
   domain planner ``propose_step_transition`` itself must accept the plan.
 
 Nothing is written, reserved, claimed or confirmed. ``READY_FOR_CONFIRMATION``
-means only that the existing domain rules would accept the update now. The
-result carries no command, argv or confirmation instruction:
-``executable`` and ``confirmation_available`` are always false, because Step
-Update confirmation does not exist yet (CP12H.NL4C).
+means only that the existing domain rules would accept the update now.
+``executable`` is always false and ``authorization`` always null.
+``confirmation_available`` (CP12H.NL4C) is true only for a READY preview on a
+target where the user may confirm it (the test database; runtime Direct
+EXECUTE is disabled): it says the user may type ``/solve Xác nhận cập nhật``,
+never that anything is authorized.
+
+CP12H.NL4C1: a READY preview also carries ``requested_operation``, the exact
+``step update`` it describes, bound to a basis hash of the Project snapshot it
+was judged on (Project and Merchant row, every step, dependency and gate
+evidence row). It is data, never authority: its ``status`` is NOT_AUTHORIZED.
+Trusted code turns a verified capture of it into a pending confirmation, and
+``verify_step_update`` re-judges it from current state before any spend and
+again inside the write transaction, refusing when anything changed.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -38,7 +50,7 @@ from .gate_resolver import (
     resolve_database_gate,
 )
 from .gates import GateValidationError
-from .project_nl import STEP_UPDATE, interpret_project_request
+from .project_nl import STEP_UPDATE, fold, interpret_project_request
 from .project_status import (
     STEP_STATUS_ORDER,
     _step,
@@ -49,6 +61,7 @@ from .project_status import (
 )
 from .state_machine import (
     STEP_REOPEN_TRANSITIONS,
+    STEP_STATUSES,
     WorkflowStateError,
     validate_step_transition,
 )
@@ -74,36 +87,14 @@ def build_step_update_preview(
 
     interpretation = interpret_project_request(request)
     project_uuid = _UUID.search(request)
-    result: dict[str, Any] = {
-        "success": True,
-        "mode": MODE,
-        "database_target": database_target or "runtime",
-        "outcome": CLARIFY,
-        "read_only": True,
-        "executable": False,
-        "confirmation_available": False,
-        "authorization": None,
-        "query": {
-            "kind": interpretation.kind,
-            "merchant_phrase": interpretation.merchant_phrase,
-            "project_phrase": interpretation.project_phrase,
-            "project_id": project_uuid.group().lower() if project_uuid else None,
-            "step_reference": interpretation.step_reference,
-            "target_status": interpretation.target_status,
-        },
-        "merchant": None,
-        "project": None,
-        "step": None,
-        "transition": None,
-        "unmet_dependencies": [],
-        "gate": None,
-        "blocking": [],
-        "candidates": [],
-        "clarifications": [],
-        # CP12H.NL4B-FIX2: fields the request did not settle: "step",
-        # "target_status", "merchant", "project" (one question each).
-        "missing": [],
-    }
+    result = _skeleton(database_target, {
+        "kind": interpretation.kind,
+        "merchant_phrase": interpretation.merchant_phrase,
+        "project_phrase": interpretation.project_phrase,
+        "project_id": project_uuid.group().lower() if project_uuid else None,
+        "step_reference": interpretation.step_reference,
+        "target_status": interpretation.target_status,
+    })
 
     if interpretation.kind != STEP_UPDATE:
         return _ask(result, "Is this a request to update one Project step? Which step, and to which status?")
@@ -158,13 +149,68 @@ def build_step_update_preview(
         return result
 
     step, step_candidates, question = _resolve_step(
-        interpretation.step_reference, _text(stored["id"]), steps
+        _written_title(interpretation.step_reference, request, steps),
+        _text(stored["id"]), steps,
     )
     if step is None:
         result["candidates"] = step_candidates
         return _missing(result, "step", question)
 
     return _evaluate(result, detail, stored, steps, step, interpretation.target_status)
+
+
+def _skeleton(database_target, query):
+    return {
+        "success": True,
+        "mode": MODE,
+        "database_target": database_target or "runtime",
+        "outcome": CLARIFY,
+        "read_only": True,
+        "executable": False,
+        "confirmation_available": False,
+        "authorization": None,
+        "query": query,
+        "merchant": None,
+        "project": None,
+        "step": None,
+        "transition": None,
+        "unmet_dependencies": [],
+        "gate": None,
+        "blocking": [],
+        "candidates": [],
+        "clarifications": [],
+        # CP12H.NL4B-FIX2: fields the request did not settle: "step",
+        # "target_status", "merchant", "project" (one question each).
+        "missing": [],
+        # CP12H.NL4C1: the exact operation of a READY preview (data only).
+        "requested_operation": None,
+    }
+
+
+def _written_title(reference, request, steps):
+    """CP12H.NL4C2B-FIX: the full stored title the user wrote, if the parser cut it.
+
+    The parser ends a name at words such as "to" ("Send reviewed revision to
+    Partner"). When a persisted step title begins with the parsed name and
+    appears whole in the user's own words, that exact title is the
+    reference. Otherwise (none, or several equally long) the parsed name is
+    kept unchanged and the resolver decides; nothing is guessed.
+    """
+
+    if not reference or reference.isdigit():
+        return reference
+    words = f" {fold(request)} "
+    start = fold(reference)
+    written = [
+        title for title in {fold(str(s.get("step_name") or "")) for s in steps}
+        if title.startswith(start + " ") and f" {title} " in words
+    ]
+    longest = max((len(t) for t in written), default=0)
+    exact = [t for t in written if len(t) == longest]
+    if len(exact) != 1:
+        return reference
+    (title,) = exact
+    return next(str(s["step_name"]) for s in steps if fold(str(s.get("step_name") or "")) == title)
 
 
 def _resolve_step(reference, project_id, steps):
@@ -293,7 +339,180 @@ def _evaluate(result, detail, project, steps, step, target):
         del gate["result"]
     result["project_state"] = _project_state(steps)
     result["outcome"] = READY if not blocking else BLOCKED
+    if not blocking:
+        result["requested_operation"] = _requested_operation(result, detail, project, step, target)
+        result["confirmation_available"] = result["database_target"] in CONFIRMABLE_TARGETS
     return result
+
+
+# ------------------------------------------------ CP12H.NL4C1 operation
+
+OPERATION_COMMAND = "step update"
+# CP12H.NL4C: targets on which the user's own "/solve Xác nhận cập nhật" can
+# run a READY preview's operation. Mirrors merchant_direct_handoff's switch
+# (test-mode Step Update on, runtime Direct EXECUTE off); a test asserts they
+# agree. Reporting only: the gate and preflight decide independently.
+CONFIRMABLE_TARGETS = frozenset({"test"})
+NOT_AUTHORIZED = "NOT_AUTHORIZED"
+DATABASE_TARGETS = ("runtime", "test")
+OPERATION_NOTE = (
+    "Data, not authority. Nothing was updated. Only the user's own "
+    "confirmation of this exact operation, re-checked against current state, "
+    "can run it."
+)
+# Every detail section the write transaction judges; contacts and
+# integration identifiers play no part in a step transition.
+_BASIS_SECTIONS = ("steps", "dependencies", "document_revisions",
+                   "document_approvals", "procurement_records")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+class StepPreviewMismatch(PermissionError):
+    """The confirmed Step Update no longer matches its preview."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+def _canonical(row) -> str:
+    return json.dumps(dict(row), sort_keys=True, ensure_ascii=False, default=str)
+
+
+def step_basis_hash(detail: dict[str, Any], step_id: Any, target_status: str) -> str:
+    """sha256 of the exact snapshot a Step Update was judged on.
+
+    Any change to the Project row (version, status, Merchant fields), any
+    step, any dependency edge or any gate evidence row changes it.
+    """
+
+    basis = {
+        "operation": [_text(step_id), target_status],
+        "project": _canonical(detail["project"]),
+        **{name: sorted(_canonical(row) for row in detail.get(name) or [])
+           for name in _BASIS_SECTIONS},
+    }
+    return hashlib.sha256(
+        json.dumps(basis, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def canonical_step_argv(operation: dict[str, Any]) -> list[str]:
+    """The one argv form of a previewed ``step update`` (fixed order)."""
+
+    return [
+        "step", "update", operation["step_id"],
+        "--status", operation["target_status"],
+        "--expected-version", str(operation["step_version"]),
+        "--project-id", operation["project_id"],
+        "--merchant-code", operation["merchant_code"],
+        "--expected-basis", operation["expected_basis"],
+    ]
+
+
+def _requested_operation(result, detail, project, step, target):
+    operation = {
+        "command": OPERATION_COMMAND,
+        "status": NOT_AUTHORIZED,
+        "database_target": result["database_target"],
+        "merchant_id": _text(project["merchant_id"]),
+        "merchant_code": project.get("merchant_code"),
+        "project_id": _text(project["id"]),
+        "project_title": project.get("title"),
+        "project_version": project.get("version"),
+        "step_id": _text(step["id"]),
+        "step_sequence": step.get("sequence_number"),
+        "step_name": _step(step)["name"],
+        "step_version": step.get("version"),
+        "current_status": step.get("status"),
+        "target_status": target,
+        "expected_basis": step_basis_hash(detail, step["id"], target),
+    }
+    operation["argv"] = canonical_step_argv(operation)
+    operation["note"] = OPERATION_NOTE
+    validate_step_operation(operation)
+    return operation
+
+
+def _positive(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def validate_step_operation(operation: Any) -> None:
+    """Raise ValueError unless ``operation`` is one complete, canonical Step operation.
+
+    Rejects truncated, edited or reconstructed operations: the argv must be
+    exactly what the fields produce. It never grants authority.
+    """
+
+    if not isinstance(operation, dict):
+        raise ValueError("requested_operation must be an object")
+    if operation.get("command") != OPERATION_COMMAND:
+        raise ValueError("requested_operation must be a step update")
+    if operation.get("status") != NOT_AUTHORIZED:
+        raise ValueError("requested_operation must stay NOT_AUTHORIZED")
+    if operation.get("database_target") not in DATABASE_TARGETS:
+        raise ValueError("requested_operation has no valid database_target")
+    for name in ("merchant_id", "merchant_code", "project_id", "step_id",
+                 "step_name", "project_title", "current_status", "target_status"):
+        value = operation.get(name)
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError(f"requested_operation field {name} is missing")
+    for name in ("merchant_id", "project_id", "step_id"):
+        if not _UUID.fullmatch(operation[name]) or operation[name] != operation[name].lower():
+            raise ValueError("requested_operation identifiers must be canonical UUIDs")
+    for name in ("project_version", "step_version", "step_sequence"):
+        if not _positive(operation.get(name)):
+            raise ValueError(f"requested_operation field {name} must be a positive integer")
+    if not {operation["current_status"], operation["target_status"]} <= set(STEP_STATUSES):
+        raise ValueError("requested_operation has an unknown step status")
+    if operation["current_status"] == operation["target_status"]:
+        raise ValueError("requested_operation does not change the step")
+    basis = operation.get("expected_basis")
+    if not isinstance(basis, str) or not _HEX64.fullmatch(basis):
+        raise ValueError("requested_operation has no valid expected_basis")
+    if operation.get("argv") != canonical_step_argv(operation):
+        raise ValueError("requested_operation argv is not the canonical operation")
+
+
+def verify_step_update(reads: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Refuse unless the confirmed ``step update`` still matches its preview.
+
+    ``payload`` is the exact confirmed CLI payload. The Project and step are
+    re-read, every write-path check is re-applied (transition, dependencies,
+    approval gate, domain planner), and the snapshot must hash to the
+    confirmed basis. Raises StepPreviewMismatch; returns the fresh judgement.
+    """
+
+    if not all(payload.get(name) for name in ("expected_basis_hash", "project_id", "merchant_code")):
+        raise StepPreviewMismatch(
+            "STEP_BASIS_REQUIRED",
+            "step update requires the preview's --project-id, --merchant-code and --expected-basis",
+        )
+
+    detail = reads.get_project_detail(payload["project_id"])
+    project = dict(detail["project"])
+    steps = detail.get("steps") or []
+
+    if project.get("merchant_code") != payload["merchant_code"]:
+        raise StepPreviewMismatch("MERCHANT_MISMATCH", "the Project belongs to another Merchant")
+    step = next((s for s in steps if _text(s["id"]) == _text(payload.get("step_id"))), None)
+    if step is None:
+        raise StepPreviewMismatch("STEP_NOT_IN_PROJECT", "the step is not in the confirmed Project")
+    if step.get("version") != payload.get("expected_version"):
+        raise StepPreviewMismatch("STEP_VERSION_CHANGED", "the step changed since the preview")
+
+    judged = _evaluate(_skeleton(None, None), detail, project, steps, step, payload.get("status"))
+    if judged["outcome"] != READY:
+        raise StepPreviewMismatch(
+            "STEP_NOT_READY", ", ".join(b["code"] for b in judged["blocking"])
+        )
+    if step_basis_hash(detail, step["id"], payload["status"]) != payload["expected_basis_hash"]:
+        raise StepPreviewMismatch(
+            "STEP_BASIS_CHANGED",
+            "the Project, its steps, dependencies or approval evidence changed since the preview",
+        )
+    return judged
 
 
 def _gate(result, detail, project, step):
