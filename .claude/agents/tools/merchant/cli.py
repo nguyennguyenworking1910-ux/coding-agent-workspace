@@ -372,6 +372,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
     # Read-only natural-language Project discovery and workflow status.
     project_status = project_actions.add_parser("status")
     project_status.add_argument("--request", required=True)
+    # CP12H.NL4D2: read-only evidence and approval discovery.
+    project_evidence = project_actions.add_parser("evidence")
+    project_evidence.add_argument("--request", required=True)
 
     project_resolve = project_actions.add_parser("resolve")
     project_resolve.add_argument(
@@ -642,6 +645,11 @@ def dispatch_read_command(
         )
     if command == "project status":
         return commands.project_status(
+            request=args.request,
+            database_target=args.database,
+        )
+    if command == "project evidence":
+        return commands.project_evidence(
             request=args.request,
             database_target=args.database,
         )

@@ -934,6 +934,7 @@ def run(
         and operations <= {MERCHANT_EXECUTE_OPERATION, MERCHANT_READ_OPERATION}
     ):
         from claude.agents.tools.merchant.project_nl import (
+            EVIDENCE_STATUS,
             PROJECT_CREATE,
             PROJECT_LIST,
             PROJECT_STATUS,
@@ -947,11 +948,13 @@ def run(
         # of that verified preview can authorize the write (NL4C).
         kind = interpret_project_request(request).kind
 
+        # CP12H.NL4D2: an evidence or approval question is a read too.
         if kind in {
             PROJECT_CREATE,
             PROJECT_STATUS,
             PROJECT_LIST,
             STEP_UPDATE,
+            EVIDENCE_STATUS,
         }:
             operations = {MERCHANT_READ_OPERATION}
             envelope_payload.update(

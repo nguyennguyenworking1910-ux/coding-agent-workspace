@@ -306,7 +306,8 @@ python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments
 
 The adapter fixes the database target to `runtime`. It exposes no database-selection,
 connection, or credential arguments; the only exceptions are `project preview --test-database`,
-`project status --test-database` and `step preview --test-database`, reads of the Merchant test database. For runtime it is read-only: it accepts the allowlisted
+`project status --test-database`, `project evidence --test-database` (CP12H.NL4D2, read-only evidence and
+approval discovery) and `step preview --test-database`, reads of the Merchant test database. For runtime it is read-only: it accepts the allowlisted
 reads and `completeness check`, and rejects every write mode including `--propose`, `--apply`,
 and `--execute`.
 

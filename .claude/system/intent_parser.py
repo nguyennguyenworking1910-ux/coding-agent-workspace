@@ -18,8 +18,10 @@ from openai import OpenAI
 
 try:
     from claude.agents.tools.merchant.project_nl import (
+        EVIDENCE_STATUS as EVIDENCE_REQUEST,
         STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
+        fold as fold_project_text,
         interpret_project_request,
     )
 except ModuleNotFoundError:
@@ -28,10 +30,42 @@ except ModuleNotFoundError:
         0, str(Path(__file__).resolve().parents[1] / "agents" / "tools" / "merchant")
     )
     from project_nl import (  # type: ignore
+        EVIDENCE_STATUS as EVIDENCE_REQUEST,
         STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
+        fold as fold_project_text,
         interpret_project_request,
     )
+
+
+def _workflow_step_phrases() -> frozenset[str]:
+    """CP12H.NL4D2-FIX1: folded names of the standard workflow steps.
+
+    Every suffix of two or more words of a template step title ("Record
+    Partner approval" gives "partner approval" and "record partner
+    approval"), never one starting with a function word. It is the domain's
+    own vocabulary: naming one is Merchant workflow context. Empty when the
+    package is not importable (direct script execution).
+    """
+
+    try:
+        from claude.agents.tools.merchant.workflow_templates import (
+            STANDARD_WORKFLOW_TEMPLATES,
+        )
+    except ModuleNotFoundError:
+        return frozenset()
+
+    phrases = set()
+    for template in STANDARD_WORKFLOW_TEMPLATES:
+        for step in template.steps:
+            words = fold_project_text(step.name).split()
+            for start in range(len(words) - 1):
+                if words[start] not in {"to", "or", "and", "of", "for", "the"}:
+                    phrases.add(" ".join(words[start:]))
+    return frozenset(phrases)
+
+
+WORKFLOW_STEP_PHRASES = _workflow_step_phrases()
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -1161,6 +1195,19 @@ class IntentParser:
         )
 
     @staticmethod
+    def _names_merchant_evidence_context(text: str, project_request: Any) -> bool:
+        """A Project, Merchant or step is named, or a standard workflow step is."""
+
+        if (
+            project_request.project_phrase
+            or project_request.merchant_phrase
+            or project_request.step_reference
+        ):
+            return True
+        folded = f" {fold_project_text(text)} "
+        return any(f" {phrase} " in folded for phrase in WORKFLOW_STEP_PHRASES)
+
+    @staticmethod
     def _detect_local_merchant_operation(
         text: str,
     ) -> str | None:
@@ -1188,6 +1235,15 @@ class IntentParser:
         merchant_project = (
             project_request.project_type is not None
             or project_request.kind == STEP_UPDATE_REQUEST
+            # CP12H.NL4D2-FIX1: an evidence or approval question about a
+            # named Project, Merchant or step, or a standard workflow step
+            # ("Partner Approval", "Legal Review"), reads Merchant data. A
+            # bare "Which approvals are still required?" names none and is
+            # left to the model.
+            or (
+                project_request.kind == EVIDENCE_REQUEST
+                and IntentParser._names_merchant_evidence_context(text, project_request)
+            )
         )
 
         if not merchant_project and not any(

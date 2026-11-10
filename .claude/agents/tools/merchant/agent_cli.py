@@ -55,7 +55,8 @@ TEST_DATABASE_TARGET = "test"
 TEST_PREVIEW_OPTION = "--test-database"
 # The only reads that may name the Merchant test database.
 TEST_DATABASE_READS = frozenset(
-    {("project", "preview"), ("project", "status"), ("step", "preview")}
+    {("project", "preview"), ("project", "status"), ("project", "evidence"),
+     ("step", "preview")}
 )
 
 CREDENTIAL_OR_TARGET_OPTIONS = frozenset(

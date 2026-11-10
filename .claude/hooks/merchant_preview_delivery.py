@@ -38,9 +38,15 @@ STATUS_DELIVERY_FAILED = "STATUS_DELIVERY_FAILED"
 STEP_PREVIEW_MARKER = "MERCHANT_STEP_PREVIEW_JSON:"
 STEP_PREVIEW_EVIDENCE_FIELD = "step_preview_evidence"
 STEP_PREVIEW_DELIVERY_FAILED = "STEP_UPDATE_DELIVERY_FAILED"
+# CP12H.NL4D2: the read-only evidence and approval discovery, delivered the
+# same way; terminal: its report may carry no operation, scope or command.
+EVIDENCE_RESULT_MARKER = "MERCHANT_EVIDENCE_STATUS_JSON:"
+EVIDENCE_STATUS_EVIDENCE_FIELD = "evidence_status_evidence"
+EVIDENCE_DELIVERY_FAILED = "EVIDENCE_DELIVERY_FAILED"
 # Reads that may name the Merchant test database (mirrors agent_cli).
 TEST_DATABASE_READS = frozenset(
-    {("project", "preview"), ("project", "status"), ("step", "preview")}
+    {("project", "preview"), ("project", "status"), ("project", "evidence"),
+     ("step", "preview")}
 )
 
 
@@ -73,6 +79,13 @@ READ_RESULT_CONTRACTS = (
         # confirmation_available is checked against the outcome and target
         # in _step_operation_consistent (CP12H.NL4C).
         (("read_only", True), ("authorization", None), ("executable", False)),
+        terminal=True,
+    ),
+    ReadResultContract(
+        ("project", "evidence"), "EVIDENCE_STATUS", EVIDENCE_RESULT_MARKER,
+        EVIDENCE_STATUS_EVIDENCE_FIELD, EVIDENCE_DELIVERY_FAILED, "Evidence status",
+        (("read_only", True), ("authorization", None), ("executable", False),
+         ("confirmation_available", False)),
         terminal=True,
     ),
 )

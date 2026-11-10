@@ -116,6 +116,7 @@ The registered read command families are:
 - `project resolve`
 - `project show`
 - `project status`
+- `project evidence`
 - `step preview`
 - `project history`
 - `project blockers`
@@ -140,6 +141,7 @@ Only these read commands are authorized:
 | Preview a Project creation from the user's words | `project preview --request "<user request text>" [--test-database] [--merchant-hint "<text>"] [--type-hint <PROJECT_TYPE>] [--title-hint "<text>"]` |
 | Project status, current steps or a Merchant's Projects, from the user's words | `project status --request "<user request text>" [--test-database]` |
 | Preview a Step update from the user's words (read-only) | `step preview --request "<user request text>" [--test-database]` |
+| A Project's documents, approvals, procurement records or what a gate still lacks, from the user's words | `project evidence --request "<user request text>" [--test-database]` |
 
 ### Natural-language Project status (CP12H.NL4A)
 
@@ -162,6 +164,28 @@ user's request text verbatim. Add `--test-database` exactly when the assignment'
   `MERCHANT_PROJECT_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting
   with `STATUS_DELIVERY_FAILED:` and the reason, without the block or step state.
+
+### Natural-language evidence and approval discovery (CP12H.NL4D2)
+
+For a question about a Project's document revisions, Legal, Accounting or Partner approvals,
+Purchase Request, Purchase Order or Payment Request records, or what evidence a step or gate
+still lacks ("Project Beta Nguyễn Văn Cừ còn thiếu giấy tờ gì?", "Legal đã duyệt tài liệu mới
+nhất chưa?", "Which evidence blocks Step 8 of Project X?"), run `project evidence` once with
+the user's request text verbatim. Add `--test-database` exactly when the assignment's
+`database_target` is `test`. It is read-only: it records, approves, signs and confirms nothing.
+
+- `NEEDS_CLARIFICATION`: relay the question and any `candidates`; never pick a Project or step
+  yourself, never take one from an earlier assignment, and never run another read to guess.
+- Report evidence only from the result: `approvals[].status` and `requirement`, `documents`,
+  `procurement`, `gates` (`gate_status`, `blocking_codes`), `missing` and `focus_step`. An
+  approval in `outdated_approvals` is on a superseded revision and never approves the latest
+  one. A gate with `NO_DATABASE_EVALUATOR` can never be satisfied by stored evidence.
+- Never offer to record, approve, sign or upload anything, and never give a confirmation
+  command, `--merchant-scope`, argv or a write CLI command: no such write exists yet.
+- Your report must contain the CLI's result exactly once, on its own line after
+  `MERCHANT_EVIDENCE_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
+  precede it. If the gate says the output could not be verified, send the report once starting
+  with `EVIDENCE_DELIVERY_FAILED:` and the reason, without the block.
 
 ### Natural-language Step Update preview (CP12H.NL4B, confirmation CP12H.NL4C)
 

@@ -386,6 +386,22 @@ Never add, infer or change a step state from the conversation. State what a step
 from its own `unmet_predecessors`; steps sharing predecessors are parallel, never a range. A `STATUS_DELIVERY_FAILED` report
 is not a status: report the failure only.
 
+### Evidence and approval discovery delivery (CP12H.NL4D2)
+
+A question about a Project's documents, approvals, procurement records or what a gate still
+lacks is a read-only run (`merchant_read`, no `--confirm`). `merchant-manager` answers it with
+`project evidence --request "<user words>"`; its report carries the CLI result once after
+`MERCHANT_EVIDENCE_STATUS_JSON:`, checked by the policy gate against the captured CLI output.
+Build your summary only from that object: the Project and Merchant, `focus_step` (when a step
+was named, with its `gate` and `unmet_direct_dependencies`), `approvals` per role (`status`:
+PRESENT, MISSING, INVALID or UNKNOWN, and `requirement`: REQUIRED or NOT_REQUIRED, with
+`required_by`), `outdated_approvals` (on superseded revisions: they never approve the latest
+revision), `documents`, `procurement`, `gates` and `missing`. Name only what those fields
+contain; never infer a requirement. A gate with `NO_DATABASE_EVALUATOR` cannot be satisfied by
+any stored evidence. Nothing was recorded or changed, and no evidence, approval, procurement or
+signing write exists: never offer one, a confirmation, a scope or a command. An
+`EVIDENCE_DELIVERY_FAILED` report is not a result: report the failure only.
+
 ### Step Update preview delivery (CP12H.NL4B)
 
 An unscoped request to update one Project step is a read-only run (`merchant_read`, no

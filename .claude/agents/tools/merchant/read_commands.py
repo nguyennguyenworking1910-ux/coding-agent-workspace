@@ -292,6 +292,23 @@ class MerchantReadCommands:
         )
         return cast(dict[str, Any], redact_payload(result))
 
+    def project_evidence(
+        self,
+        *,
+        request: str,
+        database_target: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only natural-language evidence and approval discovery (CP12H.NL4D2)."""
+
+        from .evidence_status import build_evidence_status
+
+        result = build_evidence_status(
+            request,
+            self.repository,
+            database_target=database_target,
+        )
+        return cast(dict[str, Any], redact_payload(result))
+
     def step_preview(
         self,
         *,

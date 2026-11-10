@@ -22,6 +22,9 @@ MERCHANT_CREATE = "MERCHANT_CREATE"
 PROJECT_LIST = "PROJECT_LIST"
 PROJECT_STATUS = "PROJECT_STATUS"
 STEP_UPDATE = "STEP_UPDATE"
+# CP12H.NL4D2: a read-only question about document revisions, approvals,
+# procurement records or the evidence a workflow gate still lacks.
+EVIDENCE_STATUS = "EVIDENCE_STATUS"
 MIXED = "MIXED"
 UNKNOWN = "UNKNOWN"
 
@@ -180,8 +183,39 @@ _STOP_WORDS = frozenset(
     "completed finished done".split()
 )
 _STOP_PAIRS = frozenset(
-    {"hien tai", "hien co", "du an", "la gi", "da hoan", "da xong", "hoan thanh"}
+    {"hien tai", "hien co", "du an", "la gi", "da hoan", "da xong", "hoan thanh",
+     # CP12H.NL4D2: "Project X còn thiếu ...", "Project X đã có Purchase Order".
+     "con thieu", "con cho", "da co", "da duoc", "da duyet", "da ky"}
 )
+# CP12H.NL4D2: what an evidence question is about (folded). Never a write:
+# the question shape is required and an imperative write verb excludes it.
+_EVIDENCE_NOUN = (
+    r"\b(?:giay to|tai lieu|ho so|chung tu|phe duyet|duyet|approvals?|approved|"
+    r"evidence|documents?|revisions?|phien ban|purchase (?:order|request|requisition)s?|"
+    r"payment requests?|de nghi thanh toan|don dat hang|yeu cau mua hang|"
+    r"dieu kien|signing gate|chu ky|da ky|signed|signature|requirements?|required)\b"
+)
+# CP12H.NL4D2-FIX1: "What blocks Step 8?", "Bước 8 bị chặn vì sao?", "Bước X còn
+# thiếu gì?": a named step plus a blocker question asks what it lacks.
+_STEP_BLOCKER = (
+    r"\b(?:bi chan|vi sao|tai sao|why|blocks?|blocked|blocking|con thieu|thieu gi|"
+    r"missing)\b"
+)
+# A step-completion question stays a status read even when the step's title
+# names a document or approval ("Bước Record Partner approval đã xong chưa?").
+_COMPLETION_QUESTION = r"\b(?:xong|hoan thanh) chua\b|\b(?:completed|finished|done)\b"
+_EVIDENCE_ASK = (
+    r"\b(?:chua|nao|gi|con thieu|thieu|missing|which|what|list|show|liet ke|"
+    r"danh sach|dang cho|blocks?|blocked|blocking|has|have|is|are|did|does|xem)\b"
+)
+_EVIDENCE_WRITE_START = (
+    r"^(?:(?:hay|vui long|please) )?(?:ghi nhan|tai len|upload|dinh kem|attach|record|"
+    r"register|them|add|tao|create|approve|phe duyet|duyet|ky|sign|cap nhat|update|"
+    r"set|xoa|delete)\b"
+)
+# Trailing question particles and demonstratives never belong to a name:
+# "... Project X chưa?"; "Project này" names no Project (no trusted binding).
+_QUESTION_PARTICLES = frozenset({"chua", "khong", "nhi", "vay", "nay", "this"})
 # Words skipped at the start of a name phrase.
 _LEAD_WORDS = frozenset({"the", "a", "rap", "cinema", "project", "projects"})
 # Anchor collocations that are not "owned by" / "for": "phụ thuộc" (depends),
@@ -275,8 +309,25 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         text,
     ) is not None
 
-    kind = _classify(text, has_project, creates_merchant, creates_project)
+    # A noun inside a Project or Merchant name ("Project X Evidence") never
+    # makes a request an evidence question.
+    covered = words._entity_name_words()
+    unnamed = " ".join(w for n, w in enumerate(words.folded_words) if n not in covered)
+    evidence_read = (
+        (
+            re.search(_EVIDENCE_NOUN, unnamed) is not None
+            or (words.names_a_step() and re.search(_STEP_BLOCKER, unnamed) is not None)
+        )
+        and (question or re.search(_EVIDENCE_ASK, text) is not None)
+        and re.search(_EVIDENCE_WRITE_START, text) is None
+        and re.search(_COMPLETION_QUESTION, text) is None
+    )
+    kind = _classify(text, has_project, creates_merchant, creates_project, evidence_read)
     if kind == STEP_UPDATE and re.search(_FURTHER_ACTION, text):
+        kind = MIXED
+    # "giấy tờ và phê duyệt" names evidence; only a second action outside
+    # the evidence nouns ("..., rồi xóa Merchant") makes it MIXED.
+    if kind == EVIDENCE_STATUS and re.search(_FURTHER_ACTION, re.sub(_EVIDENCE_NOUN, " ", text)):
         kind = MIXED
 
     merchant_phrase = site_phrase = project_phrase = None
@@ -300,14 +351,19 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
     elif kind == PROJECT_LIST:
         # The first owner in reading order: "projects for Beta ... status of each".
         merchant_phrase = words.owner_phrase(("cua", "of", "for", "cho", "thuoc", "under"))
-    elif kind == PROJECT_STATUS:
+    elif kind in (PROJECT_STATUS, EVIDENCE_STATUS):
         project_phrase = words.phrase_after_word(
             ("project", "projects", "du an")
         ) or words.phrase_after_word(("of",))
         # "Project X của Lotte Cinema": the owner, not "của Project X".
         merchant_phrase = words.owner_phrase(("cua", "of", "thuoc", "under"))
+        if kind == EVIDENCE_STATUS:
+            project_phrase = _without_question_particle(project_phrase)
+            merchant_phrase = _without_question_particle(merchant_phrase)
 
     step_reference = target_status = None
+    if kind == EVIDENCE_STATUS:
+        step_reference = words.step_reference()
     if kind == STEP_UPDATE:
         negated = negated or re.search(_STEP_NEGATION, text) is not None
         exploratory = exploratory or re.search(_STEP_UNCERTAIN, text) is not None
@@ -444,8 +500,19 @@ def requests_test_database(request: str) -> bool:
     return False
 
 
+def _without_question_particle(phrase: str | None) -> str | None:
+    words = (phrase or "").split()
+    while words and fold(words[-1]) in _QUESTION_PARTICLES:
+        words.pop()
+    return " ".join(words) or None
+
+
 def _classify(
-    text: str, has_project: bool, creates_merchant: bool, creates_project: bool
+    text: str,
+    has_project: bool,
+    creates_merchant: bool,
+    creates_project: bool,
+    evidence_read: bool = False,
 ) -> str:
     """The primary operation, in precedence order. Writes first, then reads.
 
@@ -471,6 +538,8 @@ def _classify(
         return MERCHANT_CREATE
     if creates_project:
         return PROJECT_CREATE
+    if evidence_read:
+        return EVIDENCE_STATUS
     if re.search(_LIST_OPERATION, text) and (
         not step_question or re.search(_PER_ITEM, text)
     ):
