@@ -19,6 +19,7 @@ from openai import OpenAI
 try:
     from claude.agents.tools.merchant.project_nl import (
         EVIDENCE_STATUS as EVIDENCE_REQUEST,
+        EVIDENCE_WRITE as EVIDENCE_WRITE_REQUEST,
         STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
         fold as fold_project_text,
@@ -31,11 +32,24 @@ except ModuleNotFoundError:
     )
     from project_nl import (  # type: ignore
         EVIDENCE_STATUS as EVIDENCE_REQUEST,
+        EVIDENCE_WRITE as EVIDENCE_WRITE_REQUEST,
         STEP_UPDATE as STEP_UPDATE_REQUEST,
         UNKNOWN as UNKNOWN_PROJECT_REQUEST,
         fold as fold_project_text,
         interpret_project_request,
     )
+
+
+# CP12H.NL4D3: a domain approver role or procurement record named in an
+# evidence write ("Record Accounting approval", "Ghi nhận Purchase Order").
+# Full names only: a bare "PR" or "PO" is usually a pull request or code.
+EVIDENCE_WRITE_CONTEXT = (
+    r"\b(?:legal|phap ly|accounting|ke toan|partner|doi tac) (?:approvals?|phe duyet|duyet)\b"
+    r"|\b(?:legal|phap ly|accounting|ke toan|partner|doi tac)(?: team)? "
+    r"(?:(?:da|has|have) )?(?:phe duyet|duyet|approved|rejected|tu choi)\b"
+    r"|\b(?:purchase (?:request|requisition|order)|payment request|yeu cau mua hang|"
+    r"don dat hang|de nghi thanh toan)\b"
+)
 
 
 def _workflow_step_phrases() -> frozenset[str]:
@@ -1243,6 +1257,17 @@ class IntentParser:
             or (
                 project_request.kind == EVIDENCE_REQUEST
                 and IntentParser._names_merchant_evidence_context(text, project_request)
+            )
+            # CP12H.NL4D3: a request to record a revision, an approval or a
+            # procurement reference with Merchant context, or naming a domain
+            # approver role or procurement record ("Record Accounting
+            # approval"); only ever answered by the read-only preview.
+            or (
+                project_request.kind == EVIDENCE_WRITE_REQUEST
+                and (
+                    IntentParser._names_merchant_evidence_context(text, project_request)
+                    or re.search(EVIDENCE_WRITE_CONTEXT, fold_project_text(text)) is not None
+                )
             )
         )
 

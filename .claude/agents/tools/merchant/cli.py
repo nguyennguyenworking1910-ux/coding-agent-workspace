@@ -530,6 +530,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     procurement_update.add_argument("--triggered-by")
     procurement_update.add_argument("--procurement-id")
 
+    # CP12H.NL4D3: read-only evidence, approval and procurement write preview.
+    evidence_parser = resources.add_parser("evidence")
+    evidence_actions = evidence_parser.add_subparsers(dest="action", required=True)
+    evidence_preview = evidence_actions.add_parser("preview")
+    evidence_preview.add_argument("--request", required=True)
+
     integration_parser = resources.add_parser("integration")
     integration_actions = integration_parser.add_subparsers(
         dest="action",
@@ -650,6 +656,11 @@ def dispatch_read_command(
         )
     if command == "project evidence":
         return commands.project_evidence(
+            request=args.request,
+            database_target=args.database,
+        )
+    if command == "evidence preview":
+        return commands.evidence_preview(
             request=args.request,
             database_target=args.database,
         )

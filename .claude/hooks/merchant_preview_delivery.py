@@ -43,10 +43,15 @@ STEP_PREVIEW_DELIVERY_FAILED = "STEP_UPDATE_DELIVERY_FAILED"
 EVIDENCE_RESULT_MARKER = "MERCHANT_EVIDENCE_STATUS_JSON:"
 EVIDENCE_STATUS_EVIDENCE_FIELD = "evidence_status_evidence"
 EVIDENCE_DELIVERY_FAILED = "EVIDENCE_DELIVERY_FAILED"
+# CP12H.NL4D3: the read-only evidence write preview. Terminal, and a VERIFIED
+# capture must carry no requested_operation: it creates no pending record.
+EVIDENCE_PREVIEW_MARKER = "MERCHANT_EVIDENCE_PREVIEW_JSON:"
+EVIDENCE_PREVIEW_EVIDENCE_FIELD = "evidence_preview_evidence"
+EVIDENCE_PREVIEW_DELIVERY_FAILED = "EVIDENCE_WRITE_PREVIEW_FAILED"
 # Reads that may name the Merchant test database (mirrors agent_cli).
 TEST_DATABASE_READS = frozenset(
     {("project", "preview"), ("project", "status"), ("project", "evidence"),
-     ("step", "preview")}
+     ("evidence", "preview"), ("step", "preview")}
 )
 
 
@@ -86,6 +91,14 @@ READ_RESULT_CONTRACTS = (
         EVIDENCE_STATUS_EVIDENCE_FIELD, EVIDENCE_DELIVERY_FAILED, "Evidence status",
         (("read_only", True), ("authorization", None), ("executable", False),
          ("confirmation_available", False)),
+        terminal=True,
+    ),
+    ReadResultContract(
+        ("evidence", "preview"), "EVIDENCE_WRITE_PREVIEW", EVIDENCE_PREVIEW_MARKER,
+        EVIDENCE_PREVIEW_EVIDENCE_FIELD, EVIDENCE_PREVIEW_DELIVERY_FAILED,
+        "Evidence write preview",
+        (("read_only", True), ("authorization", None), ("executable", False),
+         ("confirmation_available", False), ("requested_operation", None)),
         terminal=True,
     ),
 )

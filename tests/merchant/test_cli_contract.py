@@ -64,6 +64,7 @@ def test_command_allowlists_are_complete_and_disjoint():
         "project show",
         "project status",  # CP12H.NL4A: read-only NL discovery and status
         "project evidence",  # CP12H.NL4D2: read-only evidence/approval discovery
+        "evidence preview",  # CP12H.NL4D3: read-only evidence write preview
         "step preview",  # CP12H.NL4B: read-only NL Step Update preview
         "step resolve",
         "document resolve",

@@ -309,6 +309,23 @@ class MerchantReadCommands:
         )
         return cast(dict[str, Any], redact_payload(result))
 
+    def evidence_preview(
+        self,
+        *,
+        request: str,
+        database_target: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only evidence, approval and procurement write preview (CP12H.NL4D3)."""
+
+        from .evidence_preview import build_evidence_preview
+
+        result = build_evidence_preview(
+            request,
+            self.repository,
+            database_target=database_target,
+        )
+        return cast(dict[str, Any], redact_payload(result))
+
     def step_preview(
         self,
         *,

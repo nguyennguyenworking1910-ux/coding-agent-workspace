@@ -935,6 +935,7 @@ def run(
     ):
         from claude.agents.tools.merchant.project_nl import (
             EVIDENCE_STATUS,
+            EVIDENCE_WRITE,
             PROJECT_CREATE,
             PROJECT_LIST,
             PROJECT_STATUS,
@@ -949,12 +950,16 @@ def run(
         kind = interpret_project_request(request).kind
 
         # CP12H.NL4D2: an evidence or approval question is a read too.
+        # CP12H.NL4D3: so is an unscoped evidence, approval or procurement
+        # write request: it only runs as the read-only `evidence preview`,
+        # which grants nothing (no confirmation exists for it yet).
         if kind in {
             PROJECT_CREATE,
             PROJECT_STATUS,
             PROJECT_LIST,
             STEP_UPDATE,
             EVIDENCE_STATUS,
+            EVIDENCE_WRITE,
         }:
             operations = {MERCHANT_READ_OPERATION}
             envelope_payload.update(
@@ -965,15 +970,15 @@ def run(
 
             # CP12H.NL4B-FIX2B: a missing Project/Step/status is answered by
             # the step preview's own NEEDS_CLARIFICATION, not by a block here.
-            if kind == STEP_UPDATE:
+            if kind in (STEP_UPDATE, EVIDENCE_WRITE):
                 envelope_payload["requires_clarification"] = False
 
             envelope_payload["reasons"] = list(
                 envelope_payload.get("reasons") or []
             ) + [
-                "Unscoped Project create, status, list or Step update request "
-                "runs as a read-only preview or status read; any write needs "
-                "the user's separate confirmation."
+                "Unscoped Project create, status, list, Step update, evidence "
+                "question or evidence write request runs as a read-only preview "
+                "or status read; any write needs the user's separate confirmation."
             ]
 
     if envelope_payload.get("requires_clarification"):

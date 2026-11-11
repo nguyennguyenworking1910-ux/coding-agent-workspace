@@ -402,6 +402,21 @@ any stored evidence. Nothing was recorded or changed, and no evidence, approval,
 signing write exists: never offer one, a confirmation, a scope or a command. An
 `EVIDENCE_DELIVERY_FAILED` report is not a result: report the failure only.
 
+### Evidence write preview delivery (CP12H.NL4D3)
+
+A request to record a document revision, a LEGAL, ACCOUNTING or PARTNER approval, or a Purchase
+Request, Purchase Order or Payment Request reference runs without `--confirm` as a read-only
+run (`merchant_read`). `merchant-manager` answers it with `evidence preview --request "<user
+words>"`; its report carries the CLI result once after `MERCHANT_EVIDENCE_PREVIEW_JSON:`,
+checked by the policy gate against the captured CLI output. Build your summary only from that
+object: `operation_kind`, `evidence_type`, the resolved Project and Merchant, `requested_fields`,
+`missing_required_fields`, `existing_evidence`, `domain_validation` (its `plan`, or its
+`error`), `policy_blockers` and `outcome` (PREVIEW_VALID, BLOCKED, NEEDS_CLARIFICATION or
+POLICY_UNDECIDED). Nothing was recorded or changed. PREVIEW_VALID is not an authorization: no
+evidence, approval, procurement or signing write exists, so never offer one, a confirmation, a
+scope or a command. An `EVIDENCE_WRITE_PREVIEW_FAILED` report is not a result: report the
+failure only.
+
 ### Step Update preview delivery (CP12H.NL4B)
 
 An unscoped request to update one Project step is a read-only run (`merchant_read`, no

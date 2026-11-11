@@ -117,6 +117,7 @@ The registered read command families are:
 - `project show`
 - `project status`
 - `project evidence`
+- `evidence preview`
 - `step preview`
 - `project history`
 - `project blockers`
@@ -142,6 +143,7 @@ Only these read commands are authorized:
 | Project status, current steps or a Merchant's Projects, from the user's words | `project status --request "<user request text>" [--test-database]` |
 | Preview a Step update from the user's words (read-only) | `step preview --request "<user request text>" [--test-database]` |
 | A Project's documents, approvals, procurement records or what a gate still lacks, from the user's words | `project evidence --request "<user request text>" [--test-database]` |
+| Preview recording one document revision, LEGAL/ACCOUNTING/PARTNER approval or procurement reference, from the user's words (read-only) | `evidence preview --request "<user request text>" [--test-database]` |
 
 ### Natural-language Project status (CP12H.NL4A)
 
@@ -186,6 +188,30 @@ the user's request text verbatim. Add `--test-database` exactly when the assignm
   `MERCHANT_EVIDENCE_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting
   with `EVIDENCE_DELIVERY_FAILED:` and the reason, without the block.
+
+### Natural-language evidence write preview (CP12H.NL4D3)
+
+For a request to record evidence: a document revision ("Thêm revision tài liệu cho Project
+X"), a LEGAL, ACCOUNTING or PARTNER approval ("Legal đã phê duyệt revision mới nhất của Project
+X", "Record Accounting approval for Project X"), or a Purchase Request, Purchase Order or Payment
+Request reference ("Ghi nhận Purchase Request PR-001 cho Project X"), run `evidence preview` once
+with the user's request text verbatim. Add `--test-database` exactly when the assignment's
+`database_target` is `test`. It is read-only: it judges the request with the domain engine and
+records, approves, signs and confirms nothing. A question ("Legal đã duyệt ... chưa?") is
+`project evidence`, not this.
+
+- `outcome` is one of `PREVIEW_VALID` (the domain would accept it), `BLOCKED` (the domain
+  refuses it: `domain_validation.error`), `NEEDS_CLARIFICATION` (relay the question,
+  `missing_required_fields` and any `candidates`; never pick a Project, revision or role
+  yourself) or `POLICY_UNDECIDED` (the domain accepts it but `policy_blockers` names an owner
+  decision, as for every approval).
+- `PREVIEW_VALID` is never authority to write. No evidence, approval, procurement or signing
+  write exists yet: never offer one, a confirmation command, `--merchant-scope`, argv or a write
+  CLI command, and never say the evidence was recorded.
+- Your report must contain the CLI's result exactly once, on its own line after
+  `MERCHANT_EVIDENCE_PREVIEW_JSON:`, as the complete JSON object it printed. A short summary may
+  precede it. If the gate says the output could not be verified, send the report once starting
+  with `EVIDENCE_WRITE_PREVIEW_FAILED:` and the reason, without the block.
 
 ### Natural-language Step Update preview (CP12H.NL4B, confirmation CP12H.NL4C)
 

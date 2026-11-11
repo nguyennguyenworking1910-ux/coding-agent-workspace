@@ -160,10 +160,14 @@ def test_evidence_writes_are_never_downgraded_to_the_read(isolated, text):
     submit(text, _decision(operations=[Operation.MERCHANT_EXECUTE], domains=[Domain.MERCHANT],
                            risk_level=RiskLevel.EXTERNAL_WRITE))
     run = runtime_state.load_state(LEAD)
-    # Never a merchant_read evidence run: either refused or an unscoped,
-    # confirmation-gated merchant_execute that has no write scope.
-    assert run is None or (run["operations"] != ["merchant_read"]
+    # Never the evidence-status read. CP12H.NL4D3 supersedes the original
+    # "never merchant_read" check: an unscoped evidence write now runs only as
+    # the read-only `evidence preview`, so the run is refused, or read-only,
+    # unconfirmed and unscoped, and creates no pending confirmation.
+    assert run is None or (run["risk_level"] == "read_only"
+                           and run["confirmed"] is False
                            and run.get("merchant_scope") is None)
+    assert pending.load_records(LEAD) == [] and pending.load_records(LEAD, pending.STEP_KIND) == []
 
 
 def test_a_mixed_request_is_not_a_read():

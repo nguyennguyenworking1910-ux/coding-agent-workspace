@@ -47,6 +47,7 @@ READ_COMMANDS = frozenset(
         "project show",
         "project status",
         "project evidence",
+        "evidence preview",
         "step preview",
         "step resolve",
         "document resolve",

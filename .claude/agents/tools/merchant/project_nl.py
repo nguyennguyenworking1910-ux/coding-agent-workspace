@@ -25,6 +25,9 @@ STEP_UPDATE = "STEP_UPDATE"
 # CP12H.NL4D2: a read-only question about document revisions, approvals,
 # procurement records or the evidence a workflow gate still lacks.
 EVIDENCE_STATUS = "EVIDENCE_STATUS"
+# CP12H.NL4D3: a request to record a document revision, an approval or a
+# procurement reference. Only ever answered by the read-only evidence preview.
+EVIDENCE_WRITE = "EVIDENCE_WRITE"
 MIXED = "MIXED"
 UNKNOWN = "UNKNOWN"
 
@@ -213,6 +216,36 @@ _EVIDENCE_WRITE_START = (
     r"register|them|add|tao|create|approve|phe duyet|duyet|ky|sign|cap nhat|update|"
     r"set|xoa|delete)\b"
 )
+# CP12H.NL4D3: what an evidence write records (folded).
+_EVIDENCE_WRITE_OBJECT = (
+    r"\b(?:phe duyet|duyet|approvals?|approve|approved|reject(?:ed|ion)?|tu choi|"
+    r"revisions?|phien ban|tai lieu|ho so|documents?|"
+    r"purchase (?:order|request|requisition)s?|payment requests?|de nghi thanh toan|"
+    r"don dat hang|yeu cau mua hang)\b"
+)
+_WRITE_LEAD = r"^(?:(?:hay|vui long|please) )?(?:(?:khong|dung|do not|don t|dont|never) )?"
+# "Ghi nhận ...", "Record ...", "Thêm revision ...", "Approve the document ...".
+_EVIDENCE_RECORD_START = (
+    _WRITE_LEAD
+    + r"(?:ghi nhan|record|register|them|add|upload|tai len|dinh kem|attach|nhap|"
+    r"luu|log|tao|create|approve|reject|phe duyet|duyet|tu choi)\b"
+)
+_APPROVAL_ROLE = r"(?:legal|phap ly|phap che|accounting|ke toan|partner|doi tac)"
+# "Legal đã phê duyệt ...", "Partner approved ...": a statement, not a question.
+_APPROVAL_STATEMENT = (
+    rf"^(?:bo phan |phong |team )?{_APPROVAL_ROLE}(?: (?:va|and|cung) {_APPROVAL_ROLE})*(?: team)? "
+    r"(?:(?:da|has|have|vua|already) )*(?:(?:chua|khong|not|did not|has not|hasn t) )?"
+    r"(?:phe duyet|duyet|approved|rejected|tu choi)\b"
+)
+_EVIDENCE_WRITE_NEGATION = (
+    r"^(?:(?:hay|vui long|please) )?(?:khong|dung|do not|don t|dont|never)\b"
+    r"|\b(?:chua|khong|not|did not|has not|hasn t) (?:phe duyet|duyet|approved?|rejected?|tu choi)\b"
+)
+_WRITE_QUESTION_START = r"^(?:has|have|did|does|is|are|was|were|can|could|should|lieu)\b"
+# "Add Partner approval": "add partner" is not a Merchant creation.
+_PARTNER_APPROVAL = (
+    r"\bpartner (?:approvals?|phe duyet|duyet)\b|\b(?:phe duyet|duyet|approval) (?:cua |of |from )?partner\b"
+)
 # Trailing question particles and demonstratives never belong to a name:
 # "... Project X chưa?"; "Project này" names no Project (no trusted binding).
 _QUESTION_PARTICLES = frozenset({"chua", "khong", "nhi", "vay", "nay", "this"})
@@ -322,12 +355,38 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         and re.search(_EVIDENCE_WRITE_START, text) is None
         and re.search(_COMPLETION_QUESTION, text) is None
     )
-    kind = _classify(text, has_project, creates_merchant, creates_project, evidence_read)
+    # CP12H.NL4D3: "Ghi nhận Purchase Request PR-001 cho Project X", "Legal
+    # đã phê duyệt revision mới nhất của Project X" (a statement, not a
+    # question). Never a Project creation ("Tạo project ...") or a Merchant one.
+    evidence_write = (
+        (
+            re.search(_EVIDENCE_RECORD_START, text) is not None
+            or re.search(_APPROVAL_STATEMENT, text) is not None
+        )
+        # The object follows the verb: "Approve the PR ..." names none.
+        and re.search(_EVIDENCE_WRITE_OBJECT, re.sub(_EVIDENCE_RECORD_START, " ", unnamed))
+        is not None
+        and not question
+        and re.search(r"\b(?:chua|khong)$", text) is None
+        and re.search(_WRITE_QUESTION_START, text) is None
+        and project_type is None
+        and re.search(rf"\b{_CREATE_VERB}(?: (?:a|an|mot|new|moi))* {_PROJECT_NOUN}\b", text) is None
+        and (not creates_merchant or re.search(_PARTNER_APPROVAL, text) is not None)
+    )
+    kind = _classify(text, has_project, creates_merchant, creates_project, evidence_read,
+                     evidence_write)
     if kind == STEP_UPDATE and re.search(_FURTHER_ACTION, text):
         kind = MIXED
     # "giấy tờ và phê duyệt" names evidence; only a second action outside
     # the evidence nouns ("..., rồi xóa Merchant") makes it MIXED.
     if kind == EVIDENCE_STATUS and re.search(_FURTHER_ACTION, re.sub(_EVIDENCE_NOUN, " ", text)):
+        kind = MIXED
+    # One evidence write per preview: a second action ("... và thêm Purchase
+    # Order ...", "... rồi xóa Merchant ...") makes it MIXED.
+    if kind == EVIDENCE_WRITE and re.search(
+        _FURTHER_ACTION,
+        re.sub(r"\b(?:phe duyet|duyet|approvals?|approved)\b", " ", text),
+    ):
         kind = MIXED
 
     merchant_phrase = site_phrase = project_phrase = None
@@ -351,13 +410,13 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
     elif kind == PROJECT_LIST:
         # The first owner in reading order: "projects for Beta ... status of each".
         merchant_phrase = words.owner_phrase(("cua", "of", "for", "cho", "thuoc", "under"))
-    elif kind in (PROJECT_STATUS, EVIDENCE_STATUS):
+    elif kind in (PROJECT_STATUS, EVIDENCE_STATUS, EVIDENCE_WRITE):
         project_phrase = words.phrase_after_word(
             ("project", "projects", "du an")
         ) or words.phrase_after_word(("of",))
         # "Project X của Lotte Cinema": the owner, not "của Project X".
         merchant_phrase = words.owner_phrase(("cua", "of", "thuoc", "under"))
-        if kind == EVIDENCE_STATUS:
+        if kind in (EVIDENCE_STATUS, EVIDENCE_WRITE):
             project_phrase = _without_question_particle(project_phrase)
             merchant_phrase = _without_question_particle(merchant_phrase)
 
@@ -380,8 +439,11 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
         ) or words.phrase_after_word(("project", "projects", "du an"))
         merchant_phrase = subject.owner_phrase(("cua", "of", "thuoc", "under"))
 
+    if kind == EVIDENCE_WRITE:
+        negated = re.search(_EVIDENCE_WRITE_NEGATION, text) is not None
+
     write_requested = (
-        kind in {PROJECT_CREATE, MERCHANT_CREATE, STEP_UPDATE, MIXED}
+        kind in {PROJECT_CREATE, MERCHANT_CREATE, STEP_UPDATE, EVIDENCE_WRITE, MIXED}
         and not (negated or preview_only or exploratory)
     )
 
@@ -513,6 +575,7 @@ def _classify(
     creates_merchant: bool,
     creates_project: bool,
     evidence_read: bool = False,
+    evidence_write: bool = False,
 ) -> str:
     """The primary operation, in precedence order. Writes first, then reads.
 
@@ -532,6 +595,8 @@ def _classify(
         or (re.search(_STEP_UPDATE + "|" + _MARK_AS, text) and not step_question)
     ):
         return STEP_UPDATE
+    if evidence_write:
+        return EVIDENCE_WRITE
     if creates_merchant and creates_project:
         return MIXED
     if creates_merchant:
