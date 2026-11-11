@@ -296,6 +296,8 @@ class MerchantProcurementRepositoryTests(
             (
                 uuid.UUID(PROCUREMENT_1_ID),
                 uuid.UUID(PROJECT_ID),
+                # CP12H.NL4D4A migration 007: the Project's Merchant.
+                uuid.UUID(MERCHANT_ID),
                 "PURCHASE_REQUEST",
                 SENSITIVE_EXTERNAL_ID,
                 "CREATED",

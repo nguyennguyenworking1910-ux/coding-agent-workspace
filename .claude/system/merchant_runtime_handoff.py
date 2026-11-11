@@ -161,6 +161,8 @@ def validate_direct_scope(
     for field, value in payload.items():
         if (
             field.endswith("_id")
+            # A procurement reference is business text, not a target.
+            and field != "external_id"
             and value is not None
             and _UUID_TOKEN.fullmatch(str(value)) is None
         ):
@@ -188,6 +190,14 @@ def validate_direct_scope(
         for name in ("expected_basis_hash", "project_id", "merchant_code")
     ):
         _require_canonical_step_argv(tokens, payload)
+
+    if command == "procurement update":
+        from claude.agents.tools.merchant.purchase_request import (
+            is_confirmed_payload,
+        )
+
+        if is_confirmed_payload(payload):
+            _require_canonical_purchase_request_argv(tokens, payload)
 
     envelope = build_confirmation_envelope(
         command,
@@ -239,6 +249,43 @@ def _require_canonical_preview_argv(
         raise MerchantRuntimeHandoffError(
             "A previewed project create scope must be the preview's exact "
             "argv, in order, with every field explicit"
+        )
+
+
+def _require_canonical_purchase_request_argv(
+    tokens: Sequence[str],
+    payload: Mapping[str, Any],
+) -> None:
+    """CP12H.NL4D4A: a previewed Purchase Request is the preview's exact argv.
+
+    Type, reference, Merchant code, operator and basis, in canonical order,
+    with nothing else (no status, version, procurement id or triggered_by).
+    """
+
+    from claude.agents.tools.merchant.purchase_request import (
+        canonical_purchase_request_argv,
+    )
+
+    try:
+        expected = canonical_purchase_request_argv(
+            {
+                "project_id": payload["project_id"],
+                "reference": payload["external_id"],
+                "merchant_code": payload["merchant_code"],
+                "operator_id": payload["operator_id"],
+                "expected_basis": payload["expected_basis_hash"],
+            }
+        )
+    except KeyError as error:
+        raise MerchantRuntimeHandoffError(
+            "A previewed Purchase Request must name its reference, "
+            "--merchant-code, --operator-id and --expected-basis"
+        ) from error
+
+    if list(tokens) != expected or payload.get("procurement_type") != "PURCHASE_REQUEST":
+        raise MerchantRuntimeHandoffError(
+            "A previewed Purchase Request scope must be the preview's exact "
+            "operation"
         )
 
 

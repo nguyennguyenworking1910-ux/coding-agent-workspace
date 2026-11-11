@@ -529,6 +529,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     procurement_update.add_argument("--document-type", type=_upper)
     procurement_update.add_argument("--triggered-by")
     procurement_update.add_argument("--procurement-id")
+    # CP12H.NL4D4A: present only when recording a previewed Purchase Request.
+    # --operator-id names the previewed operator; trusted code refuses unless
+    # it equals the local configuration, so it is never a source of identity.
+    procurement_update.add_argument("--merchant-code")
+    procurement_update.add_argument("--operator-id")
+    procurement_update.add_argument("--expected-basis", dest="expected_basis_hash")
 
     # CP12H.NL4D3: read-only evidence, approval and procurement write preview.
     evidence_parser = resources.add_parser("evidence")
@@ -968,7 +974,7 @@ def build_write_payload(
         return payload
 
     if command == "procurement update":
-        return _selected_fields(
+        payload = _selected_fields(
             args,
             (
                 "procurement_id",
@@ -981,6 +987,11 @@ def build_write_payload(
                 "triggered_by",
             ),
         )
+        # Present only when recording a previewed Purchase Request (NL4D4A).
+        for name in ("merchant_code", "operator_id", "expected_basis_hash"):
+            if getattr(args, name, None) is not None:
+                payload[name] = getattr(args, name)
+        return payload
 
     if command == "integration identifier-set":
         return _selected_fields(

@@ -447,3 +447,159 @@ def recover_step_update_receipts(
         receipts.append(step_update_receipt(repository, identity, step_id))
 
     return receipts
+
+
+PURCHASE_REQUEST_RECEIPT_CONTRACT = "purchase_request_receipt_v1"
+
+
+def purchase_request_receipt(
+    repository: MerchantRepository,
+    identity: AttemptIdentity,
+    project_id: str,
+) -> dict[str, Any]:
+    """CP12H.NL4D4A: reconcile one recorded Purchase Request from durable evidence.
+
+    The ledger row, the execution claim, the procurement row and the
+    PROCUREMENT event are read independently. They must name the same
+    attempt and have been written by one PostgreSQL transaction (equal
+    ``xmin``); the reference comes from the stored row and the operator from
+    the event's ``triggered_by``. Raises EvidenceBindingError otherwise.
+    """
+
+    with repository.connection(read_only=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ledger.payload_hash, ledger.result,
+                       ledger.xmin::text AS ledger_tx,
+                       claims.payload_hash AS claim_hash,
+                       claims.execution_attempt_id::text AS claim_attempt,
+                       claims.claim_status, claims.xmin::text AS claim_tx
+                FROM merchant_ops.merchant_execution_ledger AS ledger
+                JOIN merchant_ops.merchant_execution_claims AS claims
+                  ON claims.operation_key = ledger.operation_key
+                WHERE ledger.operation_key = %s
+                """,
+                (identity.operation_key,),
+            )
+            evidence = cursor.fetchone()
+
+            if evidence is None:
+                raise EvidenceBindingError("No ledger and claim for the attempt")
+
+            cursor.execute(
+                """
+                SELECT events.id::text AS event_id,
+                       events.merchant_id::text AS event_merchant_id,
+                       events.project_id::text AS project_id,
+                       events.event_type,
+                       events.triggered_by::text AS operator_id,
+                       events.new_values,
+                       record.id::text AS procurement_id,
+                       record.merchant_id::text AS record_merchant_id,
+                       record.procurement_type,
+                       record.external_id,
+                       record.version,
+                       record.xmin::text AS record_tx
+                FROM merchant_ops.project_events AS events
+                JOIN merchant_ops.procurement_records AS record
+                  ON record.id = events.entity_id
+                 AND record.project_id = events.project_id
+                WHERE events.entity_type = 'PROCUREMENT'
+                  AND events.project_id::text = %s
+                  AND events.xmin::text = %s
+                """,
+                (str(project_id), evidence["ledger_tx"]),
+            )
+            events = cursor.fetchall()
+
+    attempt = str(identity.execution_attempt_id)
+    result = evidence["result"]
+
+    if (
+        evidence["payload_hash"] != identity.payload_hash
+        or evidence["claim_hash"] != identity.payload_hash
+        or evidence["claim_attempt"] != attempt
+        or evidence["claim_status"] != "COMPLETED"
+        or evidence["claim_tx"] != evidence["ledger_tx"]
+        or not isinstance(result, dict)
+        or result.get("execution_attempt_id") != attempt
+        or result.get("command") != identity.command
+    ):
+        raise EvidenceBindingError("Ledger and claim do not name this attempt")
+
+    if len(events) != 1:
+        raise EvidenceBindingError(
+            "The attempt's transaction did not write exactly one PROCUREMENT event"
+        )
+
+    (event,) = events
+    new = event["new_values"] or {}
+
+    if (
+        event["event_type"] != "PROCUREMENT_CREATED"
+        or event["procurement_type"] != "PURCHASE_REQUEST"
+        or event["record_tx"] != evidence["ledger_tx"]
+        or event["record_merchant_id"] != event["event_merchant_id"]
+        or event["external_id"] is None
+        or event["operator_id"] is None
+        or event["version"] != 1
+        or new.get("version") != 1
+        or new.get("external_id_recorded") is not True
+    ):
+        raise EvidenceBindingError("PROCUREMENT event is not one Purchase Request creation")
+
+    return {
+        "contract": PURCHASE_REQUEST_RECEIPT_CONTRACT,
+        "operator_id": event["operator_id"],
+        "merchant_id": event["event_merchant_id"],
+        "project_id": event["project_id"],
+        "procurement_type": event["procurement_type"],
+        "reference": event["external_id"],
+        "procurement_id": event["procurement_id"],
+        "record_version": event["version"],
+        "event_id": event["event_id"],
+        "execution_attempt_id": attempt,
+        "operation_key": identity.operation_key,
+        "payload_hash": identity.payload_hash,
+        "claim_status": evidence["claim_status"],
+        "ledger_command": result["command"],
+        "transaction_id": evidence["ledger_tx"],
+    }
+
+
+def recover_purchase_request_receipts(
+    repository: MerchantRepository,
+    project_id: str,
+) -> list[dict[str, Any]]:
+    """Rebuild every evidenced Purchase Request receipt of ``project_id`` from
+    PostgreSQL alone (local run and team state lost). A record written
+    outside Direct EXECUTE has no ledger row in its transaction and yields
+    nothing."""
+
+    with repository.connection(read_only=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT ledger.operation_key, ledger.payload_hash, ledger.result
+            FROM merchant_ops.merchant_execution_ledger AS ledger
+            JOIN merchant_ops.project_events AS events
+              ON events.xmin = ledger.xmin
+            WHERE events.entity_type = 'PROCUREMENT'
+              AND events.project_id::text = %s
+            ORDER BY events.created_at, ledger.operation_key
+            """,
+            (str(project_id),),
+        ).fetchall()
+
+    receipts = []
+    for row in rows:
+        result = row["result"] if isinstance(row["result"], dict) else {}
+        identity = AttemptIdentity(
+            operation_key=row["operation_key"],
+            payload_hash=str(row["payload_hash"]),
+            execution_attempt_id=uuid.UUID(str(result.get("execution_attempt_id"))),
+            command=str(result.get("command")),
+        )
+        receipts.append(purchase_request_receipt(repository, identity, project_id))
+
+    return receipts

@@ -317,12 +317,17 @@ class MerchantReadCommands:
     ) -> dict[str, Any]:
         """Read-only evidence, approval and procurement write preview (CP12H.NL4D3)."""
 
+        from claude.clients.merchant.operator_identity import operator_status
+
         from .evidence_preview import build_evidence_preview
 
+        # CP12H.NL4D4A: the recording operator comes only from trusted local
+        # configuration, never from the request.
         result = build_evidence_preview(
             request,
             self.repository,
             database_target=database_target,
+            operator=operator_status(),
         )
         return cast(dict[str, Any], redact_payload(result))
 

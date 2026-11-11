@@ -54,6 +54,8 @@ def test_generic_runner_discovers_migrations_one_through_four():
         (4, "add_alert_delivery_leases"),
         (5, "merchant_execution_ledger"),
         (6, "merchant_execution_claims"),
+        # CP12H.NL4D4A: DEC-P1a reference uniqueness.
+        (7, "procurement_reference_uniqueness"),
     ]
 
 

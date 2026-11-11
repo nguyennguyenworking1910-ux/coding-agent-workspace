@@ -183,7 +183,9 @@ def test_a_mixed_request_is_not_a_read():
 
 def test_runtime_direct_execute_stays_disabled():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
-    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update"}
+    # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
+    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
+                                          "procurement update"}
 
 
 # ------------------------------------------------------- dispatch (policy gate)

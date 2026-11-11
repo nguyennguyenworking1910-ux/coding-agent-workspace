@@ -63,11 +63,13 @@ def refused(attempt_):
 
 def test_test_mode_admits_step_update_and_runtime_stays_disabled():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
-    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update"}
+    # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
+    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
+                                          "procurement update"}
     assert handoff.direct_execute_enabled("step update", "test")
     assert not handoff.direct_execute_enabled("step update", "runtime")
     # No other Step or Project write joined test mode.
-    for command in ("project update", "document approve", "procurement update"):
+    for command in ("project update", "document approve"):
         assert not handoff.direct_execute_enabled(command, "test")
 
 

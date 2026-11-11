@@ -329,7 +329,16 @@ trusted pending Step Update this session confirmed for this exact run (same argv
 any spend. It runs through the unchanged scoped-write pipeline (claim, ledger and Step event in one
 transaction), and a SUCCEEDED attempt records a receipt reconciled from that durable evidence
 (`merchant_step_update_receipt` in the run state). A runtime-target Step confirmation is refused
-unspent. The scope must satisfy the deterministic
+unspent. CP12H.NL4D4A adds the same path for recording one new Purchase Request on the test
+database only (approved DEC-A0, P1a, P1c, P2): a valid `evidence preview` carries a NOT_AUTHORIZED
+`procurement update` operation bound to the trusted local recording operator
+(`MERCHANT_OPERATOR_ID`, local configuration only, `operator_identity.py`; attribution, not approver
+authorization) and a basis hash; the verified capture records it in a third pending store
+(`/solve Xác nhận ghi nhận`); a typed `procurement update` scope is refused; the preflight and the
+write transaction re-judge it (`purchase_request.verify_purchase_request`), operator included; a
+reference is unique per (Merchant, type, reference), enforced by migration 007; an existing Purchase
+Request reference is never replaced. Its receipt (`merchant_purchase_request_receipt`) is reconciled
+from the ledger, claim, procurement row and PROCUREMENT event of one transaction. The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
 the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an

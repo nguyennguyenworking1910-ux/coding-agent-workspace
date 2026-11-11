@@ -180,6 +180,15 @@ class EvidenceReader:
             "integration_identifiers": [],
         })
 
+    def procurement_reference_holders(self, merchant_id, procurement_type, reference):
+        """CP12H.NL4D4A read: the Merchant's records holding this exact reference."""
+        merchant_of = {p["id"]: p["merchant_id"] for p in self.projects}
+        return copy.deepcopy([
+            r for r in self.procurement
+            if merchant_of.get(r["project_id"]) == merchant_id
+            and r["procurement_type"] == procurement_type and r.get("external_id") == reference
+        ])
+
     def __getattr__(self, name):
         raise AssertionError(f"evidence discovery used a non-read API: {name}")
 

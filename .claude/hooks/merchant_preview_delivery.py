@@ -43,8 +43,11 @@ STEP_PREVIEW_DELIVERY_FAILED = "STEP_UPDATE_DELIVERY_FAILED"
 EVIDENCE_RESULT_MARKER = "MERCHANT_EVIDENCE_STATUS_JSON:"
 EVIDENCE_STATUS_EVIDENCE_FIELD = "evidence_status_evidence"
 EVIDENCE_DELIVERY_FAILED = "EVIDENCE_DELIVERY_FAILED"
-# CP12H.NL4D3: the read-only evidence write preview. Terminal, and a VERIFIED
-# capture must carry no requested_operation: it creates no pending record.
+# CP12H.NL4D3: the read-only evidence write preview. Terminal. CP12H.NL4D4A:
+# a VERIFIED capture carries a requested_operation only for a valid new
+# Purchase Request on the test database with the trusted operator
+# (_evidence_operation_consistent); it is the only creator of a pending
+# Purchase Request.
 EVIDENCE_PREVIEW_MARKER = "MERCHANT_EVIDENCE_PREVIEW_JSON:"
 EVIDENCE_PREVIEW_EVIDENCE_FIELD = "evidence_preview_evidence"
 EVIDENCE_PREVIEW_DELIVERY_FAILED = "EVIDENCE_WRITE_PREVIEW_FAILED"
@@ -97,8 +100,9 @@ READ_RESULT_CONTRACTS = (
         ("evidence", "preview"), "EVIDENCE_WRITE_PREVIEW", EVIDENCE_PREVIEW_MARKER,
         EVIDENCE_PREVIEW_EVIDENCE_FIELD, EVIDENCE_PREVIEW_DELIVERY_FAILED,
         "Evidence write preview",
-        (("read_only", True), ("authorization", None), ("executable", False),
-         ("confirmation_available", False), ("requested_operation", None)),
+        # confirmation_available and requested_operation are checked in
+        # _evidence_operation_consistent (CP12H.NL4D4A).
+        (("read_only", True), ("authorization", None), ("executable", False)),
         terminal=True,
     ),
 )
@@ -303,6 +307,10 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
         operation = output.get("requested_operation")
         verified = _step_operation_consistent(output, operation, target)
 
+    if verified and contract.command == ("evidence", "preview"):
+        operation = output.get("requested_operation")
+        verified = _evidence_operation_consistent(output, operation, target)
+
     with locked_team_state(owner) as state:
         current = (
             (state or {}).get("teammates", {}).get(MERCHANT_MANAGER_AGENT)
@@ -326,10 +334,16 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
         }
 
     if verified and operation is not None:
-        # CP12H.NL4C1: the only creator of a pending Step Update.
-        from claude.hooks.merchant_pending_confirmation import record_pending_step
+        # CP12H.NL4C1 / NL4D4A: the only creator of a pending Step Update or
+        # Purchase Request.
+        from claude.hooks import merchant_pending_confirmation as pending
 
-        record_pending_step(
+        create = (
+            pending.record_pending_purchase_request
+            if contract.command == ("evidence", "preview")
+            else pending.record_pending_step
+        )
+        create(
             owner,
             operation,
             run_id=record["current_run_id"],
@@ -364,6 +378,42 @@ def _step_operation_consistent(output: dict[str, Any], operation: Any, target: s
     except ValueError:
         return False
     return operation.get("database_target") == target
+
+
+def _evidence_operation_consistent(output: dict[str, Any], operation: Any, target: str | None) -> bool:
+    """CP12H.NL4D4A: only a valid new Purchase Request on the test database,
+    bound to the operator this trusted hook resolves itself, carries an
+    operation; ``confirmation_available`` is true exactly then."""
+
+    from claude.agents.tools.merchant.purchase_request import (
+        CONFIRMABLE_TARGETS,
+        validate_operation,
+    )
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        trusted_operator_id,
+    )
+
+    if output.get("confirmation_available") is not (operation is not None):
+        return False
+    if operation is None:
+        return True
+    try:
+        validate_operation(operation)
+        operator = trusted_operator_id()
+    except (ValueError, OperatorIdentityError):
+        return False
+    return (
+        output.get("outcome") == "PREVIEW_VALID"
+        and output.get("evidence_type") == "PURCHASE_REQUEST"
+        and target in CONFIRMABLE_TARGETS
+        and operation["database_target"] == target
+        and operation["operator_id"] == operator
+        and (output.get("recording_operator") or {}).get("operator_id") == operator
+        and operation["project_id"] == output.get("project_id")
+        and operation["reference"]
+        == (output.get("requested_fields") or {}).get("external_reference")
+    )
 
 
 def preview_from_tool_response(payload: dict[str, Any]) -> dict[str, Any] | None:

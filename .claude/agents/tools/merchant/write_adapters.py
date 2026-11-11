@@ -253,6 +253,10 @@ class MerchantRepositoryWriteAdapters:
         )
 
     def update_procurement(self, payload: dict[str, Any]) -> Any:
+        from .purchase_request import is_confirmed_payload
+
+        if is_confirmed_payload(payload):
+            return self._record_confirmed_purchase_request(payload)
         return self.repositories.procurement.record_procurement(
             project_id=payload["project_id"],
             procurement_type=payload["procurement_type"],
@@ -262,6 +266,44 @@ class MerchantRepositoryWriteAdapters:
             document_type=payload.get("document_type"),
             triggered_by=payload.get("triggered_by"),
             procurement_id=payload.get("procurement_id"),
+        )
+
+    def _record_confirmed_purchase_request(self, payload: dict[str, Any]) -> Any:
+        """CP12H.NL4D4A: record exactly one previewed Purchase Request.
+
+        The operator is the trusted local configuration, required to equal the
+        one the preview was bound to (never taken from the payload); the
+        preview is re-judged under the Project and procurement locks, so a
+        changed basis, operator, Merchant, reference holder or existing record
+        refuses the whole transaction.
+        """
+
+        from claude.clients.merchant.operator_identity import require_operator
+        from claude.clients.merchant.read_repository import (
+            MerchantReadRepository,
+            TransactionDetailReader,
+        )
+
+        from .purchase_request import verify_purchase_request
+
+        procurement = self.repositories.procurement
+        operator = require_operator(payload.get("operator_id"))
+        verify_fields = {k: v for k, v in payload.items() if v is not None}
+
+        def precondition(connection: Any) -> None:
+            verify_purchase_request(
+                TransactionDetailReader(MerchantReadRepository(procurement.repository), connection),
+                verify_fields,
+                require_operator(operator),
+            )
+
+        return procurement.record_procurement(
+            project_id=verify_fields.get("project_id"),
+            procurement_type=verify_fields.get("procurement_type"),
+            external_id=verify_fields.get("external_id"),
+            triggered_by=operator,
+            procurement_id=verify_fields.get("procurement_id"),
+            precondition=precondition,
         )
 
     def set_identifier(self, payload: dict[str, Any]) -> Any:

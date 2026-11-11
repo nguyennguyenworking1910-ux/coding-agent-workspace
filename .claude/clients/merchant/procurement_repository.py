@@ -63,8 +63,14 @@ class MerchantProcurementRepository:
         document_type: str | None = None,
         triggered_by: str | None = None,
         procurement_id: str | None = None,
+        precondition: Any = None,
     ) -> ProcurementMutationResult:
-        """Create or update one project procurement record."""
+        """Create or update one project procurement record.
+
+        ``precondition(connection)`` (CP12H.NL4D4A) runs after the Project,
+        its revisions and its procurement records are locked and before
+        anything changes; raising refuses the whole transaction.
+        """
 
         normalized_project_id = _uuid(
             project_id,
@@ -101,6 +107,9 @@ class MerchantProcurementRepository:
                                 normalized_project_id,
                             )
                         )
+
+                        if precondition is not None:
+                            precondition(connection)
 
                         plan = propose_procurement_mutation(
                             {
@@ -280,6 +289,7 @@ class MerchantProcurementRepository:
             INSERT INTO merchant_ops.procurement_records (
                 id,
                 project_id,
+                merchant_id,
                 procurement_type,
                 external_id,
                 status,
@@ -288,7 +298,7 @@ class MerchantProcurementRepository:
                 version
             )
             VALUES (
-                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP,
                 1
@@ -297,6 +307,9 @@ class MerchantProcurementRepository:
             (
                 uuid.UUID(plan.procurement_id),
                 uuid.UUID(plan.project_id),
+                # CP12H.NL4D4A migration 007: pinned to the Project's
+                # Merchant by a composite foreign key.
+                uuid.UUID(plan.merchant_id),
                 plan.procurement_type,
                 plan.external_id,
                 plan.status,

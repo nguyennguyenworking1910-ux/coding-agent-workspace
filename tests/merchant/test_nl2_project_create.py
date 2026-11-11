@@ -167,6 +167,8 @@ def test_test_mode_admits_project_create_and_runtime_stays_disabled():
         "merchant create",
         "project create",
         "step update",
+        # CP12H.NL4D4A: the confirmed Purchase Request.
+        "procurement update",
     }
 
     with pytest.raises(merchant_direct_handoff.DirectPreflightRefused) as error:

@@ -62,6 +62,13 @@ class TransactionDetailReader:
             self.connection, _uuid(project_id, "project_id"), project_id
         )
 
+    def procurement_reference_holders(
+        self, merchant_id: str, procurement_type: str, reference: str
+    ) -> list[dict[str, Any]]:
+        return self.reads.reference_holders_in(
+            self.connection, merchant_id, procurement_type, reference
+        )
+
 
 class MerchantReadRepository:
     """Serve deterministic CLI reads through one repository connection."""
@@ -320,6 +327,47 @@ class MerchantReadRepository:
                 )
             ),
         }
+
+    def procurement_reference_holders(
+        self,
+        merchant_id: str,
+        procurement_type: str,
+        reference: str,
+    ) -> list[dict[str, Any]]:
+        """Every record of the Merchant holding this exact reference (CP12H.NL4D4A)."""
+
+        with self.repository.connection(read_only=True) as connection:
+            with connection.transaction():
+                return self.reference_holders_in(
+                    connection, merchant_id, procurement_type, reference
+                )
+
+    @staticmethod
+    def reference_holders_in(
+        connection: Any,
+        merchant_id: str,
+        procurement_type: str,
+        reference: str,
+    ) -> list[dict[str, Any]]:
+        """DEC-P1a: (merchant, type, reference) is unique. Exact match, through
+        the Project, so it reads the same with or without migration 007."""
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT procurement.id, procurement.project_id,
+                       procurement.procurement_type, procurement.external_id
+                FROM merchant_ops.procurement_records AS procurement
+                JOIN merchant_ops.projects AS project
+                  ON project.id = procurement.project_id
+                WHERE project.merchant_id = %s
+                  AND procurement.procurement_type = %s
+                  AND procurement.external_id = %s
+                ORDER BY procurement.id
+                """,
+                (_uuid(merchant_id, "merchant_id"), procurement_type, reference),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_project_history(
         self,

@@ -24,6 +24,14 @@ PROJECT_ID = "8dd4c68d-76a9-571b-ad08-a864d7fcf7a5"
 NAMED = "Project Beta NL4C2B Step Acceptance"
 
 
+@pytest.fixture(autouse=True)
+def no_recording_operator(monkeypatch):
+    """CP12H.NL4D4A: without a trusted operator no preview is confirmable, so
+    these read-only assertions hold whatever the local configuration says."""
+
+    monkeypatch.delenv("MERCHANT_OPERATOR_ID", raising=False)
+
+
 @pytest.fixture
 def repository():
     repository = MerchantRepository(role="test")

@@ -18,6 +18,12 @@ CP12H.NL4C1: pending Step Updates use the same machinery in a separate store
 [<step id>]`` / ``Hủy cập nhật``). A Project create record can never confirm
 a Step Update, nor the reverse. The only creator is the PostToolUse(Bash)
 capture of a VERIFIED, READY ``step preview``.
+
+CP12H.NL4D4A: pending Purchase Requests are a third, separate store
+(``<owner>.pending_purchase_request.json``, phrases ``Xác nhận ghi nhận
+[<project id>]`` / ``Hủy ghi nhận``), created only from the PostToolUse(Bash)
+capture of a VERIFIED ``evidence preview`` that carries a valid Purchase
+Request operation bound to the trusted operator.
 """
 
 from __future__ import annotations
@@ -64,14 +70,24 @@ _STEP_PHRASES = (
     (CANCEL, ("cancel", "update")),
 )
 _STEP_NOUNS = (("buoc",), ("step",))
+_PURCHASE_REQUEST_PHRASES = (
+    (CONFIRM, ("xac", "nhan", "ghi", "nhan")),
+    (CONFIRM, ("confirm", "record")),
+    (CANCEL, ("huy", "ghi", "nhan")),
+    (CANCEL, ("cancel", "record")),
+)
+_PURCHASE_REQUEST_NOUNS = (("purchase", "request"), ("yeu", "cau", "mua", "hang"))
 _CODE = re.compile(r"[0-9a-f]{8,32}")
 
 PROJECT_KIND = "project"
 STEP_KIND = "step"
+PURCHASE_REQUEST_KIND = "purchase_request"
 # kind: (record key, label, confirm phrase, cancel phrase, effect word)
 _KINDS = {
     PROJECT_KIND: ("project_id", "Project create", "Xác nhận tạo", "Hủy tạo", "created"),
     STEP_KIND: ("step_id", "Step Update", "Xác nhận cập nhật", "Hủy cập nhật", "updated"),
+    PURCHASE_REQUEST_KIND: ("project_id", "Purchase Request", "Xác nhận ghi nhận",
+                            "Hủy ghi nhận", "recorded"),
 }
 
 # Tools whose input becomes a future prompt the model wrote.
@@ -175,6 +191,41 @@ def record_pending_step(owner: Any, operation: dict[str, Any], *, run_id: str, t
     return record
 
 
+def record_pending_purchase_request(
+    owner: Any, operation: dict[str, Any], *, run_id: str, task_id: str
+) -> dict[str, Any]:
+    """Store one verified Purchase Request operation as a pending confirmation."""
+
+    from claude.agents.tools.merchant.purchase_request import validate_operation
+
+    validate_operation(operation)
+    now = _now()
+    record = {
+        "kind": PURCHASE_REQUEST_KIND,
+        "status": PENDING,
+        "owner_session_id": str(owner),
+        "source_run_id": run_id,
+        "source_task_id": task_id,
+        "project_id": operation["project_id"],
+        "reference": operation["reference"],
+        "operator_id": operation["operator_id"],
+        "database_target": operation["database_target"],
+        "operation": operation,
+        "created_at": now,
+        "expires_at": now + PENDING_TTL_SECONDS,
+    }
+
+    with _locked(owner, PURCHASE_REQUEST_KIND) as records:
+        # A re-captured preview for the same Project replaces its live record.
+        records[:] = [
+            r for r in records
+            if not (r.get("status") == PENDING and r.get("project_id") == record["project_id"])
+        ]
+        records.append(record)
+
+    return record
+
+
 def parse_confirmation(text: str) -> tuple[str, str | None] | None:
     """(action, id prefix) when ``text`` is exactly a Project confirmation phrase."""
 
@@ -185,6 +236,12 @@ def parse_step_confirmation(text: str) -> tuple[str, str | None] | None:
     """(action, step id prefix) when ``text`` is exactly a Step confirmation phrase."""
 
     return _parse(text, _STEP_PHRASES, _STEP_NOUNS)
+
+
+def parse_purchase_request_confirmation(text: str) -> tuple[str, str | None] | None:
+    """(action, Project id prefix) when ``text`` is exactly a Purchase Request phrase."""
+
+    return _parse(text, _PURCHASE_REQUEST_PHRASES, _PURCHASE_REQUEST_NOUNS)
 
 
 def _parse(text, phrases, nouns):
@@ -214,6 +271,11 @@ def _code(record: dict[str, Any], kind: str = PROJECT_KIND) -> str:
 
 def _describe(record: dict[str, Any], kind: str = PROJECT_KIND) -> str:
     operation = record.get("operation") or {}
+    if kind == PURCHASE_REQUEST_KIND:
+        return (
+            f"{_code(record, kind)} (Purchase Request {operation.get('reference')!r}, "
+            f"Project {operation.get('project_title')!r})"
+        )
     if kind == STEP_KIND:
         return (
             f"{_code(record, kind)} (step {operation.get('step_sequence')} "
@@ -249,7 +311,7 @@ def resolve(
     """
 
     key, label, confirm_word, _, effect = _KINDS[kind]
-    noun = "Project" if kind == PROJECT_KIND else "step"
+    noun = {PROJECT_KIND: "Project", STEP_KIND: "step"}.get(kind, "Purchase Request")
     now = _now()
     with _locked(owner, kind) as records:
         live = [
@@ -298,8 +360,20 @@ def confirmed_step_record(owner: Any, run_id: Any) -> dict[str, Any] | None:
     Read only: the confirmation was already spent by ``resolve``.
     """
 
+    return confirmed_record(owner, run_id, STEP_KIND)
+
+
+def confirmed_purchase_request_record(owner: Any, run_id: Any) -> dict[str, Any] | None:
+    """CP12H.NL4D4A: the one Purchase Request the owner confirmed for ``run_id``."""
+
+    return confirmed_record(owner, run_id, PURCHASE_REQUEST_KIND)
+
+
+def confirmed_record(owner: Any, run_id: Any, kind: str) -> dict[str, Any] | None:
+    """The one record of ``kind`` the owner confirmed for ``run_id``, else None."""
+
     matches = [
-        r for r in load_records(owner, STEP_KIND)
+        r for r in load_records(owner, kind)
         if r.get("status") == CONFIRMED and r.get("owner_session_id") == str(owner)
         and isinstance(run_id, str) and run_id and r.get("confirmed_run_id") == run_id
     ]
@@ -309,7 +383,8 @@ def confirmed_step_record(owner: Any, run_id: Any) -> dict[str, Any] | None:
 def bare_phrase_guidance(owner: Any, prompt: str) -> str | None:
     """Reason to refuse a confirmation typed without ``/solve``, if one is pending."""
 
-    for kind, parse in ((PROJECT_KIND, parse_confirmation), (STEP_KIND, parse_step_confirmation)):
+    for kind, parse in ((PROJECT_KIND, parse_confirmation), (STEP_KIND, parse_step_confirmation),
+                        (PURCHASE_REQUEST_KIND, parse_purchase_request_confirmation)):
         parsed = parse(prompt)
         if parsed is None or not live_records(owner, kind):
             continue
@@ -354,10 +429,12 @@ def scheduled_prompt_denial(tool_name: str, tool_input: Any) -> str | None:
             controlled
             or parse_confirmation(text) is not None
             or parse_step_confirmation(text) is not None
+            or parse_purchase_request_confirmation(text) is not None
         ):
             return (
                 f"Blocked: {tool_name} would submit a controlled /solve or "
-                "/schedule-agent prompt, or a Project or Step confirmation, as if the "
+                "/schedule-agent prompt, or a Project, Step or Purchase Request "
+                "confirmation, as if the "
                 "user had typed it. Only the user can start or confirm a "
                 "controlled run. Nothing was scheduled."
             )

@@ -664,6 +664,127 @@ def confirm_pending_step(
     )
 
 
+PURCHASE_REQUEST_CONFIRMATION_NOT_ENABLED = (
+    "Purchase Request recording is enabled only on the test database (runtime "
+    "Direct EXECUTE is disabled), so this pending Purchase Request was not "
+    "confirmed; it stays pending until it expires. Nothing was recorded."
+)
+
+
+def confirm_pending_purchase_request(
+    session_id: Any,
+    command: str,
+    request: str,
+    run_id: str,
+) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]] | None:
+    """CP12H.NL4D4A: "/solve Xác nhận ghi nhận [<project id>]" spends one pending
+    Purchase Request.
+
+    Same contract as ``confirm_pending_step``, on the separate Purchase
+    Request store. The Project, reference, operator and database target all
+    come from the verified record; the prompt only picks which record. It is
+    refused unspent while execution is disabled for the record's target, or
+    when the trusted local operator is unavailable or no longer the one the
+    preview was bound to (DEC-A0).
+    """
+    from claude.hooks import merchant_pending_confirmation as pending
+
+    parsed = pending.parse_purchase_request_confirmation(request)
+
+    if parsed is None:
+        return None
+
+    if command != "solve":
+        return block(
+            "A Purchase Request confirmation is accepted only as `/solve Xác "
+            "nhận ghi nhận`. Nothing was recorded."
+        )
+
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        require_operator,
+    )
+    from claude.hooks.merchant_direct_handoff import (
+        PROCUREMENT_UPDATE_COMMAND,
+        direct_execute_enabled,
+    )
+
+    def allowed(record: dict[str, Any]) -> str | None:
+        if not direct_execute_enabled(
+            PROCUREMENT_UPDATE_COMMAND, str(record.get("database_target"))
+        ):
+            return PURCHASE_REQUEST_CONFIRMATION_NOT_ENABLED
+        try:
+            require_operator(record.get("operator_id"))
+        except OperatorIdentityError as error:
+            return (
+                f"The trusted recording operator is not the one this Purchase "
+                f"Request was previewed with ({error.reason}), so it was not "
+                "confirmed. Nothing was recorded. Preview it again."
+            )
+        return None
+
+    action, code = parsed
+    record, refusal = pending.resolve(
+        session_id, action, code, run_id,
+        kind=pending.PURCHASE_REQUEST_KIND, allowed=allowed,
+    )
+
+    if refusal is not None:
+        return block(refusal)
+
+    operation = record["operation"]
+
+    if action == pending.CANCEL:
+        return block(
+            "Cancelled the pending Purchase Request "
+            f"{pending._describe(record, pending.PURCHASE_REQUEST_KIND)}. "
+            "Nothing was recorded."
+        )
+
+    try:
+        from claude.agents.tools.merchant.purchase_request import validate_operation
+        from claude.system.merchant_runtime_handoff import validate_direct_scope
+
+        validate_operation(operation)
+
+        if (
+            operation["project_id"] != record["project_id"]
+            or operation["reference"] != record["reference"]
+            or operation["operator_id"] != record["operator_id"]
+            or operation["database_target"] != record["database_target"]
+        ):
+            raise ValueError("pending record fields disagree")
+
+        validated = validate_direct_scope(
+            operation["argv"], operation["database_target"]
+        )
+    except Exception:  # noqa: BLE001 - a damaged record never runs
+        return block(
+            "The pending Purchase Request could not be verified, so it was not "
+            "confirmed. Nothing was recorded. Preview it again."
+        )
+
+    return _conversational_scope(
+        validated,
+        request,
+        "The user confirmed the trusted pending Purchase Request for Project "
+        f"{record['project_id']} in their own prompt; the operation and the "
+        "recording operator come from verified preview evidence and trusted "
+        "local configuration, not from a model.",
+        {
+            "kind": "purchase_request",
+            "project_id": record["project_id"],
+            "project_title": operation["project_title"],
+            "merchant_code": operation["merchant_code"],
+            "reference": operation["reference"],
+            "operator_id": operation["operator_id"],
+            "source_run_id": record["source_run_id"],
+            "pending_created_at": record["created_at"],
+        },
+    )
+
+
 def run(
     payload: dict[str, Any],
     *,
@@ -810,6 +931,17 @@ def run(
 
         # CP12H.NL4C2A: no general Step Update permission. A Step Update is
         # authorized only by the user's confirmation of a verified preview.
+        # CP12H.NL4D4A: likewise, procurement is recorded only from the user's
+        # confirmation of a verified Purchase Request preview.
+        if merchant_scope["command"] == "procurement update":
+            return block(
+                "A procurement record cannot be authorized with a typed "
+                "--merchant-scope. Preview the Purchase Request (for example "
+                "\"Ghi nhận Purchase Request PR-2026-001 cho Project ... trên "
+                "database test\"), then type `/solve Xác nhận ghi nhận`. "
+                "Nothing was dispatched."
+            )
+
         if merchant_scope["command"] == "step update":
             return block(
                 "A Step Update cannot be authorized with a typed "
@@ -856,6 +988,11 @@ def run(
 
         if conversational is None:
             conversational = confirm_pending_step(
+                session_id, command, request, run_id
+            )
+
+        if conversational is None:
+            conversational = confirm_pending_purchase_request(
                 session_id, command, request, run_id
             )
 
@@ -1124,7 +1261,12 @@ def run(
         # Shown to the user by this hook, not rendered by the model.
         detail = envelope_payload["conversational_confirmation"]
         output["systemMessage"] = (
-            f"Confirmed Step Update: step {detail['step_sequence']} "
+            f"Confirmed Purchase Request {detail['reference']!r} for Project "
+            f"{detail['project_title']!r} ({detail['merchant_code']}, project_id "
+            f"{detail['project_id']}), recorded by operator {detail['operator_id']} "
+            f"on the {merchant_scope['database_target']} database. It runs once now."
+            if detail.get("kind") == "purchase_request"
+            else f"Confirmed Step Update: step {detail['step_sequence']} "
             f"{detail['step_name']!r} of Project {detail['project_title']!r} "
             f"({detail['merchant_code']}) from {detail['current_status']} to "
             f"{detail['target_status']} (step_id {detail['step_id']}) on the "

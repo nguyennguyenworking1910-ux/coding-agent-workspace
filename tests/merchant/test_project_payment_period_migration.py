@@ -74,6 +74,8 @@ def test_migrations_are_discovered_in_version_order():
         (4, "add_alert_delivery_leases"),
         (5, "merchant_execution_ledger"),
         (6, "merchant_execution_claims"),
+        # CP12H.NL4D4A: DEC-P1a reference uniqueness.
+        (7, "procurement_reference_uniqueness"),
     ]
 
 

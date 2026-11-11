@@ -21,10 +21,18 @@ engine's own error class. Nothing is re-implemented and no policy is invented:
 - signing has no command (NL4D1 D1) and is never previewed.
 
 Nothing is written, reserved, claimed or confirmed: ``read_only`` is always
-true, ``executable`` and ``confirmation_available`` false, ``authorization``
-and ``requested_operation`` null, and no argv, scope or command is produced.
-A PREVIEW_VALID outcome is never authority to write. Content hashes and
-approval notes are never echoed.
+true, ``executable`` false and ``authorization`` null. A PREVIEW_VALID outcome
+is never authority to write. Content hashes and approval notes are never
+echoed.
+
+CP12H.NL4D4A: approved policy DEC-P1a (a reference is unique per Merchant and
+type) and DEC-P1c (a recorded Purchase Request reference is never replaced)
+block such requests on every target. A PREVIEW_VALID *new* Purchase Request
+on the test database, judged with a trusted local operator (DEC-A0), also
+carries ``requested_operation`` (``purchase_request.build_operation``,
+NOT_AUTHORIZED) and ``confirmation_available: true``: the user may type
+``/solve Xác nhận ghi nhận``. Everything else carries no operation, and
+``confirmation_blockers`` says why. No other evidence write is confirmable.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from .document_engine import DocumentEngineError, propose_document_revision
 from .evidence_status import _UUID
 from .gates import APPROVER_ROLES
 from .procurement_engine import ProcurementEngineError, propose_procurement_mutation
+from . import purchase_request
 from .project_nl import EVIDENCE_WRITE, fold, interpret_project_request
 from .project_status import _summary, _text, resolve_merchant_phrase, resolve_project
 
@@ -144,8 +153,16 @@ _SOURCES = {
 }
 
 
-def build_evidence_preview(request: str, reads: Any, *, database_target: str | None) -> dict[str, Any]:
-    """One read-only evidence write preview for the user's own words."""
+def build_evidence_preview(
+    request: str, reads: Any, *, database_target: str | None,
+    operator: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One read-only evidence write preview for the user's own words.
+
+    ``operator`` is the trusted local operator status
+    (``operator_identity.operator_status()``), resolved by the CLI from local
+    configuration; absent, no operation is ever produced.
+    """
 
     interpretation = interpret_project_request(request)
     folded = fold(request)
@@ -171,6 +188,8 @@ def build_evidence_preview(request: str, reads: Any, *, database_target: str | N
                               "plan": None},
         "policy_blockers": [],
         "policy_notes": [],
+        "recording_operator": None,
+        "confirmation_blockers": [],
         "basis": None,
         "basis_sha256": None,
         "candidates": [],
@@ -258,7 +277,8 @@ def build_evidence_preview(request: str, reads: Any, *, database_target: str | N
                 missing.remove("document_type")
 
     if operation == PROCUREMENT:
-        _procurement(result, stored, revisions, records, fields, missing)
+        _procurement(result, reads, stored, revisions, records, fields, missing)
+        _purchase_request_operation(result, reads, detail, fields, operator)
     elif operation == REVISION:
         _revision(result, stored, revisions, fields, missing, content_hash)
     else:
@@ -413,7 +433,7 @@ def _unsupported_role(folded):
 # ------------------------------------------------------------- operations
 
 
-def _procurement(result, project, revisions, records, fields, missing):
+def _procurement(result, reads, project, revisions, records, fields, missing):
     kind = fields["procurement_type"]
     record = next((r for r in records if str(r.get("procurement_type")).upper() == kind), None)
     signed = [r for r in revisions if r.get("superseded_by") is None and r.get("signed")]
@@ -446,6 +466,15 @@ def _procurement(result, project, revisions, records, fields, missing):
                            "signing has no command (NL4D1 D1).",
         })
     _basis(result, project, record=record)
+    if not missing:
+        # CP12H.NL4D4A: approved DEC-P1a / DEC-P1c, before the engine.
+        holders = reads.procurement_reference_holders(
+            _text(project["merchant_id"]), kind, fields["external_reference"])
+        blocker = purchase_request.reference_blocker(
+            _text(project["id"]), record if kind == "PURCHASE_REQUEST" else None,
+            fields["external_reference"], holders)
+        if blocker is not None:
+            return _block(result, *blocker)
     if missing:
         result["missing_required_fields"] = missing
         name = kind.replace("_", " ").title()
@@ -467,6 +496,34 @@ def _procurement(result, project, revisions, records, fields, missing):
         expected_version=record.get("version") if record else None,
     ), plan_fields=("operation", "procurement_type", "external_id", "status", "current_status",
                     "current_version", "new_version", "event_type"))
+
+
+def _purchase_request_operation(result, reads, detail, fields, operator):
+    """CP12H.NL4D4A: the confirmable operation of a valid new Purchase Request."""
+
+    if fields.get("procurement_type") != "PURCHASE_REQUEST":
+        return
+    result["recording_operator"] = dict(operator) if operator else {
+        "status": "OPERATOR_IDENTITY_NOT_RESOLVED", "operator_id": None}
+    if result["outcome"] != VALID:
+        return
+    blockers = result["confirmation_blockers"]
+    if result["database_target"] not in purchase_request.CONFIRMABLE_TARGETS:
+        blockers.append("RUNTIME_EXECUTION_DISABLED")
+    if result["domain_validation"]["plan"].get("operation") != "INSERT":
+        blockers.append(purchase_request.RECORD_EXISTS)
+    if result["recording_operator"]["status"] != "TRUSTED":
+        blockers.append(result["recording_operator"]["status"])
+    if blockers:
+        return
+    reference = fields["external_reference"]
+    project = detail["project"]
+    holders = reads.procurement_reference_holders(
+        _text(project["merchant_id"]), "PURCHASE_REQUEST", reference)
+    result["requested_operation"] = purchase_request.build_operation(
+        detail, reference, holders, result["recording_operator"]["operator_id"],
+        result["database_target"])
+    result["confirmation_available"] = True
 
 
 def _revision(result, project, revisions, fields, missing, content_hash):

@@ -20,13 +20,17 @@ and the execution receipt.
 
 Before any reservation or spend, the target is checked: runtime execution is
 disabled in code, test mode supports only ``merchant create``,
-``project create`` and ``step update``, and a read-only preflight verifies
+``project create``, ``step update`` and (CP12H.NL4D4A) the confirmed
+Purchase Request ``procurement update``, and a read-only preflight verifies
 the effective database name and user. ``project create`` must carry the
 confirmed preview's Project ID and basis, which are recomputed from current
 state here and again inside the write transaction. ``step update`` must be
 the user's own confirmation of a verified preview, spent for this exact run
-(CP12H.NL4C2A), and is re-judged the same way. A preflight failure leaves no
-footprint and spends nothing.
+(CP12H.NL4C2A), and is re-judged the same way. A ``procurement update`` must
+likewise be the user's own confirmation of a verified Purchase Request
+preview, bound to the trusted local operator, on a database that enforces
+reference uniqueness (CP12H.NL4D4A). A preflight failure leaves no footprint
+and spends nothing.
 """
 
 from __future__ import annotations
@@ -69,15 +73,27 @@ RUNTIME_DIRECT_EXECUTE_ENABLED = False
 # against its basis before any spend and in the write transaction.
 STEP_UPDATE_COMMAND = "step update"
 
+# CP12H.NL4D4A: only the confirmed creation of one Purchase Request. No
+# general procurement update: the preflight requires the trusted pending
+# record, whose canonical argv admits nothing else.
+PROCUREMENT_UPDATE_COMMAND = "procurement update"
+
 # Test mode validates the real write paths end to end: the reserved
-# Merchant Create, Project creation from a confirmed preview and (NL4C2A)
-# a confirmed Step Update. Runtime stays disabled above.
+# Merchant Create, Project creation from a confirmed preview, (NL4C2A) a
+# confirmed Step Update and (NL4D4A) a confirmed Purchase Request. Runtime
+# stays disabled above.
 TEST_MODE_COMMANDS = frozenset(
-    {MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND, STEP_UPDATE_COMMAND}
+    {MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND, STEP_UPDATE_COMMAND,
+     PROCUREMENT_UPDATE_COMMAND}
 )
 
 # Run-state key of the reconciled durable receipt of a Step Update.
 STEP_RECEIPT_STATE_KEY = "merchant_step_update_receipt"
+# Run-state key of the reconciled durable receipt of a Purchase Request.
+PURCHASE_REQUEST_RECEIPT_STATE_KEY = "merchant_purchase_request_receipt"
+
+# The database-level guarantee of DEC-P1a (migration 007).
+REFERENCE_UNIQUE_INDEX = "procurement_records_merchant_type_reference_unique_idx"
 
 
 def direct_execute_enabled(command: str, target: str) -> bool:
@@ -297,6 +313,12 @@ def _execute_scoped_write(
     ):
         _record_step_receipt(attempt, repository, identity)
 
+    if (
+        settled == SCOPE_EXECUTION_SUCCEEDED
+        and attempt.command == PROCUREMENT_UPDATE_COMMAND
+    ):
+        _record_purchase_request_receipt(attempt, repository, identity)
+
     sys.stdout.write(stdout.getvalue())
     sys.stderr.write(stderr.getvalue())
 
@@ -357,6 +379,50 @@ def _record_step_receipt(
     with locked_state(attempt.owner_session_id) as state:
         if isinstance(state, dict) and state.get("run_id") == attempt.run_id:
             state[STEP_RECEIPT_STATE_KEY] = receipt
+
+    return receipt
+
+
+def _record_purchase_request_receipt(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+    identity: Any,
+) -> dict[str, Any]:
+    """CP12H.NL4D4A: persist the reconciled receipt of a SUCCEEDED Purchase Request.
+
+    Built only from durable evidence (ledger, claim, procurement row and
+    PROCUREMENT event of one transaction) and checked against the confirmed
+    operation, operator included. An unreconciled receipt is recorded as
+    such and never changes the settled outcome.
+    """
+
+    from claude.clients.merchant.attempt_evidence import purchase_request_receipt
+    from claude.hooks.merchant_pending_confirmation import (
+        confirmed_purchase_request_record,
+    )
+    from claude.hooks.runtime_state import locked_state
+
+    try:
+        operation = confirmed_purchase_request_record(
+            attempt.owner_session_id, attempt.run_id
+        )["operation"]
+        receipt = purchase_request_receipt(repository, identity, operation["project_id"])
+        names = ("merchant_id", "project_id", "procurement_type", "reference", "operator_id")
+        if any(receipt[name] != operation[name] for name in names):
+            raise ValueError("receipt differs from the confirmed operation")
+        receipt["status"] = "RECONCILED"
+    except Exception as exc:  # noqa: BLE001 - recorded, never inferred
+        receipt = {"status": "UNRECONCILED", "error": type(exc).__name__}
+
+    receipt.update(
+        run_id=attempt.run_id,
+        task_id=attempt.task_id,
+        database_target=attempt.database_target,
+    )
+
+    with locked_state(attempt.owner_session_id) as state:
+        if isinstance(state, dict) and state.get("run_id") == attempt.run_id:
+            state[PURCHASE_REQUEST_RECEIPT_STATE_KEY] = receipt
 
     return receipt
 
@@ -482,6 +548,92 @@ def _verify_step_preview(
         raise DirectPreflightRefused(exc.reason) from exc
     except Exception as exc:  # noqa: BLE001 - an unjudgeable step never runs
         raise DirectPreflightRefused("STEP_PREVIEW_UNVERIFIABLE") from exc
+
+
+def _confirmed_purchase_request_operation(
+    attempt: PreparedRuntimeHandoff,
+) -> dict[str, Any]:
+    """CP12H.NL4D4A: the trusted pending Purchase Request this run confirmed.
+
+    A ``procurement update`` executes only as the exact operation of one
+    verified preview that the owner confirmed for this run, on the same
+    target, while the trusted local operator is still the one it was bound
+    to. Anything else (a typed or model-built scope, an edited argv or
+    operator, another run's confirmation) is refused unspent.
+    """
+
+    from claude.agents.tools.merchant.purchase_request import validate_operation
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        require_operator,
+    )
+    from claude.hooks.merchant_pending_confirmation import (
+        confirmed_purchase_request_record,
+    )
+
+    try:
+        record = confirmed_purchase_request_record(
+            attempt.owner_session_id, attempt.run_id
+        )
+        operation = (record or {}).get("operation")
+        validate_operation(operation)
+    except Exception as exc:  # noqa: BLE001 - no trusted confirmation, no write
+        raise DirectPreflightRefused("PURCHASE_REQUEST_CONFIRMATION_REQUIRED") from exc
+
+    if (
+        list(attempt.arguments) != operation["argv"]
+        or attempt.database_target != operation["database_target"]
+        or record.get("database_target") != operation["database_target"]
+        or record.get("project_id") != operation["project_id"]
+        or record.get("reference") != operation["reference"]
+        or record.get("operator_id") != operation["operator_id"]
+    ):
+        raise DirectPreflightRefused("PURCHASE_REQUEST_CONFIRMATION_MISMATCH")
+
+    try:
+        require_operator(operation["operator_id"])
+    except OperatorIdentityError as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+
+    return operation
+
+
+def _verify_purchase_request(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+    operation: dict[str, Any],
+) -> None:
+    """CP12H.NL4D4A: refuse before any spend unless the target database
+    enforces DEC-P1a and the confirmed preview still holds."""
+
+    from claude.agents.tools.merchant.purchase_request import (
+        PurchaseRequestMismatch,
+        verify_purchase_request,
+    )
+    from claude.clients.merchant.read_repository import MerchantReadRepository
+
+    try:
+        with repository.connection(read_only=True) as connection:
+            enforced = connection.execute(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = 'merchant_ops' "
+                "AND tablename = 'procurement_records' AND indexname = %s",
+                (REFERENCE_UNIQUE_INDEX,),
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001
+        raise DirectPreflightRefused("PURCHASE_REQUEST_UNVERIFIABLE") from exc
+    if enforced is None:
+        raise DirectPreflightRefused("PROCUREMENT_REFERENCE_CONSTRAINT_MISSING")
+
+    payload = _create_payload(tuple(attempt.arguments), PROCUREMENT_UPDATE_COMMAND)
+
+    try:
+        verify_purchase_request(
+            MerchantReadRepository(repository), payload, operation["operator_id"]
+        )
+    except PurchaseRequestMismatch as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+    except Exception as exc:  # noqa: BLE001 - an unjudgeable record never runs
+        raise DirectPreflightRefused("PURCHASE_REQUEST_UNVERIFIABLE") from exc
 
 
 def _execute_reserved_create(
@@ -637,7 +789,12 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     a preview reason (PREVIEW_BASIS_REQUIRED, PREVIEW_BASIS_CHANGED,
     PROJECT_NOT_READY, PROJECT_ID_MISMATCH); for ``step update``,
     STEP_CONFIRMATION_REQUIRED, STEP_CONFIRMATION_MISMATCH or a re-judgement
-    reason (STEP_BASIS_CHANGED, STEP_VERSION_CHANGED, STEP_NOT_READY, ...).
+    reason (STEP_BASIS_CHANGED, STEP_VERSION_CHANGED, STEP_NOT_READY, ...);
+    for ``procurement update`` (CP12H.NL4D4A),
+    PURCHASE_REQUEST_CONFIRMATION_REQUIRED or _MISMATCH, an operator reason
+    (OPERATOR_IDENTITY_UNAVAILABLE, _INVALID, _CHANGED),
+    PROCUREMENT_REFERENCE_CONSTRAINT_MISSING or a re-judgement reason
+    (PROCUREMENT_REFERENCE_DUPLICATE, PURCHASE_REQUEST_BASIS_CHANGED, ...).
     The one-use authority stays unspent.
     """
 
@@ -665,6 +822,12 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     if attempt.command == STEP_UPDATE_COMMAND:
         _confirmed_step_operation(attempt)
 
+    purchase_request = (
+        _confirmed_purchase_request_operation(attempt)
+        if attempt.command == PROCUREMENT_UPDATE_COMMAND
+        else None
+    )
+
     try:
         repository = _target_repository(target)
     except DatabasePreflightError as exc:
@@ -675,6 +838,9 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
 
     if attempt.command == STEP_UPDATE_COMMAND:
         _verify_step_preview(attempt, repository)
+
+    if purchase_request is not None:
+        _verify_purchase_request(attempt, repository, purchase_request)
 
     return repository
 

@@ -235,8 +235,11 @@ def test_a_duplicate_reference_is_blocked_and_a_new_one_updates():
 
     assert same["outcome"] == BLOCKED
     assert same["domain_validation"]["error"]["code"] == "ProcurementConflictError"
-    assert other["outcome"] == VALID
-    assert other["domain_validation"]["plan"]["operation"] == "UPDATE"
+    # CP12H.NL4D4A (approved DEC-P1c): a recorded Purchase Request reference
+    # is never replaced. NL4D3 previewed this as a valid UPDATE.
+    assert other["outcome"] == BLOCKED
+    assert other["domain_validation"]["error"]["code"] == (
+        "PROCUREMENT_REFERENCE_REPLACEMENT_UNSUPPORTED")
     assert other["existing_evidence"]["record"]["version"] == 1
 
 
@@ -512,6 +515,12 @@ def test_a_typed_evidence_scope_is_still_refused(argv):
     # Unchanged by NL4D3: neither target can execute these commands, so the
     # preflight refuses a typed scope before anything is reserved or spent.
     command = " ".join(argv[:2])
+    if command == "procurement update":
+        # CP12H.NL4D4A: test mode admits only the user's confirmation of a
+        # verified Purchase Request preview; a typed scope is refused at the
+        # intent gate (test_nl4d4a_purchase_request.py).
+        assert handoff.direct_execute_enabled(command, "runtime") is False
+        return
 
     assert command not in handoff.TEST_MODE_COMMANDS
     assert handoff.direct_execute_enabled(command, "test") is False
@@ -532,7 +541,9 @@ def test_the_cli_exposes_a_read_that_cannot_write():
 
 def test_write_authority_is_unchanged():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
-    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update"}
+    # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
+    assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
+                                          "procurement update"}
 
 
 @pytest.fixture
