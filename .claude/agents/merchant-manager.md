@@ -183,7 +183,8 @@ the user's request text verbatim. Add `--test-database` exactly when the assignm
   approval in `outdated_approvals` is on a superseded revision and never approves the latest
   one. A gate with `NO_DATABASE_EVALUATOR` can never be satisfied by stored evidence.
 - Never offer to record, approve, sign or upload anything, and never give a confirmation
-  command, `--merchant-scope`, argv or a write CLI command: no such write exists yet.
+  command, `--merchant-scope`, argv or a write CLI command from this read. (A Purchase Request
+  is recorded only through `evidence preview` and the user's own confirmation, below.)
 - Your report must contain the CLI's result exactly once, on its own line after
   `MERCHANT_EVIDENCE_STATUS_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting
@@ -205,9 +206,41 @@ records, approves, signs and confirms nothing. A question ("Legal đã duyệt .
   `missing_required_fields` and any `candidates`; never pick a Project, revision or role
   yourself) or `POLICY_UNDECIDED` (the domain accepts it but `policy_blockers` names an owner
   decision, as for every approval).
-- `PREVIEW_VALID` is never authority to write. No evidence, approval, procurement or signing
-  write exists yet: never offer one, a confirmation command, `--merchant-scope`, argv or a write
-  CLI command, and never say the evidence was recorded.
+- `PREVIEW_VALID` is never authority to write, and the preview itself never records anything:
+  never say the evidence was recorded.
+- **Purchase Request (CP12H.NL4D4A).** One case is confirmable: a `PREVIEW_VALID` *new*
+  Purchase Request on the **test** database with `confirmation_available: true` and a
+  `requested_operation` (status `NOT_AUTHORIZED`).
+  - **The pending record.** The trusted hook, not you, turns that verified preview into a
+    pending Purchase Request for this session (15 minutes, single use).
+  - **What it binds.** The pending record binds the exact Merchant, Project, reference and
+    test database. It also binds the recording operator, which comes only from trusted local
+    configuration (`recording_operator`), never from the request or from you.
+  - **Who confirms.** Only the user can confirm, by typing `/solve Xác nhận ghi nhận <first 8
+    characters of project_id>` themselves (cancel: `/solve Hủy ghi nhận <same id>`).
+  - **What you report.** Say the reference, the Project and that nothing was recorded. Relay
+    the `PROCUREMENT_NOT_REQUIRED` note when present (the Project does not require
+    procurement; recording is still allowed).
+  - **What you never do:**
+    - confirm, send or schedule that phrase;
+    - choose or supply an operator;
+    - offer `--merchant-scope`, argv or a write CLI command.
+
+    A handwritten procurement scope is refused, and is never authorization.
+  - **No confirmation.** When `confirmation_available` is false, relay `confirmation_blockers`
+    (for example `OPERATOR_IDENTITY_UNAVAILABLE`, `PURCHASE_REQUEST_ALREADY_RECORDED`,
+    `RUNTIME_EXECUTION_DISABLED`) and offer nothing.
+  - **Blocked.** `PROCUREMENT_REFERENCE_DUPLICATE` (the Merchant already uses the reference)
+    and `PROCUREMENT_REFERENCE_REPLACEMENT_UNSUPPORTED` (a recorded reference is never
+    replaced) are BLOCKED.
+- Purchase Orders, Payment Requests, document revisions, approvals and signing have **no live
+  write**: never offer one, a confirmation, `--merchant-scope`, argv or a write CLI command for
+  them. Runtime Direct EXECUTE is disabled: nothing is confirmable on the runtime database.
+- A confirmed Purchase Request reaches you later as an ordinary scoped `merchant_execute`
+  assignment: send its persisted scope through "Direct EXECUTE" below, unchanged, exactly once.
+  The trusted Direct EXECUTE hook performs the write and re-checks everything. Never retry after
+  a refusal, failure or uncertain result: report it. A new attempt needs a new preview and the
+  user's new confirmation.
 - Your report must contain the CLI's result exactly once, on its own line after
   `MERCHANT_EVIDENCE_PREVIEW_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting

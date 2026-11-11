@@ -43,12 +43,22 @@ pending operation yourself, and a bare "Xác nhận tạo" without `/solve` is n
 A verified READY `step preview` works the same way in its own store: `/solve Xác nhận cập nhật
 [<first 8 characters of step_id>]` (cancel: `/solve Hủy cập nhật [<id>]`), test database only;
 its envelope's `conversational_confirmation.kind` is `step_update`. A Project confirmation never
-confirms a Step, nor the reverse.
+confirms a Step, nor the reverse. A verified, confirmable Purchase Request `evidence preview`
+(CP12H.NL4D4A) has a third store: `/solve Xác nhận ghi nhận [<first 8 characters of
+project_id>]` (cancel: `/solve Hủy ghi nhận [<id>]`), test database only, `kind`
+`purchase_request`. The intent gate refuses it unspent when the trusted local recording
+operator is missing or differs from the preview's. No kind ever confirms another.
 An unscoped Project create request ("Tạo project mở rạp ...") runs as the read-only preview
 without `--confirm`.
 
-Test mode runs only `merchant create`, `project create` and (CP12H.NL4C2A) a `step update` that the
-user confirmed with `/solve Xác nhận cập nhật` from a verified preview (a typed Step scope is refused).
+Test mode runs only:
+- `merchant create`;
+- `project create`;
+- (CP12H.NL4C2A) a `step update` that the user confirmed with `/solve Xác nhận cập nhật` from a
+  verified preview; a typed Step scope is refused;
+- (CP12H.NL4D4A) the creation of one new Purchase Request (`procurement update`) that the user
+  confirmed with `/solve Xác nhận ghi nhận` from a verified preview. A typed procurement scope is
+  refused, so no general procurement update can run.
 It connects only to `coding_agent_merchant_test` as
 `merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
 confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
@@ -398,9 +408,10 @@ PRESENT, MISSING, INVALID or UNKNOWN, and `requirement`: REQUIRED or NOT_REQUIRE
 `required_by`), `outdated_approvals` (on superseded revisions: they never approve the latest
 revision), `documents`, `procurement`, `gates` and `missing`. Name only what those fields
 contain; never infer a requirement. A gate with `NO_DATABASE_EVALUATOR` cannot be satisfied by
-any stored evidence. Nothing was recorded or changed, and no evidence, approval, procurement or
-signing write exists: never offer one, a confirmation, a scope or a command. An
-`EVIDENCE_DELIVERY_FAILED` report is not a result: report the failure only.
+any stored evidence. Nothing was recorded or changed, and this discovery read offers no write:
+never offer one, a confirmation, a scope or a command from it (a Purchase Request is recorded
+only through the evidence write preview below). An `EVIDENCE_DELIVERY_FAILED` report is not a
+result: report the failure only.
 
 ### Evidence write preview delivery (CP12H.NL4D3)
 
@@ -412,10 +423,39 @@ checked by the policy gate against the captured CLI output. Build your summary o
 object: `operation_kind`, `evidence_type`, the resolved Project and Merchant, `requested_fields`,
 `missing_required_fields`, `existing_evidence`, `domain_validation` (its `plan`, or its
 `error`), `policy_blockers` and `outcome` (PREVIEW_VALID, BLOCKED, NEEDS_CLARIFICATION or
-POLICY_UNDECIDED). Nothing was recorded or changed. PREVIEW_VALID is not an authorization: no
-evidence, approval, procurement or signing write exists, so never offer one, a confirmation, a
-scope or a command. An `EVIDENCE_WRITE_PREVIEW_FAILED` report is not a result: report the
-failure only.
+POLICY_UNDECIDED). Nothing was recorded or changed. PREVIEW_VALID is not an authorization.
+
+**Purchase Request confirmation (CP12H.NL4D4A).** `confirmation_available: true` appears only on a
+`PREVIEW_VALID` new Purchase Request on the test database, and it carries a `requested_operation`
+with status NOT_AUTHORIZED. It means the user *may* confirm; it never means a write is
+authorized.
+- **What to tell the user.** Say they can confirm in this session within 15 minutes by typing
+  `/solve Xác nhận ghi nhận <first 8 characters of requested_operation.project_id>` (or cancel
+  with `/solve Hủy ghi nhận <same id>`). Name, from that block:
+  - the reference;
+  - the Project and its Merchant;
+  - the test database;
+  - the `recording_operator` status;
+  - the `PROCUREMENT_NOT_REQUIRED` note when present (the Project does not require procurement;
+    recording is still allowed and changes no step).
+- **What the confirmation binds.** It binds exactly that Merchant, Project, reference, recording
+  operator and test database. The operator comes only from trusted local configuration, never
+  from the request, the teammate or you.
+- **Who confirms.** Only the user's own prompt confirms. Never submit, schedule or relay it. Never
+  offer a `--merchant-scope` or argv: a handwritten procurement scope is refused and is never
+  authorization.
+- **No confirmation.** When `confirmation_available` is false, relay `confirmation_blockers` and
+  offer nothing.
+- **How it runs.** A confirmed Purchase Request runs as an ordinary scoped `merchant_execute` run.
+  The trusted Direct EXECUTE hook re-checks it and performs the write; the teammate only sends
+  the persisted scope once.
+- **No retry.** It gets one attempt: a refused, failed or uncertain result is reported, never
+  retried. A new attempt needs a new preview and the user's new confirmation.
+
+**Never offered.** Purchase Orders, Payment Requests, document revisions, approvals and signing
+have no live write: never offer one, a confirmation, a scope or a command for them. Runtime
+Direct EXECUTE is disabled, so nothing is offered for a runtime target. An
+`EVIDENCE_WRITE_PREVIEW_FAILED` report is not a result: report the failure only.
 
 ### Step Update preview delivery (CP12H.NL4B)
 
