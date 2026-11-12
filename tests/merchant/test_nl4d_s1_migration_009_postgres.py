@@ -59,7 +59,8 @@ def test_migration_009_is_applied_once_with_its_file_checksum(repository):
     with repository.connection(read_only=True) as connection:
         rows = connection.execute("SELECT version, description, checksum FROM merchant_ops.schema_migrations "
                                   "ORDER BY version").fetchall()
-    assert [r["version"] for r in rows] == list(range(1, 10))
+    # Later migrations (010+) may follow; 009 is recorded exactly once.
+    assert [r["version"] for r in rows][:9] == list(range(1, 10))
     assert rows[8]["description"] == "metadata_only_revisions"
     assert rows[8]["checksum"] == _calculate_checksum(str(MIGRATION))
 
