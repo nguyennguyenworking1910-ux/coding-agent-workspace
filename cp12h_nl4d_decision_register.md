@@ -20,6 +20,15 @@ The approved wording is the owner's own; where it differs from the recommended d
 
 Each item lists the owner decision it needs (§4). A recommendation is only a default to accept, change or reject.
 
+> **Update 2026-11-12 — CP12H.NL4D-S1. Owner direction changed to confirmation-first.**
+>
+> On 2026-11-12 the owner answered "Approve all three" to the explicit question in CP12H.NL4D-S1. The option read: "Mark DEC-SIMPLIFY (P1–P8), DEC-SIMPLIFY-a (METADATA_ONLY) and DEC-SIMPLIFY-b (APPROVED+REJECTED) OWNER_APPROVED — Local Test MVP." So, **OWNER_APPROVED — LOCAL TEST MVP, 2026-11-12:**
+> - **DEC-SIMPLIFY:** policies P1–P8 of `cp12h_nl4d_simplified_local_mvp_policy.md`. The user's explicit confirmation of an exact preview is the authority. Evidence is optional, a single local operator records, and attestation is labelled.
+> - **DEC-SIMPLIFY-a:** a `METADATA_ONLY` revision class (migration 009).
+> - **DEC-SIMPLIFY-b:** both APPROVED and REJECTED decisions may be recorded, each final for its revision and role.
+>
+> **Superseded for the Local Test MVP:** DEC-S1a/b, S2a/b, D1a/b, G1a–c and G2a/b. They were never approved and are **not deleted**: their original text below is kept as decision history. D1c (runtime grant) stays deferred. None of these approvals enables a write: each write kind still needs its own accepted checkpoint, and runtime Direct EXECUTE stays disabled. Details: `cp12h_nl4d_s1_simplified_policy_and_migration_009.md`.
+
 **Sources read:**
 - the reports: NL4D1 audit, NL4D2, NL4D3, NL4D3-FIX1;
 - `migrations/0001_initial_schema.sql`, `0003_add_cli_write_grants.sql`, `005`, `006`;
@@ -317,11 +326,14 @@ Every other decision (P1b, S1, S2, D1, G1, G2) is PROPOSED.
 | DEC-D4e | May a signed revision be superseded? | — | **APPROVED — LOCAL TEST MVP, 2026-11-11**: no, until a signing lifecycle policy is approved | NL4D5A2 |
 | DEC-D4f | Legacy hash-only revisions | Keep, unmanaged | **APPROVED — LOCAL TEST MVP, 2026-11-11**: keep as UNVERIFIED_LEGACY; no migration, no fabricated files, never verified evidence | NL4D5A1b/A2 |
 | DEC-D4g | Document type allowlist | — | **APPROVED — LOCAL TEST MVP, 2026-11-11**: only canonical types already recognized by the domain (the canonical set is still to be identified; the domain has only a pattern today) | NL4D5A2 |
-| DEC-S1a/b | Who records which role; separation of duties | Per-role operator mapping; ≥ 2 distinct operators across the three roles | PROPOSED | NL4D5B |
-| DEC-S2a/b | Attestation fields; external reference without a file? | Fields as §S2; a file is required for PARTNER, an external reference is allowed for internal roles | PROPOSED | NL4D5B |
-| DEC-D1a/b/c | External signing evidence model; verify the signed copy; runtime grant | Accept (b); store the signed file and hash, no content comparison in the MVP; grant deferred | PROPOSED | NL4D5C |
-| DEC-G1a/b/c | Gated steps; REJECTED completes a review?; version policy | Gate 2, 3, 9, 10, 11; REJECTED blocks completion; new template version only | PROPOSED | NL4D5D |
-| DEC-G2a/b | Steps 21 and 22 evidence | As §G2 | PROPOSED | NL4D5D |
+| DEC-S1a/b | Who records which role; separation of duties | Per-role operator mapping; ≥ 2 distinct operators across the three roles | ~~PROPOSED~~ **SUPERSEDED 2026-11-12** by DEC-SIMPLIFY (Local Test MVP: one local operator records any role) | — |
+| DEC-S2a/b | Attestation fields; external reference without a file? | Fields as §S2; a file is required for PARTNER, an external reference is allowed for internal roles | ~~PROPOSED~~ **SUPERSEDED 2026-11-12** by DEC-SIMPLIFY P2/P3 (optional notes and date; `approved_by` never fabricated; recorder = `triggered_by`) | — |
+| DEC-D1a/b/c | External signing evidence model; verify the signed copy; runtime grant | Accept (b); store the signed file and hash, no content comparison in the MVP; grant deferred | ~~PROPOSED~~ **D1a/b SUPERSEDED 2026-11-12** by DEC-SIMPLIFY P4 (operator-attested signing flag); D1c deferred | — |
+| DEC-G1a/b/c | Gated steps; REJECTED completes a review?; version policy | Gate 2, 3, 9, 10, 11; REJECTED blocks completion; new template version only | ~~PROPOSED~~ **SUPERSEDED 2026-11-12** by DEC-SIMPLIFY (those Steps stay ungated) | — |
+| DEC-G2a/b | Steps 21 and 22 evidence | As §G2 | ~~PROPOSED~~ **SUPERSEDED 2026-11-12** by DEC-SIMPLIFY P7 (operator-attested completion of evaluator-less gates; predecessors still required) | — |
+| **DEC-SIMPLIFY** | Confirmation-first Local MVP, P1–P8 | Adopt | **OWNER_APPROVED — LOCAL TEST MVP, 2026-11-12** | NL4D-S2+ |
+| **DEC-SIMPLIFY-a** | `METADATA_ONLY` revision class | Yes (migration 009) | **OWNER_APPROVED — LOCAL TEST MVP, 2026-11-12**; migration 009 applied to the test DB only | NL4D-S2 |
+| **DEC-SIMPLIFY-b** | Record REJECTED as well as APPROVED | Yes, final per revision and role | **OWNER_APPROVED — LOCAL TEST MVP, 2026-11-12** | NL4D-S3 |
 
 ---
 
