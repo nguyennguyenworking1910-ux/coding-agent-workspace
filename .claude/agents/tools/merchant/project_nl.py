@@ -48,6 +48,8 @@ _TYPE_PHRASES = (
     ("OPENING_NEW_CINEMA", r"open(?:ing)?(?: (?:a|the|new))* cinema"),
     ("OPENING_NEW_CINEMA", r"new cinema"),
     ("MEDIA_TOP_UP", r"(?:media top ?up|top ?up media|nap media)"),
+    # CP12H.MASTER-FIX: "Tạo Project media ...", "existing-document media project".
+    ("MEDIA_TOP_UP", r"(?:(?:project|du an) media|media (?:project|du an)|existing document media)"),
     # Only with a Merchant noun: bare "integration" is usually code work.
     (
         "INTEGRATION_NEW_MERCHANT",

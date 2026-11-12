@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 import uuid
 from typing import Any, Protocol
 
@@ -102,7 +104,11 @@ def build_project_preview(
 ) -> dict[str, Any]:
     """Return a read-only preview; never a write authorization."""
 
-    interpretation = interpret_project_request(request)
+    # CP12H.MASTER-FIX: the reuse and payment-period clauses are read
+    # explicitly and removed before names are extracted, so they never leak
+    # into the Merchant, site or title.
+    reuse_clause, source_phrase, payment_period, cleaned = _media_clauses(request)
+    interpretation = interpret_project_request(cleaned)
     preview: dict[str, Any] = {
         "success": True,
         "mode": "PROJECT_PREVIEW",
@@ -151,7 +157,8 @@ def build_project_preview(
         interpretation.project_type, project_type_hint, questions
     )
     template = (
-        _template(project_type, interpretation.media_document, questions)
+        _template(project_type,
+                  "EXISTING" if reuse_clause else interpretation.media_document, questions)
         if project_type
         else None
     )
@@ -182,11 +189,12 @@ def build_project_preview(
                 "Does this Project require procurement (a Purchase Request)?"
             )
         if template.project_type == "MEDIA_TOP_UP":
-            fields["payment_period_number"] = None
-            questions.append("Which payment period number is this top-up for?")
+            fields["payment_period_number"] = payment_period
+            if payment_period is None:
+                questions.append("Which payment period number is this top-up for?")
         if template.variant == "MEDIA_TOP_UP_EXISTING_DOCUMENT":
-            fields["reused_document_revision_id"] = None
-            questions.append("Which existing document revision is reused?")
+            fields["reused_document_revision_id"] = _select_reused_revision(
+                reader, merchant, request, source_phrase, preview, questions)
 
     assessment = assess_project_create(reader, fields, merchants=merchants)
     if merchant is not None and assessment["merchant"] is not None:
@@ -206,6 +214,9 @@ def build_project_preview(
     }
     preview["initial_steps"] = assessment["initial_steps"]
     preview["basis_hash"] = assessment["basis_hash"]
+    if assessment.get("reused_document") is not None:
+        # CP12H.MASTER-FIX: the exact revision the confirmation will bind.
+        preview["reused_document"] = assessment["reused_document"]
 
     if any(conflict["blocking"] for conflict in assessment["conflicts"]):
         preview["outcome"] = BLOCKED
@@ -313,8 +324,25 @@ def assess_project_create(
 
     result["initial_steps"] = _initial_steps(template, merchant, fields)
 
+    reused_row = None
+    reused_id = fields.get("reused_document_revision_id")
+    if reused_id is not None:
+        # CP12H.MASTER-FIX: one eligibility rule; the exact revision state
+        # is part of the basis, so any change refuses the confirmation.
+        from .document_reuse import reuse_blocker, summary
+
+        lister = getattr(reader, "list_reusable_revisions", None)
+        rows = lister(merchant_id, reused_id) if lister and merchant_id else []
+        reused_row = rows[0] if len(rows) == 1 else None
+        blocker = reuse_blocker(merchant_id, reused_row)
+        if blocker is not None:
+            conflicts.append({"kind": blocker[0], "blocking": True, "detail": blocker[1]})
+        else:
+            result["reused_document"] = {**summary(reused_row),
+                                         "relationship": "projects.reused_document_revision_id"}
+
     if merchant is not None and template is not None:
-        basis = _basis_hash(merchant, template, stored_template, projects, fields)
+        basis = _basis_hash(merchant, template, stored_template, projects, fields, reused_row)
         result["basis_hash"] = basis
         result["project_id"] = str(uuid.uuid5(_PROJECT_ID_NAMESPACE, basis))
 
@@ -367,7 +395,7 @@ def verify_project_create(
     return assessment
 
 
-def _basis_hash(merchant, template, stored_template, projects, fields) -> str:
+def _basis_hash(merchant, template, stored_template, projects, fields, reused_row=None) -> str:
     basis = {
         "merchant": [
             merchant["merchant_id"],
@@ -397,11 +425,92 @@ def _basis_hash(merchant, template, stored_template, projects, fields) -> str:
             for name in OPERATION_FIELDS
         },
     }
+    if reused_row is not None:
+        from .document_reuse import basis_row
+
+        basis["reused_document"] = basis_row(reused_row)
     return hashlib.sha256(
         json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str).encode(
             "utf-8"
         )
     ).hexdigest()
+
+
+# CP12H.MASTER-FIX: "sử dụng hợp đồng đã ký của Project A", "using the signed
+# contract from Project A", "dùng hợp đồng hiện có"; "kỳ thanh toán 3",
+# "payment period 3".
+_REUSE_CLAUSE = re.compile(
+    r"(?i)[,;]?\s*(?:và\s+|and\s+)?(?:sử dụng|dùng|tái sử dụng|using|reusing|reuse|use)\s+"
+    r"(?:lại\s+|the\s+)?(?:signed\s+|existing\s+)?(?:hợp đồng|contract|tài liệu|document)"
+    r"(?:\s+(?:đã ký|hiện có|signed|existing))*"
+    r"(?:\s+(?:của|from|of)\s+(?:project|dự án)\s+(?P<source>.+?))?"
+    r"(?=\s+(?:trên|on)\s|\s*[,.;]|\s*$)"
+)
+_PAYMENT_PERIOD = re.compile(
+    r"(?i)[,;]?\s*(?:kỳ thanh toán|kỳ|payment period|period)\s*(?:số\s*|no\.?\s*)?(?P<n>\d+)\b")
+_REVISION_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
+
+
+def _media_clauses(request: str) -> tuple[bool, str | None, int | None, str]:
+    """(reuse requested, source Project phrase, payment period, cleaned text)."""
+
+    text = unicodedata.normalize("NFC", request)
+    period = None
+    found = _PAYMENT_PERIOD.search(text)
+    if found:
+        period = int(found.group("n"))
+        text = text[:found.start()] + text[found.end():]
+    reuse = _REUSE_CLAUSE.search(text)
+    source = None
+    if reuse:
+        source = (reuse.group("source") or "").strip() or None
+        text = text[:reuse.start()] + text[reuse.end():]
+    text = _REVISION_UUID.sub(" ", text)
+    return reuse is not None, source, period, " ".join(text.split())
+
+
+def _select_reused_revision(reader, merchant, request, source_phrase, preview, questions):
+    """CP12H.MASTER-FIX: the one eligible signed contract revision to reuse.
+
+    Exactly one candidate is proposed; several, or a named source with none,
+    always ask; nothing is ever chosen arbitrarily."""
+
+    from .document_reuse import eligible, summary
+
+    if merchant is None:
+        return None
+    lister = getattr(reader, "list_reusable_revisions", None)
+    rows = lister(merchant["merchant_id"]) if lister else []
+    explicit = {m.group().lower() for m in _REVISION_UUID.finditer(request)}
+    candidates = eligible(rows, merchant["merchant_id"])
+    if explicit:
+        named = [r for r in rows if str(r["id"]).lower() in explicit]
+        if len(explicit) == 1 and len(named) == 1:
+            return named[0]["id"]                        # eligibility is checked in assess
+        questions.append("The named document revision was not found for this Merchant. "
+                         "Which signed contract revision is reused?")
+        return None
+    if source_phrase:
+        wanted = " ".join(source_phrase.split()).casefold()
+        exact = [r for r in candidates if (r.get("source_project_title") or "").casefold() == wanted]
+        partial = [r for r in candidates if wanted in (r.get("source_project_title") or "").casefold()]
+        candidates = exact or partial
+    preview["reuse_candidates"] = [summary(r) for r in candidates]
+    if len(candidates) == 1:
+        return candidates[0]["id"]
+    if not candidates:
+        questions.append(
+            "No eligible signed CONTRACT revision of this Merchant"
+            + (f" in Project {source_phrase!r}" if source_phrase else "")
+            + " can be reused (it must be signed, not superseded and never rejected). "
+            "Sign the contract first, or name another Project.")
+    else:
+        questions.append(
+            "Several signed contract revisions can be reused: "
+            + "; ".join(f"{r.get('source_project_title')} revision {r.get('revision_number')} "
+                        f"({r['id']})" for r in candidates)
+            + ". Which one (name its Project or revision id)?")
+    return None
 
 
 def _installed_metadata(stored: dict[str, Any] | None) -> dict[str, Any] | None:

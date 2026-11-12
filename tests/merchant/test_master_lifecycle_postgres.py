@@ -786,12 +786,12 @@ def test_reference_project_and_merchant_errors_never_yield_an_operation(project)
     assert claims(db) == []
 
 
-def test_an_existing_document_media_project_fails_closed_at_its_purchase_order(project):
-    """MEDIA_TOP_UP_EXISTING_DOCUMENT reuses a signed, non-superseded revision
-    of another Project of the same Merchant (workflow_repository). The
-    Purchase Order prerequisite reads only the Project's own revisions, and
-    whether another Project's signature may satisfy it is an undecided
-    cross-Project evidence policy: the PO is refused, never inferred."""
+def test_an_existing_document_media_project_records_its_po_on_the_bound_revision(project):
+    """MEDIA_TOP_UP_EXISTING_DOCUMENT reuses a signed, non-superseded CONTRACT
+    revision of another Project of the same Merchant, bound at creation.
+    CP12H.MASTER-FIX (owner-approved): the Purchase Order prerequisite now
+    accepts that bound revision; it is shown in the preview and never copied
+    (the full confirmed workflow: test_master_fix_reuse_postgres.py)."""
 
     db = project.repository
     source = str(uuid.uuid4())
@@ -806,9 +806,11 @@ def test_an_existing_document_media_project_fails_closed_at_its_purchase_order(p
         reused_document_revision_id=source,
     ).project_id)
 
-    refused = cli_preview(db, f"Ghi nhận Purchase Order PO-{SHORT}-EX cho Project {title} trên database test")
-    assert refused["outcome"] == "BLOCKED" and refused["requested_operation"] is None
-    # The reused revision is still the other Project's, unchanged and unsigned-by-us.
+    po = cli_preview(db, f"Ghi nhận Purchase Order PO-{SHORT}-EX cho Project {title} trên database test")
+    assert po["outcome"] == "PREVIEW_VALID", po["domain_validation"]
+    assert po["existing_evidence"]["reused_document"]["revision_id"] == source
+    assert po["requested_operation"]["operation"] == "RECORD_PURCHASE_ORDER"
+    # The reused revision is still the other Project's, unchanged.
     row = one(db, "SELECT project_id::text AS p, signed, superseded_by FROM merchant_ops.document_revisions "
                   "WHERE id = %s", source)
     assert (row["p"], row["signed"], row["superseded_by"]) == (project.project_id, True, None)

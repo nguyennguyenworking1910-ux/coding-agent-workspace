@@ -650,6 +650,16 @@ class TransactionPreviewReader:
         )
         return [dict(row) for row in self.cursor.fetchall()]
 
+    def list_reusable_revisions(
+        self, merchant_id: Any = None, revision_id: Any = None
+    ) -> list[dict[str, Any]]:
+        """CP12H.MASTER-FIX: the reusable-revision read, locked FOR SHARE so
+        the bound revision cannot change before the Project commits."""
+
+        from claude.agents.tools.merchant.document_reuse import read_reusable
+
+        return read_reusable(self.cursor, merchant_id, revision_id, lock=True)
+
     def get_workflow_template(
         self,
         template_id: str,

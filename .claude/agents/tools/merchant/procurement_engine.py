@@ -222,6 +222,7 @@ def propose_procurement_mutation(
             (),
         ),
         procurement_records=records,
+        reused_revision=snapshot.get("reused_document_revision"),
     )
 
     old_values = {
@@ -346,15 +347,42 @@ def _validate_dependencies(
     document_type: str | None,
     revisions: Sequence[Mapping[str, Any]],
     procurement_records: Sequence[Mapping[str, Any]],
+    reused_revision: Mapping[str, Any] | None = None,
 ) -> None:
     if procurement_type == "PURCHASE_REQUEST":
         return
 
-    _require_signed_document(
-        project_id,
-        revisions,
-        document_type=document_type,
-    )
+    # CP12H.MASTER-FIX: (A) the Project's own active revision, unchanged
+    # rules; (B) only when it has none, the signed contract revision bound
+    # to the Project at creation (projects.reused_document_revision_id),
+    # never one named by a request, and only while still eligible.
+    reused_id = project.get("reused_document_revision_id")
+    own_active = [
+        revision for revision in revisions
+        if str(revision.get("project_id")) == project_id
+        and revision.get("superseded_by") is None
+    ]
+    if reused_id is not None and not own_active:
+        from .document_reuse import reuse_blocker
+
+        row = dict(reused_revision) if reused_revision is not None else None
+        if row is not None and str(row.get("id")) != str(reused_id):
+            row = None
+        blocker = reuse_blocker(project.get("merchant_id"), row, project_id)
+        if blocker is not None:
+            raise ProcurementDependencyError(
+                "Procurement operation requires the Project's reused signed "
+                f"contract revision: {blocker[1]} ({blocker[0]})"
+            )
+    else:
+        _require_signed_document(
+            project_id,
+            # Only the bound reused revision is set aside; any other foreign
+            # revision still refuses the snapshot as before.
+            [r for r in revisions
+             if reused_id is None or str(r.get("id")) != str(reused_id)],
+            document_type=document_type,
+        )
 
     if procurement_type == "PURCHASE_ORDER":
         if bool(project.get("requires_procurement")):

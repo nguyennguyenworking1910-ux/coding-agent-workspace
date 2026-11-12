@@ -349,7 +349,10 @@ Each runs only from a verified `evidence preview` the user confirms with `/solve
 hiện <code>` (fourth pending store), is re-judged in the preflight and inside the write
 transaction, and gets a receipt (`merchant_lifecycle_receipt`) reconciled from PostgreSQL. A gate
 Step with no stored-evidence evaluator completes only through a confirmed, operator-attested Step
-Update (`gate_attestation`). The scope must satisfy the deterministic
+Update (`gate_attestation`). CP12H.MASTER-FIX: an Existing-Document Media Project binds, at its confirmed creation, one signed
+CONTRACT revision of another Project of the same Merchant (`document_reuse.py`; immutable
+`projects.reused_document_revision_id`, migration 011), which its Purchase Order and Payment
+Request then accept; nothing is copied and the source is never changed. The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
 the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an

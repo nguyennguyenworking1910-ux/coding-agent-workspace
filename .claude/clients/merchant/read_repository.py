@@ -69,6 +69,13 @@ class TransactionDetailReader:
             self.connection, merchant_id, procurement_type, reference
         )
 
+    def list_reusable_revisions(
+        self, merchant_id: Any = None, revision_id: Any = None
+    ) -> list[dict[str, Any]]:
+        from claude.agents.tools.merchant.document_reuse import read_reusable
+
+        return read_reusable(self.connection, merchant_id, revision_id)
+
 
 class MerchantReadRepository:
     """Serve deterministic CLI reads through one repository connection."""
@@ -341,6 +348,17 @@ class MerchantReadRepository:
                 return self.reference_holders_in(
                     connection, merchant_id, procurement_type, reference
                 )
+
+    def list_reusable_revisions(
+        self, merchant_id: Any = None, revision_id: Any = None
+    ) -> list[dict[str, Any]]:
+        """CP12H.MASTER-FIX: revisions of a Merchant's Projects (or one
+        revision) with their decisions, for signed-revision reuse."""
+
+        from claude.agents.tools.merchant.document_reuse import read_reusable
+
+        with self.repository.connection(read_only=True) as connection:
+            return read_reusable(connection, merchant_id, revision_id)
 
     @staticmethod
     def reference_holders_in(

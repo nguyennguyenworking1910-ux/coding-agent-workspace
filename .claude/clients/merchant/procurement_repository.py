@@ -111,9 +111,24 @@ class MerchantProcurementRepository:
                         if precondition is not None:
                             precondition(connection)
 
+                        # CP12H.MASTER-FIX: the revision bound at Project
+                        # creation, locked FOR SHARE (never from the request).
+                        reused = None
+                        if project.get("reused_document_revision_id") is not None:
+                            from claude.agents.tools.merchant.document_reuse import (
+                                read_reusable,
+                            )
+
+                            rows = read_reusable(
+                                cursor, None,
+                                project["reused_document_revision_id"], lock=True,
+                            )
+                            reused = rows[0] if rows else None
+
                         plan = propose_procurement_mutation(
                             {
                                 "project": project,
+                                "reused_document_revision": reused,
                                 "document_revisions": (
                                     revisions
                                 ),
@@ -193,7 +208,8 @@ class MerchantProcurementRepository:
                 project.id,
                 project.merchant_id,
                 project.status,
-                project.requires_procurement
+                project.requires_procurement,
+                project.reused_document_revision_id
             FROM merchant_ops.projects AS project
             WHERE project.id = %s
             FOR UPDATE OF project

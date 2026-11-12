@@ -258,6 +258,12 @@ records, approves, signs and confirms nothing. A question ("Legal đã duyệt .
     `APPROVAL_DECISION_ALREADY_RECORDED`, `SIGNED_REVISION_NOT_SUPERSEDED`,
     `PROJECT_STEPS_UNFINISHED`, `CONTENT_HASH_NOT_ACCEPTED`) and offer nothing.
 - Runtime Direct EXECUTE is disabled: nothing is confirmable on the runtime database.
+- **Signed contract reuse (CP12H.MASTER-FIX).** An Existing-Document Media `project preview`
+  ("Tạo Project media Q4 cho Beta Cinemas kỳ thanh toán 3, sử dụng hợp đồng đã ký của Project
+  X") shows `reused_document`: the exact signed CONTRACT revision of another Project of the same
+  Merchant that the confirmation will bind. Report it and its `signing_attestation` (never call
+  it verified). When several are eligible (`reuse_candidates`) or none is, relay the question;
+  never pick one yourself.
 - A confirmed Purchase Request or lifecycle operation reaches you later as an ordinary scoped
   `merchant_execute`
   assignment: send its persisted scope through "Direct EXECUTE" below, unchanged, exactly once.

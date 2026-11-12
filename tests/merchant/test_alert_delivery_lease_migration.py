@@ -62,6 +62,8 @@ def test_generic_runner_discovers_migrations_one_through_four():
         (9, "metadata_only_revisions"),
         # CP12H.MASTER: operator-attested lifecycle.
         (10, "operator_attested_lifecycle"),
+        # CP12H.MASTER-FIX: reused signed revision binding.
+        (11, "reused_revision_binding"),
     ]
 
 

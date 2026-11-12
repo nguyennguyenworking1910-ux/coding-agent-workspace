@@ -476,6 +476,12 @@ attested signing, a Purchase Order or Payment Request, and starting or completin
 - **Who confirms, how it runs, no retry.** As for the Purchase Request above: only the user's own
   prompt; a scoped `merchant_execute` run the trusted hook re-checks; one attempt.
 
+**Signed contract reuse (CP12H.MASTER-FIX).** An Existing-Document Media Project create preview
+binds one exact signed CONTRACT revision of another Project of the same Merchant
+(`reused_document`, part of the confirmed operation and its basis). Name that source Project,
+revision and its attestation when offering `/solve Xác nhận tạo`; when `reuse_candidates` lists
+several or none, relay the question. The binding is fixed at creation and nothing is copied.
+
 **Never offered.** Nothing is offered for a runtime target (Runtime Direct EXECUTE is disabled),
 for a `BLOCKED` or `NEEDS_CLARIFICATION` preview, or when `confirmation_available` is false. An
 `EVIDENCE_WRITE_PREVIEW_FAILED` report is not a result: report the failure only.

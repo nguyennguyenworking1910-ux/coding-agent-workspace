@@ -215,12 +215,7 @@ Every write:
 **Limitations:**
 1. **No live acceptance yet** (§12).
 2. **Ordinary Steps.** A dedicated end-to-end test drives ordinary Steps through the full confirmed Step Update pipeline: start, completion and READY on a successor, each with a reconciled receipt and PostgreSQL recovery, plus a refused missing-predecessor start. Attested and final Steps also run through it. The long lifecycle tests still advance their remaining ordinary Steps with repository fixtures, for speed.
-3. **MEDIA_TOP_UP_EXISTING_DOCUMENT is blocked on a product decision, so it is not completable.**
-   - **What the domain allows:** reusing a signed, non-superseded revision of **another Project of the same Merchant** (`workflow_repository._assert_reused_document`).
-   - **Why it stops at the PO:** the Purchase Order prerequisite (`procurement_engine._require_signed_document`) reads only the Project's **own** revisions. Using another Project's signature as this Project's evidence is a cross-Project evidence policy the domain does not define.
-   - **Natural language:** the Project preview cannot bind the reused revision.
-   - **What the test asserts:** the PO is refused (fail-closed), the source revision is untouched, and the evaluator-less gate is attestable.
-   - **Owner decision needed:** may a reused signed revision satisfy this Project's PO and Payment Request prerequisites, and is it bound at Project creation?
+3. **MEDIA_TOP_UP_EXISTING_DOCUMENT is supported since CP12H.MASTER-FIX (§15).** The earlier blocker, a cross-Project signed revision for the PO prerequisite, was resolved by the owner's approval of signed revision reuse for the Local Test MVP.
 4. **DEC-D4g canonical document-type list:** still undefined (pattern plus the "hợp đồng" → CONTRACT alias).
 5. **The owner can still bypass immutability.** It is enforced by triggers, which the owner role can drop; DELETE of approvals is not granted to the app role.
 6. **Recorded decisions and signatures are attestations**, not verified facts (labelled everywhere).
@@ -432,12 +427,111 @@ There are 22 implementation files, 18 test files, 3 documents (`CLAUDE.md`, `mer
 | A. Opening New Cinema | PASS |
 | B. Media Top-Up with procurement | PASS |
 | C. Merchant Integration with activation | PASS |
-| D. Existing-Document Media | **blocked on an owner decision** (§11, item 3); fail-closed test PASS |
+| D. Existing-Document Media | PASS since CP12H.MASTER-FIX (§15) |
 
 ### GO / NO-GO
 
-- **GO for user-driven live acceptance (§12) of workflows A–C** on the test database, in a fresh session.
+- **GO for user-driven live acceptance (§12) of workflows A–D** on the test database, in a fresh session (D: §15).
 - **NO-GO:**
-  - workflow D (owner decision);
   - runtime Direct EXECUTE and runtime migration;
   - any claim of live acceptance before you run §12.
+
+## 15. CP12H.MASTER-FIX — signed revision reuse across Projects (2026-11-12)
+
+### Approved policy (Local Test MVP)
+
+A MEDIA_TOP_UP_EXISTING_DOCUMENT Project may reuse an existing signed **CONTRACT** revision of **another Project of the same Merchant**, bound at its confirmed creation. You don't upload, approve or sign again.
+
+### Data model
+
+- **Existing relationship:** `projects.reused_document_revision_id`, with FK `projects_reused_document_revision_fk`. The source Project is reached through the revision's own `project_id`.
+- **Migration 011 `reused_revision_binding`** (test DB only):
+  - checksum `566cc50479047de360444a5317d701e062e08677582a9ecaaf0f43b6b04b66bc`, LF bytes (pinned);
+  - trigger `projects_reused_revision_binding`. At insert, the bound revision must be a signed (`signed`, `signed_at`), non-superseded CONTRACT revision of **another Project of the same Merchant**. After insert, the binding can never be added, replaced or removed.
+- **Migration evidence:** RED 7 failed / 3 passed → GREEN 10 passed; dry run 5/5; `--plan` showed exactly 011 pending.
+- **Nothing is duplicated:** no revision, approval, signature or file is copied.
+
+### Eligibility
+
+One rule in `document_reuse.reuse_blocker`, used by the preview, the Project-create assessment, procurement and the lifecycle judge. The revision must:
+- exist;
+- belong to the same Merchant, in another Project;
+- be a CONTRACT;
+- be signed;
+- not be superseded (conservative: a superseded signed revision is not reusable);
+- have no REJECTED decision.
+
+The rule keeps the source's own attestation (`OPERATOR_ATTESTED_SIGNED`, or `UNSPECIFIED_LEGACY_SIGNING` for legacy signing) and never upgrades it. A matching hash never authorizes reuse; only the bound id does.
+
+### Exact selection and confirmation binding
+
+- **Parsing.** The Project-create preview reads the reuse clause ("sử dụng hợp đồng đã ký [của Project A]", "using the signed contract from Project A", "dùng hợp đồng hiện có"), the payment period ("kỳ thanh toán 3", "payment period 3") and an optional revision UUID. It removes them before names are extracted. "Project media" and "existing-document media" are media types.
+- **Selection.**
+  - exactly one eligible candidate → proposed;
+  - several → asks, with candidates;
+  - none → names the missing prerequisite.
+- **What the preview shows** (`reused_document`): source Project, revision id, type, number, signed status and attestation, plus the relationship.
+- **Binding.** The exact revision id is in the operation's argv (`--reused-document-revision-id`). The revision's full state (signed, superseded, decisions, attestation) is in the basis. It is re-verified in the preflight and again inside the create transaction (FOR SHARE), so any change refuses the operation before spend.
+
+### Procurement compatibility
+
+A PO or Payment Request accepts:
+- **(A)** the Project's own active revision, with the rules unchanged; or
+- **(B)** only when the Project has no active revision of its own: the revision bound on the committed Project row, locked FOR SHARE in the write transaction, and still eligible.
+
+A revision named in a request is never used. Exact references, create-only behaviour, Merchant-scoped uniqueness and the other prerequisites are unchanged.
+
+### Tests
+
+| Suite | Result |
+|---|---|
+| `test_master_fix_migration_011_postgres.py` (new) | 10 tests |
+| `test_master_fix_reuse_postgres.py` (new) | 14 tests |
+
+**`test_master_fix_reuse_postgres.py` covers:**
+- **Full workflow D:** source revision → three approvals → operator-attested signing → confirmed create binding the revision → start → attested Step 1 → PO and Payment Request on the reused contract → attested final Step → completion. Receipts are rebuilt from PostgreSQL; the source revision and decisions are byte-identical before and after.
+- **Selection:** one, several (then by Project or by id) and no eligible revision; Vietnamese and English requests.
+- **Ineligible sources:** rejected, superseded, unsigned, foreign Merchant.
+- **Authority and failure:**
+  - a handwritten or forged binding (not spent);
+  - a source change after the preview (refused before spend; replay finds nothing);
+  - concurrent creates of one operation (exactly one link);
+  - a PO ledger failure (rolled back, REVOKED);
+  - a Project with its own signed revision keeps the existing rules.
+
+**Changed on purpose:** the earlier existing-document fail-closed test now asserts the PO is valid on the bound revision; the migration lists include 011.
+
+### Full regression
+
+| Check | Result |
+|---|---|
+| Full pytest | **4821 passed, 21 skipped, 1 xfailed, 0 failed** (97 subtests), 7 min 27 s. Previously 4797; +24 new tests. |
+| Suites outside `tests/merchant` and agent-definition tests, re-run after the docs changed | 856 and 96 passed |
+| `system_test.py` | ALL TESTS PASSED |
+| Hook compile and import | OK; `RUNTIME_DIRECT_EXECUTE_ENABLED = False` |
+| `git diff --check` | clean |
+
+### Database integrity (read-only, 15/15 PASS)
+
+| Item | Value |
+|---|---|
+| Identity | `coding_agent_merchant_test` / `merchant_test` |
+| Migrations | 1–11, every checksum equal to its file; nothing pending |
+| **New post-011 baseline** | **`c79ecc6728fac8fcca237b7e036544728e07fcd6fb0e2d8e1efa3e920dd7c201`** |
+| Equivalence: excluding only migration row 11 | `fa9cba01…`, reproduced exactly (no business row changed) |
+| Accepted records | 5 accepted Projects, NL4C2B Step 1 (IN_PROGRESS v2) and PR-NL4D4B-001 unchanged |
+| Claims and ledger | 22 claims COMPLETED; no orphan ledger row |
+| Residue | no fixtures, no reused bindings, no revisions, approvals or files; no active pending confirmation |
+| Runtime | not touched |
+
+### Remaining limitations
+
+- A superseded signed revision is not reusable (a conservative rule; an owner decision could relax it).
+- Only CONTRACT revisions are reusable.
+- The binding is fixed at creation, so changing it means a new Project.
+- The DB trigger enforces Merchant, signed, CONTRACT and current; the "no REJECTED decision" rule is enforced in the application (preview, preflight and transaction).
+
+### GO / NO-GO
+
+- **GO for user-driven live acceptance of workflows A–D** (§12; for D, create the destination with "Tạo Project media <tên> cho <Merchant> kỳ thanh toán <n>, sử dụng hợp đồng đã ký của Project <nguồn> trên database test" after signing the source contract).
+- **NO-GO:** runtime Direct EXECUTE and runtime migration.

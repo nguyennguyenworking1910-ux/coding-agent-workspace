@@ -317,8 +317,12 @@ def build_evidence_preview(
     result["recording_operator"] = dict(operator) if operator else {
         "status": "OPERATOR_IDENTITY_NOT_RESOLVED", "operator_id": None}
 
+    # CP12H.MASTER-FIX: the signed revision bound at Project creation, if any.
+    reused = (lifecycle.reused_revision(reads, detail)
+              if stored.get("reused_document_revision_id") is not None
+              and hasattr(reads, "list_reusable_revisions") else None)
     if operation == PROCUREMENT:
-        _procurement(result, reads, stored, revisions, records, fields, missing)
+        _procurement(result, reads, stored, revisions, records, fields, missing, reused)
         if fields.get("procurement_type") == "PURCHASE_REQUEST":
             _purchase_request_operation(result, reads, detail, fields, operator)
         elif not missing and result["outcome"] == VALID:
@@ -329,7 +333,7 @@ def build_evidence_preview(
                 _text(stored["merchant_id"]), fields["procurement_type"], reference)
             _lifecycle_operation(result, kind, detail, {"reference": reference}, holders,
                                  f"record {fields['procurement_type'].replace('_', ' ').title()} "
-                                 f"{reference}")
+                                 f"{reference}", reused=reused)
     elif operation == REVISION:
         _revision(result, stored, revisions, fields, missing, content_hash)
         if result["outcome"] == VALID:
@@ -553,7 +557,7 @@ def _unsupported_role(folded):
 # ------------------------------------------------------------- operations
 
 
-def _procurement(result, reads, project, revisions, records, fields, missing):
+def _procurement(result, reads, project, revisions, records, fields, missing, reused=None):
     kind = fields["procurement_type"]
     record = next((r for r in records if str(r.get("procurement_type")).upper() == kind), None)
     signed = [r for r in revisions if r.get("superseded_by") is None and r.get("signed")]
@@ -604,8 +608,13 @@ def _procurement(result, reads, project, revisions, records, fields, missing):
                               "word, for example PR-2026-001.",
         }.get(fields.get("reference_problem"),
               f"Which {name} number or reference should be recorded?"))
+    if reused is not None:
+        from .document_reuse import summary
+
+        result["existing_evidence"]["reused_document"] = summary(reused)
     _judge(result, PROCUREMENT, lambda: propose_procurement_mutation(
-        {"project": project, "procurement_records": records, "document_revisions": revisions},
+        {"project": project, "procurement_records": records, "document_revisions": revisions,
+         "reused_document_revision": reused},
         procurement_id=_PLACEHOLDER_ID, procurement_type=kind,
         external_id=fields["external_reference"],
         # Recording a reference keeps the stored status: an update writes
@@ -688,7 +697,7 @@ def _revision(result, project, revisions, fields, missing, content_hash):
         result["domain_validation"]["_revision_id"] = revision_id
 
 
-def _lifecycle_operation(result, kind, detail, params, holders, summary):
+def _lifecycle_operation(result, kind, detail, params, holders, summary, reused=None):
     """CP12H.MASTER: the confirmable operation of a valid request, or why not."""
 
     blockers = result["confirmation_blockers"]
@@ -701,7 +710,7 @@ def _lifecycle_operation(result, kind, detail, params, holders, summary):
     try:
         operation = lifecycle.build_operation(
             kind, detail, params, result["recording_operator"]["operator_id"],
-            result["database_target"], holders, summary)
+            result["database_target"], holders, summary, reused)
     except lifecycle.LifecycleMismatch as error:
         _block(result, error.reason, error.detail or error.reason)
         return

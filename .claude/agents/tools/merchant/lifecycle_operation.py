@@ -279,8 +279,22 @@ def final_step_ids(detail: dict[str, Any]) -> set[str]:
 # ------------------------------------------------------------------ judges
 
 
+def reused_revision(reads: Any, detail: dict[str, Any]) -> dict[str, Any] | None:
+    """CP12H.MASTER-FIX: the signed revision bound to the Project at creation
+    (projects.reused_document_revision_id), read with its decisions; never
+    taken from a request."""
+
+    project = detail["project"]
+    reused_id = project.get("reused_document_revision_id")
+    if reused_id is None:
+        return None
+    rows = reads.list_reusable_revisions(None, _text(reused_id))
+    return rows[0] if len(rows) == 1 else None
+
+
 def judge(kind: str, detail: dict[str, Any], params: dict[str, Any],
-          holders: Any = (), operator_id: str | None = None) -> dict[str, Any]:
+          holders: Any = (), operator_id: str | None = None,
+          reused: dict[str, Any] | None = None) -> dict[str, Any]:
     """Judge one operation on a Project snapshot; a plan summary or LifecycleMismatch."""
 
     project = dict(detail["project"])
@@ -374,7 +388,8 @@ def judge(kind: str, detail: dict[str, Any], params: dict[str, Any],
                 "this Merchant already has a record of this type with exactly this reference "
                 "(DEC-P1a)"))
         plan = _engine(lambda: propose_procurement_mutation(
-            {"project": project, "procurement_records": records, "document_revisions": revisions},
+            {"project": project, "procurement_records": records, "document_revisions": revisions,
+             "reused_document_revision": reused},
             procurement_id=_PLACEHOLDER_ID, procurement_type=procurement_type,
             external_id=reference, triggered_by=operator_id,
         ))
@@ -421,10 +436,13 @@ def judge(kind: str, detail: dict[str, Any], params: dict[str, Any],
 
 
 def basis(kind: str, detail: dict[str, Any], params: dict[str, Any], operator_id: str,
-          holders: Any = ()) -> str:
+          holders: Any = (), reused: dict[str, Any] | None = None) -> str:
     """sha256 of the operation and the whole Project snapshot it was judged on."""
 
+    from .document_reuse import basis_row
+
     value = {
+        "reused_document": basis_row(reused),
         "operation": [kind, sorted((k, _text(v)) for k, v in params.items()), operator_id],
         "project": _canonical(detail["project"]),
         **{name: sorted(_canonical(row) for row in detail.get(name) or []) for name in _BASIS_SECTIONS},
@@ -474,10 +492,11 @@ def canonical_argv(operation: dict[str, Any]) -> list[str]:
 
 
 def build_operation(kind: str, detail: dict[str, Any], params: dict[str, Any], operator_id: str,
-                    database_target: str, holders: Any = (), summary: str = "") -> dict[str, Any]:
+                    database_target: str, holders: Any = (), summary: str = "",
+                    reused: dict[str, Any] | None = None) -> dict[str, Any]:
     """The confirmable operation of a judged request (raises LifecycleMismatch)."""
 
-    plan = judge(kind, detail, params, holders, operator_id)
+    plan = judge(kind, detail, params, holders, operator_id, reused)
     project = dict(detail["project"])
     operation_id = params.get("revision_id") if kind == CREATE_REVISION else (
         params.get("approval_id") if kind == RECORD_DECISION else str(uuid.uuid4()))
@@ -496,7 +515,7 @@ def build_operation(kind: str, detail: dict[str, Any], params: dict[str, Any], o
         "params": dict(params),
         "plan": plan,
         "summary": summary,
-        "expected_basis": basis(kind, detail, params, operator_id, holders),
+        "expected_basis": basis(kind, detail, params, operator_id, holders, reused),
     }
     operation["argv"] = canonical_argv(operation)
     operation["note"] = OPERATION_NOTE
@@ -670,7 +689,8 @@ def verify(reads: Any, command: str, payload: dict[str, Any], operator_id: str) 
     holders = (reads.procurement_reference_holders(
         _text(project["merchant_id"]), PROCUREMENT_TYPES[kind], params["reference"])
         if kind in PROCUREMENT_TYPES else ())
-    plan = judge(kind, detail, params, holders, operator_id)
-    if basis(kind, detail, params, operator_id, holders) != payload["expected_basis_hash"]:
+    reused = reused_revision(reads, detail) if kind in PROCUREMENT_TYPES else None
+    plan = judge(kind, detail, params, holders, operator_id, reused)
+    if basis(kind, detail, params, operator_id, holders, reused) != payload["expected_basis_hash"]:
         raise LifecycleMismatch(BASIS_CHANGED, "the Project changed since the preview")
     return {"kind": kind, "params": params, "plan": plan, "project": project}

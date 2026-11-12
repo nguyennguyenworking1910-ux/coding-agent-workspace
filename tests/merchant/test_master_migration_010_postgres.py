@@ -51,7 +51,7 @@ def test_migration_010_is_applied_once_with_its_file_checksum(repository):
     with repository.connection(read_only=True) as connection:
         rows = {r["version"]: r for r in connection.execute(
             "SELECT version, description, checksum FROM merchant_ops.schema_migrations").fetchall()}
-    assert sorted(rows)[:10] == list(range(1, 11))
+    assert sorted(rows)[:10] == list(range(1, 11))  # later migrations may follow
     assert rows[10]["description"] == "operator_attested_lifecycle"
     assert rows[10]["checksum"] == _calculate_checksum(str(MIGRATION))
 
