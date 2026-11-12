@@ -76,6 +76,8 @@ def test_migrations_are_discovered_in_version_order():
         (6, "merchant_execution_claims"),
         # CP12H.NL4D4A: DEC-P1a reference uniqueness.
         (7, "procurement_reference_uniqueness"),
+        # CP12H.NL4D5A1b: managed document file metadata.
+        (8, "document_file_metadata"),
     ]
 
 
