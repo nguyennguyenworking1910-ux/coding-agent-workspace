@@ -82,15 +82,49 @@ PROCUREMENT_UPDATE_COMMAND = "procurement update"
 # Merchant Create, Project creation from a confirmed preview, (NL4C2A) a
 # confirmed Step Update and (NL4D4A) a confirmed Purchase Request. Runtime
 # stays disabled above.
+# CP12H.MASTER (DEC-SIMPLIFY): the confirmed lifecycle operations. Each runs
+# only as the exact operation of a verified preview the owner confirmed for
+# this run (lifecycle pending store); there is no general permission.
+DOCUMENT_REVISION_COMMAND = "document revision-create"
+DOCUMENT_APPROVE_COMMAND = "document approve"
+DOCUMENT_SIGN_COMMAND = "document sign"
+PROJECT_UPDATE_COMMAND = "project update"
+LIFECYCLE_ONLY_COMMANDS = frozenset(
+    {DOCUMENT_REVISION_COMMAND, DOCUMENT_APPROVE_COMMAND, DOCUMENT_SIGN_COMMAND,
+     PROJECT_UPDATE_COMMAND}
+)
+
 TEST_MODE_COMMANDS = frozenset(
     {MERCHANT_CREATE_COMMAND, PROJECT_CREATE_COMMAND, STEP_UPDATE_COMMAND,
      PROCUREMENT_UPDATE_COMMAND}
+    | LIFECYCLE_ONLY_COMMANDS
 )
 
 # Run-state key of the reconciled durable receipt of a Step Update.
 STEP_RECEIPT_STATE_KEY = "merchant_step_update_receipt"
 # Run-state key of the reconciled durable receipt of a Purchase Request.
 PURCHASE_REQUEST_RECEIPT_STATE_KEY = "merchant_purchase_request_receipt"
+# CP12H.MASTER: run-state key of a reconciled lifecycle operation receipt.
+LIFECYCLE_RECEIPT_STATE_KEY = "merchant_lifecycle_receipt"
+
+
+def is_lifecycle_attempt(command: str, arguments: Any, database_target: Any = "test") -> bool:
+    """A lifecycle operation on the test database (not a Purchase Request).
+
+    On the test database these commands run only as the user's confirmed
+    lifecycle operation. The runtime target keeps its earlier contract and is
+    disabled in code (RUNTIME_DIRECT_EXECUTE_ENABLED).
+    """
+
+    if database_target != "test":
+        return False
+    if command in LIFECYCLE_ONLY_COMMANDS:
+        return True
+    if command != PROCUREMENT_UPDATE_COMMAND:
+        return False
+    tokens = list(arguments or ())
+    types = [tokens[i + 1] for i, t in enumerate(tokens[:-1]) if t == "--type"]
+    return types in (["PURCHASE_ORDER"], ["PAYMENT_REQUEST"])
 
 # The database-level guarantee of DEC-P1a (migration 007).
 REFERENCE_UNIQUE_INDEX = "procurement_records_merchant_type_reference_unique_idx"
@@ -313,7 +347,11 @@ def _execute_scoped_write(
     ):
         _record_step_receipt(attempt, repository, identity)
 
-    if (
+    if settled == SCOPE_EXECUTION_SUCCEEDED and is_lifecycle_attempt(
+        attempt.command, attempt.arguments, attempt.database_target
+    ):
+        _record_lifecycle_receipt(attempt, repository, identity)
+    elif (
         settled == SCOPE_EXECUTION_SUCCEEDED
         and attempt.command == PROCUREMENT_UPDATE_COMMAND
     ):
@@ -425,6 +463,139 @@ def _record_purchase_request_receipt(
             state[PURCHASE_REQUEST_RECEIPT_STATE_KEY] = receipt
 
     return receipt
+
+
+def _record_lifecycle_receipt(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+    identity: Any,
+) -> dict[str, Any]:
+    """CP12H.MASTER: persist the reconciled receipt of a SUCCEEDED lifecycle
+    operation, built only from durable evidence (ledger, claim, the one
+    event and the entity row of one transaction) and checked against the
+    confirmed operation. An unreconciled receipt is recorded as such and
+    never changes the settled outcome."""
+
+    from claude.clients.merchant.attempt_evidence import lifecycle_receipt
+    from claude.hooks.merchant_pending_confirmation import (
+        LIFECYCLE_KIND,
+        confirmed_record,
+    )
+    from claude.hooks.runtime_state import locked_state
+
+    try:
+        operation = confirmed_record(
+            attempt.owner_session_id, attempt.run_id, LIFECYCLE_KIND
+        )["operation"]
+        receipt = lifecycle_receipt(repository, identity, operation)
+        receipt["status"] = "RECONCILED"
+    except Exception as exc:  # noqa: BLE001 - recorded, never inferred
+        receipt = {"status": "UNRECONCILED", "error": type(exc).__name__}
+
+    receipt.update(
+        run_id=attempt.run_id,
+        task_id=attempt.task_id,
+        database_target=attempt.database_target,
+    )
+
+    with locked_state(attempt.owner_session_id) as state:
+        if isinstance(state, dict) and state.get("run_id") == attempt.run_id:
+            state[LIFECYCLE_RECEIPT_STATE_KEY] = receipt
+
+    return receipt
+
+
+def _confirmed_lifecycle_operation(
+    attempt: PreparedRuntimeHandoff,
+) -> dict[str, Any]:
+    """CP12H.MASTER: the trusted pending lifecycle operation this run confirmed.
+
+    Runs only as the exact operation of one verified preview the owner
+    confirmed for this run, on the same target, with the same trusted local
+    operator. Anything else is refused unspent.
+    """
+
+    from claude.agents.tools.merchant.lifecycle_operation import validate_operation
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        require_operator,
+    )
+    from claude.hooks.merchant_pending_confirmation import (
+        LIFECYCLE_KIND,
+        confirmed_record,
+    )
+
+    try:
+        record = confirmed_record(
+            attempt.owner_session_id, attempt.run_id, LIFECYCLE_KIND
+        )
+        operation = (record or {}).get("operation")
+        validate_operation(operation)
+    except Exception as exc:  # noqa: BLE001 - no trusted confirmation, no write
+        raise DirectPreflightRefused("LIFECYCLE_CONFIRMATION_REQUIRED") from exc
+
+    if (
+        list(attempt.arguments) != operation["argv"]
+        or attempt.command != operation["command"]
+        or attempt.database_target != operation["database_target"]
+        or record.get("database_target") != operation["database_target"]
+        or record.get("operation_id") != operation["operation_id"]
+        or record.get("operator_id") != operation["operator_id"]
+    ):
+        raise DirectPreflightRefused("LIFECYCLE_CONFIRMATION_MISMATCH")
+
+    try:
+        require_operator(operation["operator_id"])
+    except OperatorIdentityError as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+
+    return operation
+
+
+def _verify_lifecycle(
+    attempt: PreparedRuntimeHandoff,
+    repository: Any,
+    operation: dict[str, Any],
+) -> None:
+    """CP12H.MASTER: refuse before any spend unless the target database has
+    the lifecycle schema (migrations 007-010) and the confirmed preview
+    still holds."""
+
+    from claude.agents.tools.merchant.lifecycle_operation import (
+        LifecycleMismatch,
+        verify,
+    )
+    from claude.clients.merchant.read_repository import MerchantReadRepository
+
+    try:
+        with repository.connection(read_only=True) as connection:
+            applied = connection.execute(
+                "SELECT max(version) AS v FROM merchant_ops.schema_migrations"
+            ).fetchone()
+            unique = connection.execute(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = 'merchant_ops' "
+                "AND tablename = 'procurement_records' AND indexname = %s",
+                (REFERENCE_UNIQUE_INDEX,),
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001
+        raise DirectPreflightRefused("LIFECYCLE_UNVERIFIABLE") from exc
+    version = (applied or {}).get("v") if isinstance(applied, dict) else (applied or [None])[0]
+    if not isinstance(version, int) or version < 10 or unique is None:
+        raise DirectPreflightRefused("LIFECYCLE_SCHEMA_MISSING")
+
+    payload = _create_payload(tuple(attempt.arguments), attempt.command)
+
+    try:
+        verify(
+            MerchantReadRepository(repository),
+            attempt.command,
+            payload,
+            operation["operator_id"],
+        )
+    except LifecycleMismatch as exc:
+        raise DirectPreflightRefused(exc.reason) from exc
+    except Exception as exc:  # noqa: BLE001 - an unjudgeable operation never runs
+        raise DirectPreflightRefused("LIFECYCLE_UNVERIFIABLE") from exc
 
 
 def _scope_outcome(
@@ -822,9 +993,15 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
     if attempt.command == STEP_UPDATE_COMMAND:
         _confirmed_step_operation(attempt)
 
+    lifecycle = (
+        _confirmed_lifecycle_operation(attempt)
+        if is_lifecycle_attempt(attempt.command, attempt.arguments, attempt.database_target)
+        else None
+    )
+
     purchase_request = (
         _confirmed_purchase_request_operation(attempt)
-        if attempt.command == PROCUREMENT_UPDATE_COMMAND
+        if attempt.command == PROCUREMENT_UPDATE_COMMAND and lifecycle is None
         else None
     )
 
@@ -841,6 +1018,9 @@ def preflight_direct_execute(attempt: PreparedRuntimeHandoff) -> Any:
 
     if purchase_request is not None:
         _verify_purchase_request(attempt, repository, purchase_request)
+
+    if lifecycle is not None:
+        _verify_lifecycle(attempt, repository, lifecycle)
 
     return repository
 

@@ -91,6 +91,8 @@ class MerchantWriteRepositories:
     approvals: Any
     procurement: Any
     identifiers: Any
+    # CP12H.MASTER: operator-attested signing (defaulted for older callers).
+    signing: Any = None
 
     @classmethod
     def from_repository(
@@ -106,6 +108,7 @@ class MerchantWriteRepositories:
             approvals=MerchantApprovalRepository(repository),
             procurement=MerchantProcurementRepository(repository),
             identifiers=MerchantIdentifierRepository(repository),
+            signing=_signing_repository(repository),
         )
 
 
@@ -123,6 +126,7 @@ class MerchantRepositoryWriteAdapters:
             "contact import": self.import_contacts,
             "document approve": self.approve_document,
             "document revision-create": self.create_revision,
+            "document sign": self.sign_document,
             "integration identifier-set": self.set_identifier,
             "merchant activate": self.activate_merchant,
             "merchant activate-all": self.activate_merchants_batch,
@@ -194,6 +198,8 @@ class MerchantRepositoryWriteAdapters:
         )
 
     def update_project(self, payload: dict[str, Any]) -> Any:
+        if _lifecycle().is_confirmed_payload(payload):
+            return self._confirmed_lifecycle("project update", payload)
         return self.repositories.projects.transition_project(
             project_id=payload["project_id"],
             target_status=payload["status"],
@@ -208,6 +214,17 @@ class MerchantRepositoryWriteAdapters:
     def update_step(self, payload: dict[str, Any]) -> Any:
         precondition = _confirmed_step_precondition(self.repositories.steps, payload)
         extra = {} if precondition is None else {"precondition": precondition}
+        if payload.get("gate_attestation") is not None:
+            # CP12H.MASTER: only the confirmed operation of a verified preview
+            # carries an attestation; it is recorded by the trusted operator.
+            from claude.clients.merchant.operator_identity import trusted_operator_id
+
+            if precondition is None:
+                raise WriteAdapterError(
+                    "A gate attestation runs only as a confirmed Step Update preview"
+                )
+            extra["gate_attestation"] = payload["gate_attestation"]
+            payload = {**payload, "triggered_by": trusted_operator_id()}
         return self.repositories.steps.transition_step(
             **extra,
             step_id=payload["step_id"],
@@ -222,6 +239,8 @@ class MerchantRepositoryWriteAdapters:
         )
 
     def create_revision(self, payload: dict[str, Any]) -> Any:
+        if _lifecycle().is_confirmed_payload(payload):
+            return self._confirmed_lifecycle("document revision-create", payload)
         return self.repositories.documents.create_revision(
             project_id=payload["project_id"],
             document_type=payload["document_type"],
@@ -237,6 +256,8 @@ class MerchantRepositoryWriteAdapters:
         )
 
     def approve_document(self, payload: dict[str, Any]) -> Any:
+        if _lifecycle().is_confirmed_payload(payload):
+            return self._confirmed_lifecycle("document approve", payload)
         return self.repositories.approvals.record_approval(
             document_revision_id=payload[
                 "document_revision_id"
@@ -256,6 +277,10 @@ class MerchantRepositoryWriteAdapters:
         from .purchase_request import is_confirmed_payload
 
         if is_confirmed_payload(payload):
+            # CP12H.MASTER: a confirmed Purchase Order or Payment Request is a
+            # lifecycle operation; a Purchase Request keeps its NL4D4A path.
+            if _lifecycle().kind_of("procurement update", payload) is not None:
+                return self._confirmed_lifecycle("procurement update", payload)
             return self._record_confirmed_purchase_request(payload)
         return self.repositories.procurement.record_procurement(
             project_id=payload["project_id"],
@@ -303,6 +328,97 @@ class MerchantRepositoryWriteAdapters:
             external_id=verify_fields.get("external_id"),
             triggered_by=operator,
             procurement_id=verify_fields.get("procurement_id"),
+            precondition=precondition,
+        )
+
+    def sign_document(self, payload: dict[str, Any]) -> Any:
+        """CP12H.MASTER: signing runs only as a confirmed, operator-attested
+        operation; there is no unconfirmed signing write."""
+
+        if not _lifecycle().is_confirmed_payload(payload):
+            raise WriteAdapterError(
+                "document sign runs only as the confirmed operation of a verified preview"
+            )
+        return self._confirmed_lifecycle("document sign", payload)
+
+    def _confirmed_lifecycle(self, command: str, payload: dict[str, Any]) -> Any:
+        """CP12H.MASTER: run exactly one confirmed lifecycle operation.
+
+        The recorder is the trusted local operator, required to equal the one
+        the preview was bound to (never taken from the payload alone). The
+        whole preview is re-judged inside the write transaction after the
+        repository locks (``lifecycle_operation.verify``), so a changed basis,
+        operator, Merchant, decision, gate or reference refuses it.
+        """
+
+        from claude.clients.merchant.operator_identity import require_operator
+        from claude.clients.merchant.read_repository import (
+            MerchantReadRepository,
+            TransactionDetailReader,
+        )
+
+        lifecycle = _lifecycle()
+        operator = require_operator(payload.get("operator_id"))
+        fields = {k: v for k, v in payload.items() if v is not None}
+        kind = lifecycle.kind_of(command, fields)
+        params = lifecycle.params_from_payload(kind, fields)
+        repository = self.repositories.documents.repository
+
+        def precondition(connection: Any) -> None:
+            lifecycle.verify(
+                TransactionDetailReader(MerchantReadRepository(repository), connection),
+                command,
+                fields,
+                require_operator(operator),
+            )
+
+        if kind == lifecycle.CREATE_REVISION:
+            return self.repositories.documents.create_revision(
+                project_id=fields["project_id"],
+                document_type=params["document_type"],
+                content_hash=lifecycle.metadata_only_hash(params["revision_id"]),
+                effective_date=_optional_date(params["effective_date"]),
+                expiry_date=_optional_date(params["expiry_date"]),
+                created_by=operator,
+                revision_id=params["revision_id"],
+                evidence_status=lifecycle.METADATA_ONLY,
+                precondition=precondition,
+            )
+        if kind == lifecycle.RECORD_DECISION:
+            return self.repositories.approvals.record_approval(
+                document_revision_id=params["revision_id"],
+                approver_role=params["role"],
+                approval_status=params["decision"],
+                expected_status=params["expected_status"],
+                occurred_at=_optional_datetime(fields.get("occurred_at")),
+                notes=params["decision_note"],
+                approval_id=params["approval_id"],
+                recorded_by=operator,
+                precondition=precondition,
+            )
+        if kind == lifecycle.SIGN:
+            signing = self.repositories.signing or _signing_repository(repository)
+            return signing.sign_document(
+                document_revision_id=params["revision_id"],
+                occurred_at=_optional_datetime(fields.get("signed_at")),
+                attestation=lifecycle.OPERATOR_ATTESTED_SIGNED,
+                recorded_by=operator,
+                precondition=precondition,
+            )
+        if kind in lifecycle.PROCUREMENT_TYPES:
+            return self.repositories.procurement.record_procurement(
+                project_id=fields["project_id"],
+                procurement_type=lifecycle.PROCUREMENT_TYPES[kind],
+                external_id=params["reference"],
+                triggered_by=operator,
+                procurement_id=fields.get("procurement_id"),
+                precondition=precondition,
+            )
+        return self.repositories.projects.transition_project(
+            project_id=fields["project_id"],
+            target_status=lifecycle.PROJECT_TARGETS[kind],
+            expected_version=params["expected_version"],
+            triggered_by=operator,
             precondition=precondition,
         )
 
@@ -597,3 +713,21 @@ def _confirmed_step_precondition(steps: Any, payload: dict[str, Any]) -> Any:
         )
 
     return precondition
+
+
+def _lifecycle() -> Any:
+    from . import lifecycle_operation
+
+    return lifecycle_operation
+
+
+def _signing_repository(repository: Any) -> Any:
+    try:
+        from claude.clients.merchant.signing_repository import (
+            MerchantSigningRepository,
+        )
+    except ModuleNotFoundError:  # pragma: no cover - script layout
+        from clients.merchant.signing_repository import (  # type: ignore
+            MerchantSigningRepository,
+        )
+    return MerchantSigningRepository(repository)

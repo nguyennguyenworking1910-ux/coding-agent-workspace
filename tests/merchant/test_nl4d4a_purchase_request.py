@@ -465,7 +465,6 @@ def test_the_canonical_scope_validates_and_a_reference_is_not_a_target_uuid():
     lambda a: a + ["--status", "SUBMITTED"],
     lambda a: a + ["--triggered-by", OTHER_OPERATOR],
     lambda a: a + ["--procurement-id", OTHER_OPERATOR],
-    lambda a: a[:4] + ["PURCHASE_ORDER"] + a[5:],
     lambda a: a[:7] + a[9:11] + a[7:9] + a[11:],          # reordered options
 ])
 def test_a_non_canonical_purchase_request_scope_is_rejected(argv):
@@ -473,6 +472,22 @@ def test_a_non_canonical_purchase_request_scope_is_rejected(argv):
 
     with pytest.raises(MerchantRuntimeHandoffError):
         validate_direct_scope(argv(list(operation["argv"])), "test")
+
+
+def test_a_retyped_scope_is_a_lifecycle_operation_that_needs_its_own_confirmation():
+    """CP12H.MASTER: swapping the type for PURCHASE_ORDER gives the canonical
+    *Purchase Order* argv form, so the scope syntax check accepts it; it can
+    still only run as the user's own confirmed Purchase Order operation (the
+    lifecycle preflight requires that pending record with the identical argv),
+    never from a confirmed Purchase Request."""
+
+    from claude.hooks.merchant_direct_handoff import is_lifecycle_attempt
+
+    argv = list(operation_of()["argv"])
+    retyped = argv[:4] + ["PURCHASE_ORDER"] + argv[5:]
+    assert validate_direct_scope(retyped, "test")["command"] == "procurement update"
+    assert is_lifecycle_attempt("procurement update", retyped, "test")
+    assert not is_lifecycle_attempt("procurement update", argv, "test")
 
 
 # ------------------------------------------------ preflight (before spend)
@@ -563,8 +578,12 @@ def test_valid_confirmation_reaches_the_database_rejudgement(isolated, monkeypat
 def test_runtime_stays_disabled_and_no_other_evidence_write_joined_test_mode():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
     assert not handoff.direct_execute_enabled("procurement update", "runtime")
-    for command in ("document approve", "document revision-create", "project update"):
-        assert not handoff.direct_execute_enabled(command, "test")
+    # CP12H.MASTER: these joined test mode, but only as the user's confirmed
+    # lifecycle operation (lifecycle pending store); never on runtime.
+    for command in ("document approve", "document revision-create", "project update",
+                    "document sign"):
+        assert handoff.direct_execute_enabled(command, "test")
+        assert not handoff.direct_execute_enabled(command, "runtime")
     assert pr_contract.CONFIRMABLE_TARGETS == {"test"}
 
 

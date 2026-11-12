@@ -185,7 +185,10 @@ def test_runtime_direct_execute_stays_disabled():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
     # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
     assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
-                                          "procurement update"}
+                                          "procurement update",
+                                          # CP12H.MASTER: confirmed lifecycle operations.
+                                          "document revision-create", "document approve",
+                                          "document sign", "project update"}
 
 
 # ------------------------------------------------------- dispatch (policy gate)

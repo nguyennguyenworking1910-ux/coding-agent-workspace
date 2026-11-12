@@ -47,7 +47,11 @@ confirms a Step, nor the reverse. A verified, confirmable Purchase Request `evid
 (CP12H.NL4D4A) has a third store: `/solve Xác nhận ghi nhận [<first 8 characters of
 project_id>]` (cancel: `/solve Hủy ghi nhận [<id>]`), test database only, `kind`
 `purchase_request`. The intent gate refuses it unspent when the trusted local recording
-operator is missing or differs from the preview's. No kind ever confirms another.
+operator is missing or differs from the preview's. A verified, confirmable lifecycle operation
+(CP12H.MASTER: metadata-only revision, approval decision, operator-attested signing, Purchase
+Order, Payment Request, Project start or completion) has a fourth store: `/solve Xác nhận thực
+hiện [<first 8 characters of operation_id>]` (cancel: `/solve Hủy thực hiện [<id>]`), test
+database only, `kind` `lifecycle`; same operator rule. No kind ever confirms another.
 An unscoped Project create request ("Tạo project mở rạp ...") runs as the read-only preview
 without `--confirm`.
 
@@ -58,7 +62,12 @@ Test mode runs only:
   verified preview; a typed Step scope is refused;
 - (CP12H.NL4D4A) the creation of one new Purchase Request (`procurement update`) that the user
   confirmed with `/solve Xác nhận ghi nhận` from a verified preview. A typed procurement scope is
-  refused, so no general procurement update can run.
+  refused, so no general procurement update can run;
+- (CP12H.MASTER) `document revision-create`, `document approve`, `document sign`, `project
+  update` and a Purchase Order or Payment Request `procurement update`, each only as the
+  lifecycle operation the user confirmed with `/solve Xác nhận thực hiện` from a verified
+  preview (the preflight requires that pending record with the identical argv). A typed scope
+  for them is refused.
 It connects only to `coding_agent_merchant_test` as
 `merchant_test` after a read-only identity preflight, and binds the target into the scope hash,
 confirmation hash, staged request, reservation, spent authority and receipt. No teammate message,
@@ -422,8 +431,8 @@ words>"`; its report carries the CLI result once after `MERCHANT_EVIDENCE_PREVIE
 checked by the policy gate against the captured CLI output. Build your summary only from that
 object: `operation_kind`, `evidence_type`, the resolved Project and Merchant, `requested_fields`,
 `missing_required_fields`, `existing_evidence`, `domain_validation` (its `plan`, or its
-`error`), `policy_blockers` and `outcome` (PREVIEW_VALID, BLOCKED, NEEDS_CLARIFICATION or
-POLICY_UNDECIDED). Nothing was recorded or changed. PREVIEW_VALID is not an authorization.
+`error`), `policy_notes` and `outcome` (PREVIEW_VALID, BLOCKED or NEEDS_CLARIFICATION).
+Nothing was recorded or changed. PREVIEW_VALID is not an authorization.
 
 **Purchase Request confirmation (CP12H.NL4D4A).** `confirmation_available: true` appears only on a
 `PREVIEW_VALID` new Purchase Request on the test database, and it carries a `requested_operation`
@@ -452,9 +461,23 @@ authorized.
 - **No retry.** It gets one attempt: a refused, failed or uncertain result is reported, never
   retried. A new attempt needs a new preview and the user's new confirmation.
 
-**Never offered.** Purchase Orders, Payment Requests, document revisions, approvals and signing
-have no live write: never offer one, a confirmation, a scope or a command for them. Runtime
-Direct EXECUTE is disabled, so nothing is offered for a runtime target. An
+**Lifecycle confirmation (CP12H.MASTER, owner-approved DEC-SIMPLIFY).** The same
+`evidence preview` covers a metadata-only revision, one APPROVED or REJECTED decision, operator-
+attested signing, a Purchase Order or Payment Request, and starting or completing the Project.
+`confirmation_available: true` (test database, trusted operator) comes with a
+`requested_operation` (NOT_AUTHORIZED) whose `operation` names it.
+- **What to tell the user.** They may confirm within 15 minutes by typing `/solve Xác nhận thực
+  hiện <first 8 characters of requested_operation.operation_id>` (cancel: `/solve Hủy thực hiện
+  <same id>`). Name the `summary`, the Project and Merchant, the test database, the
+  `recording_operator` status and every `policy_notes` label: a metadata-only revision has no
+  file or integrity evidence; a decision is recorded by the operator, the approver is not
+  identified, and it is final for that revision; signing is operator-attested and verifies
+  nothing about the signature; completing the last Step never completes the Project.
+- **Who confirms, how it runs, no retry.** As for the Purchase Request above: only the user's own
+  prompt; a scoped `merchant_execute` run the trusted hook re-checks; one attempt.
+
+**Never offered.** Nothing is offered for a runtime target (Runtime Direct EXECUTE is disabled),
+for a `BLOCKED` or `NEEDS_CLARIFICATION` preview, or when `confirmation_available` is false. An
 `EVIDENCE_WRITE_PREVIEW_FAILED` report is not a result: report the failure only.
 
 ### Step Update preview delivery (CP12H.NL4B)
@@ -475,7 +498,11 @@ authorized. When the verified block's
 `requested_operation.database_target` is `test`, tell the user they can confirm in this
 session within 15 minutes by typing `/solve Xác nhận cập nhật <first 8 characters of
 requested_operation.step_id>` (or cancel with `/solve Hủy cập nhật <same id>`), naming the step,
-its current and target status and the Project from that block. Only the user's own prompt
+its current and target status and the Project from that block. When the operation carries
+`gate_attestation: OPERATOR_ATTESTED` (CP12H.MASTER: completing a gate Step with no stored-
+evidence evaluator, such as "Complete UAT acceptance"), say plainly that the user attests the
+gate and the system verifies nothing; completing the last Step never completes the Project
+(that is its own `Hoàn tất Project ...` preview). Only the user's own prompt
 confirms: never submit, schedule or relay it, never offer a `--merchant-scope` or argv (a typed
 Step scope is refused), and offer nothing for a runtime target (runtime Direct EXECUTE is
 disabled). A confirmed Step Update runs as an ordinary scoped `merchant_execute` run. A `STEP_UPDATE_DELIVERY_FAILED` report is not a preview:

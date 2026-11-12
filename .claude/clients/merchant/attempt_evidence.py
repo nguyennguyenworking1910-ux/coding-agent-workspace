@@ -603,3 +603,227 @@ def recover_purchase_request_receipts(
         receipts.append(purchase_request_receipt(repository, identity, project_id))
 
     return receipts
+
+
+# CP12H.MASTER: confirmed lifecycle operations (metadata-only revision,
+# approval decision, operator-attested signing, Purchase Order, Payment
+# Request, Project completion).
+LIFECYCLE_RECEIPT_CONTRACT = "lifecycle_receipt_v1"
+
+# operation -> (event entity type, accepted event types, entity row query).
+# Each query returns the entity row the attempt wrote, keyed by
+# (entity id, project id), with its xmin.
+_REVISION_ROW = (
+    "SELECT id::text AS id, document_type, revision_number, evidence_status, content_hash, "
+    "signed, signing_attestation, xmin::text AS tx FROM merchant_ops.document_revisions "
+    "WHERE id::text = %s AND project_id::text = %s"
+)
+_PROCUREMENT_ROW = (
+    "SELECT id::text AS id, procurement_type, external_id, version, xmin::text AS tx "
+    "FROM merchant_ops.procurement_records WHERE id::text = %s AND project_id::text = %s"
+)
+_LIFECYCLE_ENTITY = {
+    "CREATE_METADATA_ONLY_REVISION": ("DOCUMENT", ("DOCUMENT_REVISION_CREATED",), _REVISION_ROW),
+    "RECORD_APPROVAL_DECISION": (
+        "DOCUMENT", ("DOCUMENT_APPROVED", "DOCUMENT_REJECTED"),
+        "SELECT approval.id::text AS id, approval.document_revision_id::text AS revision_id, "
+        "approval.approver_role, approval.approval_status, "
+        "approval.approved_by::text AS approved_by, approval.recorded_by::text AS recorded_by, "
+        "approval.decided_at, approval.xmin::text AS tx "
+        "FROM merchant_ops.document_approvals AS approval "
+        "JOIN merchant_ops.document_revisions AS revision "
+        "ON revision.id = approval.document_revision_id "
+        "WHERE approval.id::text = %s AND revision.project_id::text = %s",
+    ),
+    "RECORD_OPERATOR_ATTESTED_SIGNING": ("DOCUMENT", ("DOCUMENT_SIGNED",), _REVISION_ROW),
+    "RECORD_PURCHASE_ORDER": ("PROCUREMENT", ("PROCUREMENT_CREATED",), _PROCUREMENT_ROW),
+    "RECORD_PAYMENT_REQUEST": ("PROCUREMENT", ("PROCUREMENT_CREATED",), _PROCUREMENT_ROW),
+    "COMPLETE_PROJECT": (
+        "PROJECT", ("PROJECT_COMPLETED",),
+        "SELECT id::text AS id, status, version, xmin::text AS tx "
+        "FROM merchant_ops.projects WHERE id::text = %s AND id::text = %s",
+    ),
+    "START_PROJECT": (
+        "PROJECT", ("PROJECT_STARTED",),
+        "SELECT id::text AS id, status, version, xmin::text AS tx "
+        "FROM merchant_ops.projects WHERE id::text = %s AND id::text = %s",
+    ),
+}
+
+
+def _lifecycle_entity_matches(kind: str, row: dict[str, Any], operation: dict[str, Any]) -> bool:
+    params = operation.get("params") or {}
+    if kind == "CREATE_METADATA_ONLY_REVISION":
+        return (row["id"] == params.get("revision_id") and row["evidence_status"] == "METADATA_ONLY"
+                and row["content_hash"] == f"metadata-only:{row['id']}"
+                and row["document_type"] == params.get("document_type"))
+    if kind == "RECORD_APPROVAL_DECISION":
+        return (row["id"] == params.get("approval_id")
+                and row["revision_id"] == params.get("revision_id")
+                and row["approver_role"] == params.get("role")
+                and row["approval_status"] == params.get("decision")
+                and row["approved_by"] is None
+                and row["recorded_by"] == operation.get("operator_id")
+                and row["decided_at"] is not None)
+    if kind == "RECORD_OPERATOR_ATTESTED_SIGNING":
+        return (row["id"] == params.get("revision_id") and row["signed"] is True
+                and row["signing_attestation"] == "OPERATOR_ATTESTED_SIGNED")
+    if kind in ("RECORD_PURCHASE_ORDER", "RECORD_PAYMENT_REQUEST"):
+        return (row["procurement_type"] == kind.replace("RECORD_", "")
+                and row["external_id"] == params.get("reference") and row["version"] == 1)
+    if kind == "START_PROJECT":
+        return row["status"] == "IN_PROGRESS"
+    return row["status"] == "COMPLETED"
+
+
+def lifecycle_receipt(
+    repository: MerchantRepository,
+    identity: AttemptIdentity,
+    operation: dict[str, Any],
+) -> dict[str, Any]:
+    """CP12H.MASTER: reconcile one confirmed lifecycle operation from durable evidence.
+
+    The ledger row and execution claim must name the attempt; exactly one
+    event of the Project was written in their transaction (equal ``xmin``),
+    of the operation's entity and event type, with ``triggered_by`` equal to
+    the confirmed operator; the entity row the operation names was written
+    in that same transaction and holds the confirmed values. Raises
+    EvidenceBindingError otherwise.
+    """
+
+    kind = operation.get("operation")
+    if kind not in _LIFECYCLE_ENTITY:
+        raise EvidenceBindingError("Not a lifecycle operation")
+    entity_type, event_types, entity_query = _LIFECYCLE_ENTITY[kind]
+    project_id = str(operation["project_id"])
+
+    with repository.connection(read_only=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ledger.payload_hash, ledger.result,
+                       ledger.xmin::text AS ledger_tx,
+                       claims.payload_hash AS claim_hash,
+                       claims.execution_attempt_id::text AS claim_attempt,
+                       claims.claim_status, claims.xmin::text AS claim_tx
+                FROM merchant_ops.merchant_execution_ledger AS ledger
+                JOIN merchant_ops.merchant_execution_claims AS claims
+                  ON claims.operation_key = ledger.operation_key
+                WHERE ledger.operation_key = %s
+                """,
+                (identity.operation_key,),
+            )
+            evidence = cursor.fetchone()
+            if evidence is None:
+                raise EvidenceBindingError("No ledger and claim for the attempt")
+
+            cursor.execute(
+                """
+                SELECT id::text AS event_id, merchant_id::text AS merchant_id,
+                       project_id::text AS project_id, event_type, entity_type,
+                       entity_id::text AS entity_id, triggered_by::text AS operator_id,
+                       new_values
+                FROM merchant_ops.project_events
+                WHERE project_id::text = %s AND xmin::text = %s
+                """,
+                (project_id, evidence["ledger_tx"]),
+            )
+            events = cursor.fetchall()
+            if len(events) != 1:
+                raise EvidenceBindingError(
+                    "The attempt's transaction did not write exactly one Project event"
+                )
+            (event,) = events
+            entity_id = event["entity_id"]
+            if kind == "RECORD_APPROVAL_DECISION":
+                entity_id = (operation.get("params") or {}).get("approval_id")
+            cursor.execute(entity_query, (entity_id, project_id))
+            entity = cursor.fetchone()
+
+    attempt = str(identity.execution_attempt_id)
+    result = evidence["result"]
+    if (
+        evidence["payload_hash"] != identity.payload_hash
+        or evidence["claim_hash"] != identity.payload_hash
+        or evidence["claim_attempt"] != attempt
+        or evidence["claim_status"] != "COMPLETED"
+        or evidence["claim_tx"] != evidence["ledger_tx"]
+        or not isinstance(result, dict)
+        or result.get("execution_attempt_id") != attempt
+        or result.get("command") != identity.command
+        or identity.command != operation.get("command")
+    ):
+        raise EvidenceBindingError("Ledger and claim do not name this attempt")
+
+    if (
+        event["entity_type"] != entity_type
+        or event["event_type"] not in event_types
+        or event["operator_id"] != operation.get("operator_id")
+        or event["merchant_id"] != operation.get("merchant_id")
+        or entity is None
+        or entity["tx"] != evidence["ledger_tx"]
+        or not _lifecycle_entity_matches(kind, dict(entity), operation)
+    ):
+        raise EvidenceBindingError("The event and entity row are not this operation")
+
+    entity = dict(entity)
+    entity.pop("tx", None)
+    entity.pop("content_hash", None)  # never echoed
+    return {
+        "contract": LIFECYCLE_RECEIPT_CONTRACT,
+        "operation": kind,
+        "operation_id": operation.get("operation_id"),
+        "operator_id": event["operator_id"],
+        "merchant_id": event["merchant_id"],
+        "project_id": event["project_id"],
+        "event_id": event["event_id"],
+        "event_type": event["event_type"],
+        "attestation": (event["new_values"] or {}).get("attestation"),
+        "entity": {k: (v if v is None or isinstance(v, (int, bool)) else str(v))
+                   for k, v in entity.items()},
+        "execution_attempt_id": attempt,
+        "operation_key": identity.operation_key,
+        "payload_hash": identity.payload_hash,
+        "claim_status": evidence["claim_status"],
+        "ledger_command": result["command"],
+        "transaction_id": evidence["ledger_tx"],
+    }
+
+
+def recover_lifecycle_receipt(
+    repository: MerchantRepository,
+    operation: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Rebuild the receipt of one confirmed lifecycle ``operation`` from
+    PostgreSQL alone (local run and team state lost). None when no evidenced
+    attempt of it exists."""
+
+    kind = operation.get("operation")
+    if kind not in _LIFECYCLE_ENTITY:
+        raise EvidenceBindingError("Not a lifecycle operation")
+    with repository.connection(read_only=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT ledger.operation_key, ledger.payload_hash, ledger.result
+            FROM merchant_ops.merchant_execution_ledger AS ledger
+            JOIN merchant_ops.project_events AS events ON events.xmin = ledger.xmin
+            WHERE events.project_id::text = %s
+              AND ledger.result ->> 'command' = %s
+            ORDER BY events.created_at, ledger.operation_key
+            """,
+            (str(operation["project_id"]), operation.get("command")),
+        ).fetchall()
+
+    for row in rows:
+        result = row["result"] if isinstance(row["result"], dict) else {}
+        identity = AttemptIdentity(
+            operation_key=row["operation_key"],
+            payload_hash=str(row["payload_hash"]),
+            execution_attempt_id=uuid.UUID(str(result.get("execution_attempt_id"))),
+            command=str(result.get("command")),
+        )
+        try:
+            return lifecycle_receipt(repository, identity, operation)
+        except EvidenceBindingError:
+            continue
+    return None

@@ -61,8 +61,17 @@ class MerchantDocumentRepository:
         expiry_date: date | None = None,
         created_by: str | None = None,
         revision_id: str | None = None,
+        evidence_status: str | None = None,
+        precondition: Any = None,
     ) -> DocumentRevisionResult:
-        """Create a revision and supersede its predecessor."""
+        """Create a revision and supersede its predecessor.
+
+        CP12H.MASTER: ``evidence_status`` (METADATA_ONLY) is written only when
+        given, so the legacy path and a database without migration 009 are
+        unchanged; ``precondition(connection)`` runs after the Project and its
+        revisions are locked and before anything changes; raising refuses the
+        whole transaction.
+        """
 
         normalized_project_id = _uuid(
             project_id,
@@ -94,6 +103,9 @@ class MerchantDocumentRepository:
                             normalized_project_id,
                         )
 
+                        if precondition is not None:
+                            precondition(connection)
+
                         plan = propose_document_revision(
                             {
                                 "project": project,
@@ -117,6 +129,7 @@ class MerchantDocumentRepository:
                         self._insert_revision(
                             cursor,
                             plan,
+                            evidence_status,
                         )
 
                         if (
@@ -133,6 +146,7 @@ class MerchantDocumentRepository:
                             cursor,
                             plan,
                             event_id,
+                            evidence_status,
                         )
 
         except errors.UniqueViolation as error:
@@ -221,9 +235,15 @@ class MerchantDocumentRepository:
     def _insert_revision(
         cursor: Any,
         plan: DocumentRevisionPlan,
+        evidence_status: str | None = None,
     ) -> None:
+        # CP12H.MASTER: the class is fixed at insert (migration 008 trigger),
+        # and named only when given (a database without 009 is unchanged).
+        status_column, status_value = (
+            (", evidence_status", ", %s") if evidence_status is not None else ("", "")
+        )
         cursor.execute(
-            """
+            f"""
             INSERT INTO merchant_ops.document_revisions (
                 id,
                 project_id,
@@ -236,12 +256,12 @@ class MerchantDocumentRepository:
                 expiry_date,
                 superseded_by,
                 created_at,
-                created_by
+                created_by{status_column}
             )
             VALUES (
                 %s, %s, %s, %s, %s,
                 FALSE, NULL, %s, %s, NULL,
-                CURRENT_TIMESTAMP, %s
+                CURRENT_TIMESTAMP, %s{status_value}
             )
             """,
             (
@@ -257,6 +277,7 @@ class MerchantDocumentRepository:
                     if plan.created_by is not None
                     else None
                 ),
+                *((evidence_status,) if evidence_status is not None else ()),
             ),
         )
 
@@ -295,7 +316,11 @@ class MerchantDocumentRepository:
         cursor: Any,
         plan: DocumentRevisionPlan,
         event_id: uuid.UUID,
+        evidence_status: str | None = None,
     ) -> None:
+        new_values = dict(plan.new_values)
+        if evidence_status is not None:
+            new_values["evidence_status"] = evidence_status
         cursor.execute(
             """
             INSERT INTO merchant_ops.project_events (
@@ -325,7 +350,7 @@ class MerchantDocumentRepository:
                 uuid.UUID(plan.revision_id),
                 "Document revision created",
                 Jsonb(plan.old_values),
-                Jsonb(plan.new_values),
+                Jsonb(new_values),
                 (
                     uuid.UUID(plan.created_by)
                     if plan.created_by is not None

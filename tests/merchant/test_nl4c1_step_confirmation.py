@@ -226,9 +226,21 @@ def test_approval_gate_evidence_is_bound_and_cannot_be_bypassed():
     assert error.value.reason == "STEP_BASIS_REQUIRED"
 
 
-def test_gate_without_database_evaluator_never_yields_an_operation():
+def test_gate_without_database_evaluator_yields_only_an_attested_operation():
+    # CP12H.MASTER (owner-approved DEC-SIMPLIFY P7): completing an
+    # evaluator-less gate is the user's confirmed, operator-attested operation.
     result = preview(f"Đánh dấu bước Complete UAT acceptance của {NVC} là hoàn thành")
-    assert result["outcome"] != READY and result["requested_operation"] is None
+    assert result["outcome"] == READY, result["blocking"]
+    operation = result["requested_operation"]
+    assert operation["gate_attestation"] == "OPERATOR_ATTESTED"
+
+    # The same operation without its attestation (or a forged one where data
+    # decides the gate) is refused when re-verified.
+    payload = payload_of(operation["argv"])
+    payload.pop("gate_attestation")
+    with pytest.raises(StepPreviewMismatch) as error:
+        verify_step_update(StepReader(), payload)
+    assert error.value.reason == "STEP_GATE_ATTESTATION_MISMATCH"
 
 
 @pytest.mark.parametrize("field", ["expected_basis_hash", "project_id", "merchant_code"])

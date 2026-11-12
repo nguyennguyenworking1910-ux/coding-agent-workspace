@@ -338,7 +338,18 @@ authorization) and a basis hash; the verified capture records it in a third pend
 write transaction re-judge it (`purchase_request.verify_purchase_request`), operator included; a
 reference is unique per (Merchant, type, reference), enforced by migration 007; an existing Purchase
 Request reference is never replaced. Its receipt (`merchant_purchase_request_receipt`) is reconciled
-from the ledger, claim, procurement row and PROCUREMENT event of one transaction. The scope must satisfy the deterministic
+from the ledger, claim, procurement row and PROCUREMENT event of one transaction. CP12H.MASTER
+(owner-approved DEC-SIMPLIFY, Local Test MVP; `lifecycle_operation.py`) adds, on the test database
+only and in the same way, the confirmation-first lifecycle: a metadata-only document revision
+(METADATA_ONLY, no file), one APPROVED or REJECTED decision per role (the operator is stored as
+`recorded_by`, never as the approver; decisions are immutable), operator-attested signing
+(OPERATOR_ATTESTED_SIGNED, the existing signing gate unchanged), a Purchase Order or Payment
+Request (create-only), Project start and completion (every Step terminal, final Step COMPLETED).
+Each runs only from a verified `evidence preview` the user confirms with `/solve Xác nhận thực
+hiện <code>` (fourth pending store), is re-judged in the preflight and inside the write
+transaction, and gets a receipt (`merchant_lifecycle_receipt`) reconciled from PostgreSQL. A gate
+Step with no stored-evidence evaluator completes only through a confirmed, operator-attested Step
+Update (`gate_attestation`). The scope must satisfy the deterministic
 required-field completeness contract (blank required values are rejected). The teammate sends
 one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
 the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an

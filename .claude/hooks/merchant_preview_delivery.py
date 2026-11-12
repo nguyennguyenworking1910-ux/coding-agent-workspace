@@ -339,9 +339,12 @@ def record_read_evidence(payload: dict[str, Any], contract: ReadResultContract) 
         from claude.hooks import merchant_pending_confirmation as pending
 
         create = (
-            pending.record_pending_purchase_request
-            if contract.command == ("evidence", "preview")
-            else pending.record_pending_step
+            pending.record_pending_step
+            if contract.command != ("evidence", "preview")
+            # CP12H.MASTER: a lifecycle operation has its own store.
+            else pending.record_pending_lifecycle
+            if operation.get("operation") in _lifecycle_kinds()
+            else pending.record_pending_purchase_request
         )
         create(
             owner,
@@ -380,10 +383,47 @@ def _step_operation_consistent(output: dict[str, Any], operation: Any, target: s
     return operation.get("database_target") == target
 
 
+def _lifecycle_kinds() -> tuple[str, ...]:
+    from claude.agents.tools.merchant.lifecycle_operation import KINDS
+
+    return KINDS
+
+
+def _lifecycle_operation_consistent(output: dict[str, Any], operation: dict[str, Any],
+                                    target: str | None) -> bool:
+    """CP12H.MASTER: a valid lifecycle operation on the test database, bound to
+    the operator this trusted hook resolves itself and to the previewed Project."""
+
+    from claude.agents.tools.merchant.lifecycle_operation import (
+        CONFIRMABLE_TARGETS,
+        validate_operation,
+    )
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        trusted_operator_id,
+    )
+
+    try:
+        validate_operation(operation)
+        operator = trusted_operator_id()
+    except (ValueError, OperatorIdentityError):
+        return False
+    return (
+        output.get("outcome") == "PREVIEW_VALID"
+        and target in CONFIRMABLE_TARGETS
+        and operation["database_target"] == target
+        and operation["operator_id"] == operator
+        and (output.get("recording_operator") or {}).get("operator_id") == operator
+        and operation["project_id"] == output.get("project_id")
+        and operation["merchant_id"] == output.get("merchant_id")
+    )
+
+
 def _evidence_operation_consistent(output: dict[str, Any], operation: Any, target: str | None) -> bool:
     """CP12H.NL4D4A: only a valid new Purchase Request on the test database,
     bound to the operator this trusted hook resolves itself, carries an
-    operation; ``confirmation_available`` is true exactly then."""
+    operation; ``confirmation_available`` is true exactly then. CP12H.MASTER:
+    likewise a valid lifecycle operation."""
 
     from claude.agents.tools.merchant.purchase_request import (
         CONFIRMABLE_TARGETS,
@@ -398,6 +438,8 @@ def _evidence_operation_consistent(output: dict[str, Any], operation: Any, targe
         return False
     if operation is None:
         return True
+    if isinstance(operation, dict) and operation.get("operation") in _lifecycle_kinds():
+        return _lifecycle_operation_consistent(output, operation, target)
     try:
         validate_operation(operation)
         operator = trusted_operator_id()

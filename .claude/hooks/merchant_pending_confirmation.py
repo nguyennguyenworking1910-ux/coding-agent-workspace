@@ -24,6 +24,16 @@ CP12H.NL4D4A: pending Purchase Requests are a third, separate store
 [<project id>]`` / ``Hủy ghi nhận``), created only from the PostToolUse(Bash)
 capture of a VERIFIED ``evidence preview`` that carries a valid Purchase
 Request operation bound to the trusted operator.
+
+CP12H.MASTER: the confirmed lifecycle operations (metadata-only revision,
+approval decision, operator-attested signing, Purchase Order, Payment
+Request, Project completion) share a fourth store
+(``<owner>.pending_lifecycle.json``, phrases ``Xác nhận thực hiện <code>`` /
+``Hủy thực hiện <code>``, English ``confirm operation`` / ``cancel
+operation``). Each record is keyed by its own operation id, so several may be
+pending at once and the code names exactly one. The only creator is the
+PostToolUse(Bash) capture of a VERIFIED ``evidence preview`` carrying a valid
+lifecycle operation bound to the trusted operator.
 """
 
 from __future__ import annotations
@@ -77,17 +87,27 @@ _PURCHASE_REQUEST_PHRASES = (
     (CANCEL, ("cancel", "record")),
 )
 _PURCHASE_REQUEST_NOUNS = (("purchase", "request"), ("yeu", "cau", "mua", "hang"))
+_LIFECYCLE_PHRASES = (
+    (CONFIRM, ("xac", "nhan", "thuc", "hien")),
+    (CONFIRM, ("confirm", "operation")),
+    (CANCEL, ("huy", "thuc", "hien")),
+    (CANCEL, ("cancel", "operation")),
+)
+_LIFECYCLE_NOUNS = (("thao", "tac"),)
 _CODE = re.compile(r"[0-9a-f]{8,32}")
 
 PROJECT_KIND = "project"
 STEP_KIND = "step"
 PURCHASE_REQUEST_KIND = "purchase_request"
+LIFECYCLE_KIND = "lifecycle"
 # kind: (record key, label, confirm phrase, cancel phrase, effect word)
 _KINDS = {
     PROJECT_KIND: ("project_id", "Project create", "Xác nhận tạo", "Hủy tạo", "created"),
     STEP_KIND: ("step_id", "Step Update", "Xác nhận cập nhật", "Hủy cập nhật", "updated"),
     PURCHASE_REQUEST_KIND: ("project_id", "Purchase Request", "Xác nhận ghi nhận",
                             "Hủy ghi nhận", "recorded"),
+    LIFECYCLE_KIND: ("operation_id", "operation", "Xác nhận thực hiện", "Hủy thực hiện",
+                     "written"),
 }
 
 # Tools whose input becomes a future prompt the model wrote.
@@ -226,6 +246,54 @@ def record_pending_purchase_request(
     return record
 
 
+def record_pending_lifecycle(
+    owner: Any, operation: dict[str, Any], *, run_id: str, task_id: str
+) -> dict[str, Any]:
+    """CP12H.MASTER: store one verified lifecycle operation as a pending confirmation."""
+
+    from claude.agents.tools.merchant.lifecycle_operation import validate_operation
+
+    validate_operation(operation)
+    now = _now()
+    record = {
+        "kind": LIFECYCLE_KIND,
+        "status": PENDING,
+        "owner_session_id": str(owner),
+        "source_run_id": run_id,
+        "source_task_id": task_id,
+        "operation_id": operation["operation_id"],
+        "project_id": operation["project_id"],
+        "operator_id": operation["operator_id"],
+        "database_target": operation["database_target"],
+        "operation": operation,
+        "created_at": now,
+        "expires_at": now + PENDING_TTL_SECONDS,
+    }
+
+    with _locked(owner, LIFECYCLE_KIND) as records:
+        # A re-captured preview of the same operation on the same Project
+        # replaces its live record; other pending operations are kept.
+        records[:] = [
+            r for r in records
+            if not (
+                r.get("status") == PENDING
+                and r.get("project_id") == record["project_id"]
+                and (r.get("operation") or {}).get("operation") == operation["operation"]
+                and (r.get("operation") or {}).get("params", {}).get("role")
+                == operation["params"].get("role")
+            )
+        ]
+        records.append(record)
+
+    return record
+
+
+def parse_lifecycle_confirmation(text: str) -> tuple[str, str | None] | None:
+    """(action, operation id prefix) when ``text`` is exactly a lifecycle phrase."""
+
+    return _parse(text, _LIFECYCLE_PHRASES, _LIFECYCLE_NOUNS)
+
+
 def parse_confirmation(text: str) -> tuple[str, str | None] | None:
     """(action, id prefix) when ``text`` is exactly a Project confirmation phrase."""
 
@@ -271,6 +339,11 @@ def _code(record: dict[str, Any], kind: str = PROJECT_KIND) -> str:
 
 def _describe(record: dict[str, Any], kind: str = PROJECT_KIND) -> str:
     operation = record.get("operation") or {}
+    if kind == LIFECYCLE_KIND:
+        return (
+            f"{_code(record, kind)} ({operation.get('summary') or operation.get('operation')}, "
+            f"Project {operation.get('project_title')!r})"
+        )
     if kind == PURCHASE_REQUEST_KIND:
         return (
             f"{_code(record, kind)} (Purchase Request {operation.get('reference')!r}, "
@@ -311,7 +384,8 @@ def resolve(
     """
 
     key, label, confirm_word, _, effect = _KINDS[kind]
-    noun = {PROJECT_KIND: "Project", STEP_KIND: "step"}.get(kind, "Purchase Request")
+    noun = {PROJECT_KIND: "Project", STEP_KIND: "step",
+            LIFECYCLE_KIND: "operation"}.get(kind, "Purchase Request")
     now = _now()
     with _locked(owner, kind) as records:
         live = [
@@ -384,7 +458,8 @@ def bare_phrase_guidance(owner: Any, prompt: str) -> str | None:
     """Reason to refuse a confirmation typed without ``/solve``, if one is pending."""
 
     for kind, parse in ((PROJECT_KIND, parse_confirmation), (STEP_KIND, parse_step_confirmation),
-                        (PURCHASE_REQUEST_KIND, parse_purchase_request_confirmation)):
+                        (PURCHASE_REQUEST_KIND, parse_purchase_request_confirmation),
+                        (LIFECYCLE_KIND, parse_lifecycle_confirmation)):
         parsed = parse(prompt)
         if parsed is None or not live_records(owner, kind):
             continue
@@ -430,6 +505,7 @@ def scheduled_prompt_denial(tool_name: str, tool_input: Any) -> str | None:
             or parse_confirmation(text) is not None
             or parse_step_confirmation(text) is not None
             or parse_purchase_request_confirmation(text) is not None
+            or parse_lifecycle_confirmation(text) is not None
         ):
             return (
                 f"Blocked: {tool_name} would submit a controlled /solve or "

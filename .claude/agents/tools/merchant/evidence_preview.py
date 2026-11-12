@@ -20,6 +20,15 @@ engine's own error class. Nothing is re-implemented and no policy is invented:
   to that person, is undecided (NL4D1 S1);
 - signing has no command (NL4D1 D1) and is never previewed.
 
+CP12H.MASTER (owner-approved DEC-SIMPLIFY, Local Test MVP) supersedes the
+POLICY_UNDECIDED and no-signing limits above: on the test database, with a
+trusted local operator, a valid request for a metadata-only revision, one
+APPROVED or REJECTED decision, operator-attested signing, a Purchase Order, a
+Payment Request or Project completion carries a ``lifecycle_operation``
+``requested_operation`` (NOT_AUTHORIZED) and ``confirmation_available: true``:
+the user may type ``/solve Xác nhận thực hiện <code>``. A recorded decision
+names the operator as recorder only; the approver is never inferred.
+
 Nothing is written, reserved, claimed or confirmed: ``read_only`` is always
 true, ``executable`` false and ``authorization`` null. A PREVIEW_VALID outcome
 is never authority to write. Content hashes and approval notes are never
@@ -41,6 +50,7 @@ import hashlib
 import json
 import re
 import unicodedata
+import uuid
 from datetime import date
 from typing import Any
 
@@ -49,6 +59,7 @@ from .document_engine import DocumentEngineError, propose_document_revision
 from .evidence_status import _UUID
 from .gates import APPROVER_ROLES
 from .procurement_engine import ProcurementEngineError, propose_procurement_mutation
+from . import lifecycle_operation as lifecycle
 from . import purchase_request
 from .project_nl import EVIDENCE_WRITE, fold, interpret_project_request
 from .project_status import _summary, _text, resolve_merchant_phrase, resolve_project
@@ -62,6 +73,9 @@ POLICY_UNDECIDED = "POLICY_UNDECIDED"
 REVISION = "REGISTER_DOCUMENT_REVISION"
 APPROVAL = "RECORD_APPROVAL"
 PROCUREMENT = "RECORD_PROCUREMENT_REFERENCE"
+SIGNING = "RECORD_SIGNING"
+COMPLETION = "COMPLETE_PROJECT"
+STARTING = "START_PROJECT"
 
 # A placeholder id for the engines' "new id" argument. Never output.
 _PLACEHOLDER_ID = "00000000-0000-4000-8000-00000000d3d3"
@@ -150,7 +164,29 @@ _SOURCES = {
     REVISION: "document_engine.propose_document_revision",
     APPROVAL: "approval_engine.propose_document_approval",
     PROCUREMENT: "procurement_engine.propose_procurement_mutation",
+    SIGNING: "signing_engine.propose_document_signing",
+    COMPLETION: "project_engine.propose_project_transition",
+    STARTING: "project_engine.propose_project_transition",
 }
+_START_PROJECT = (
+    r"\b(?:bat dau|khoi dong|start|begin|kick off)(?: (?:the|toan bo))? (?:project|du an)\b"
+)
+# CP12H.MASTER: what a signing or Project-completion request says (folded).
+_SIGN_WORD = r"\b(?:da ky|ky ket|ky xong|signed|sign|ky)\b"
+_COMPLETE_PROJECT = (
+    # "đóng" (close), never the "động" of "khởi động" (start): both fold to "dong".
+    r"\b(?:hoan tat|hoan thanh|complete|close|(?<!khoi )dong|ket thuc|finish)(?: (?:the|toan bo|ca))? "
+    r"(?:project|du an)\b"
+)
+# Documented alias: the contract is the CONTRACT document type.
+_TYPE_ALIASES = ((r"\b(?:hop dong|contract)\b", "CONTRACT"),)
+# A stated date (ISO only) and optional notes ("ghi chú: ...", "notes: ...").
+_ANY_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_NOTES = re.compile(
+    r"(?i)(?:ghi ch[uú]|notes?|l[yý] do|reason)\s*[:：]\s*(?:\"([^\"]+)\"|“([^”]+)”|(.+))$")
+_TRAILING_TARGET = re.compile(
+    r"(?i)\s*[,.;]?\s*(?:tr[eê]n|on|in|to)\s+(?:the\s+)?(?:database|db|c[ơo] s[ởo] d[ữu] li[ệe]u)"
+    r"\s+(?:test|th[ửu] nghi[ệe]m)\s*[.!]?\s*$")
 
 
 def build_evidence_preview(
@@ -201,8 +237,9 @@ def build_evidence_preview(
 
     if interpretation.kind != EVIDENCE_WRITE:
         return _ask(result, "This preview covers one document revision, one LEGAL, ACCOUNTING or "
-                            "PARTNER approval, or one Purchase Request, Purchase Order or Payment "
-                            "Request reference for one Project. Which one should be previewed?")
+                            "PARTNER decision, signing, one Purchase Request, Purchase Order or "
+                            "Payment Request reference, or completing one Project. Which one "
+                            "should be previewed?")
     if interpretation.negated or not interpretation.write_requested:
         return _ask(result, "The request says not to record this (or that it has not happened), "
                             "so there is nothing to preview. What should be previewed?")
@@ -231,7 +268,7 @@ def build_evidence_preview(
     # ------------------------------------------------------------ identity
     merchant = None
     if merchant_phrase:
-        merchant, question = resolve_merchant_phrase(reads, merchant_phrase)
+        merchant, question = resolve_merchant_phrase(reads, merchant_phrase, exact=True)
         if merchant is None:
             return _ask(result, question)
         result["resolved"]["merchant"] = merchant
@@ -267,7 +304,7 @@ def build_evidence_preview(
     revision_ids = {_text(r["id"]) for r in revisions}
     approvals = [a for a in approvals if _text(a.get("document_revision_id")) in revision_ids]
 
-    if operation in (REVISION, APPROVAL) and fields.get("document_type") is None:
+    if operation in (REVISION, APPROVAL, SIGNING) and fields.get("document_type") is None:
         # A stored document type written whole in the request binds; nothing is inferred.
         written = sorted({str(r["document_type"]).upper() for r in revisions
                           if re.search(rf"\b{re.escape(str(r['document_type']).lower())}\b", masked)})
@@ -276,13 +313,54 @@ def build_evidence_preview(
             if "document_type" in missing:
                 missing.remove("document_type")
 
+    # The recording operator is shown for every confirmable write.
+    result["recording_operator"] = dict(operator) if operator else {
+        "status": "OPERATOR_IDENTITY_NOT_RESOLVED", "operator_id": None}
+
     if operation == PROCUREMENT:
         _procurement(result, reads, stored, revisions, records, fields, missing)
-        _purchase_request_operation(result, reads, detail, fields, operator)
+        if fields.get("procurement_type") == "PURCHASE_REQUEST":
+            _purchase_request_operation(result, reads, detail, fields, operator)
+        elif not missing and result["outcome"] == VALID:
+            kind = (lifecycle.PURCHASE_ORDER if fields["procurement_type"] == "PURCHASE_ORDER"
+                    else lifecycle.PAYMENT_REQUEST)
+            reference = fields["external_reference"]
+            holders = reads.procurement_reference_holders(
+                _text(stored["merchant_id"]), fields["procurement_type"], reference)
+            _lifecycle_operation(result, kind, detail, {"reference": reference}, holders,
+                                 f"record {fields['procurement_type'].replace('_', ' ').title()} "
+                                 f"{reference}")
     elif operation == REVISION:
         _revision(result, stored, revisions, fields, missing, content_hash)
+        if result["outcome"] == VALID:
+            _lifecycle_operation(result, lifecycle.CREATE_REVISION, detail, {
+                "revision_id": result["domain_validation"].pop("_revision_id"),
+                "document_type": fields["document_type"],
+                "effective_date": fields.get("effective_date"),
+                "expiry_date": fields.get("expiry_date"),
+            }, (), f"create metadata-only {fields['document_type']} revision "
+                  f"{result['domain_validation']['plan'].get('revision_number')} (no file)")
+    elif operation == SIGNING:
+        _signing(result, detail, revisions, fields)
+    elif operation == COMPLETION:
+        _completion(result, detail)
+    elif operation == STARTING:
+        _starting(result, detail)
     else:
         _approval(result, stored, revisions, approvals, fields, missing)
+        if result["outcome"] == VALID:
+            target = result["existing_evidence"]["revision"]
+            current = result["existing_evidence"]["approval"]
+            _lifecycle_operation(result, lifecycle.RECORD_DECISION, detail, {
+                "revision_id": target["revision_id"],
+                "approval_id": result["domain_validation"].pop("_approval_id"),
+                "role": fields["approver_role"],
+                "decision": fields["approval_status"],
+                "expected_status": "PENDING" if current else None,
+                "decided_on": fields.get("decided_on"),
+                "decision_note": fields.get("decision_note"),
+            }, (), f"record {fields['approver_role']} {fields['approval_status']} on "
+                  f"{target['document_type']} revision {target['revision_number']}")
     return result
 
 
@@ -300,12 +378,20 @@ def _masked(folded, interpretation):
 def _operation(masked):
     """(operation, evidence type, question or None)."""
 
+    # CP12H.MASTER: completing the Project itself (never a Step: a step noun
+    # makes it a Step Update upstream), then operator-attested signing.
+    if re.search(_COMPLETE_PROJECT, masked) and not re.search(r"\b(?:buoc|step)\b", masked):
+        return COMPLETION, "PROJECT_COMPLETION", None
+    if re.search(_START_PROJECT, masked) and not re.search(r"\b(?:buoc|step)\b", masked):
+        return STARTING, "PROJECT_START", None
     types = [kind for kind, pattern in _PROCUREMENT_NAMES if re.search(pattern, masked)]
     if len(types) > 1:
         return PROCUREMENT, None, ("One procurement reference is previewed at a time: Purchase "
                                    "Request, Purchase Order or Payment Request?")
     if types:
         return PROCUREMENT, types[0], None
+    if re.search(_SIGN_WORD, masked) and not re.search(_APPROVAL_WORD, masked):
+        return SIGNING, "OPERATOR_ATTESTED_SIGNING", None
     if re.search(_APPROVAL_WORD, masked):
         roles = [role for role, pattern in _ROLE_WORDS if re.search(pattern, masked)]
         return APPROVAL, f"{roles[0]}_APPROVAL" if len(roles) == 1 else None, None
@@ -338,6 +424,9 @@ def _requested_fields(request, folded, masked, operation, evidence_type, interpr
         fields["revision_reference"] = int(number.group(1)) if number else "LATEST"
         fields["document_type"] = _explicit_type(masked, request)
         fields["actor"] = None
+        # CP12H.MASTER: optional decision date and notes, as written.
+        fields["decided_on"], fields["date_problem"] = _stated_date(request)
+        fields["decision_note"] = _notes(request)
         if not roles:
             unsupported = _unsupported_role(folded)
             if unsupported:
@@ -350,6 +439,13 @@ def _requested_fields(request, folded, masked, operation, evidence_type, interpr
             or any(re.search(p, fold(merchant_phrase)) for _, p in _ROLE_WORDS)
         ):
             merchant_phrase = None
+    elif operation == SIGNING:
+        fields["document_type"] = _explicit_type(masked, request)
+        number = re.search(_REVISION_NUMBER, masked)
+        fields["revision_reference"] = int(number.group(1)) if number else "LATEST"
+        fields["signed_on"], fields["date_problem"] = _stated_date(request)
+    elif operation in (COMPLETION, STARTING):
+        pass
     else:
         fields["document_type"] = _explicit_type(masked, request)
         hashed = _HASH.search(request)
@@ -359,8 +455,8 @@ def _requested_fields(request, folded, masked, operation, evidence_type, interpr
             fields[name] = found.group(1) if found else None
         if fields["document_type"] is None:
             missing.append("document_type")
-        if hashed is None:
-            missing.append("content_hash")
+        # CP12H.MASTER: a revision is metadata-only (no file); a typed hash
+        # cannot be verified and is never stored.
         fields["_content_hash"] = hashed.group(1) if hashed else None
     return fields, missing, merchant_phrase
 
@@ -418,7 +514,31 @@ def _explicit_type(masked, request=""):
         return found.group(1).upper()
     # "a new CONTRACT revision": an uppercase type written beside the noun.
     found = re.search(r"\b([A-Z][A-Z0-9_]{2,})\s+(?:revision|document)\b", request)
-    return found.group(1) if found else None
+    if found:
+        return found.group(1)
+    # CP12H.MASTER: documented aliases ("hợp đồng", "contract" -> CONTRACT).
+    aliases = {name for pattern, name in _TYPE_ALIASES if re.search(pattern, masked)}
+    return aliases.pop() if len(aliases) == 1 else None
+
+
+def _stated_date(request):
+    """(the one ISO date written, None) or (None, AMBIGUOUS); never inferred."""
+
+    dates = set(_ANY_DATE.findall(request))
+    if len(dates) > 1:
+        return None, REFERENCE_AMBIGUOUS
+    return (dates.pop() if dates else None), None
+
+
+def _notes(request):
+    """Optional notes after "ghi chú:" / "notes:", exactly as written."""
+
+    found = _NOTES.search(request.strip())
+    if not found:
+        return None
+    text = next(group for group in found.groups() if group is not None)
+    text = _TRAILING_TARGET.sub("", text).strip().strip("\"“”'")
+    return text or None
 
 
 def _unsupported_role(folded):
@@ -459,22 +579,20 @@ def _procurement(result, reads, project, revisions, records, fields, missing):
             "explanation": "This Project does not require procurement; the domain still "
                            "accepts a Purchase Request record, and no gate checks it.",
         })
-    if kind in ("PURCHASE_ORDER", "PAYMENT_REQUEST"):
-        result["policy_notes"].append({
-            "code": "SIGNING_NOT_AVAILABLE",
-            "explanation": "A Purchase Order or Payment Request needs a signed revision, and "
-                           "signing has no command (NL4D1 D1).",
-        })
     _basis(result, project, record=record)
     if not missing:
         # CP12H.NL4D4A: approved DEC-P1a / DEC-P1c, before the engine.
         holders = reads.procurement_reference_holders(
             _text(project["merchant_id"]), kind, fields["external_reference"])
         blocker = purchase_request.reference_blocker(
-            _text(project["id"]), record if kind == "PURCHASE_REQUEST" else None,
-            fields["external_reference"], holders)
+            _text(project["id"]), record, fields["external_reference"], holders)
         if blocker is not None:
             return _block(result, *blocker)
+        if record is not None and kind != "PURCHASE_REQUEST":
+            # CP12H.MASTER: create-only, never a replacement.
+            return _block(result, lifecycle.RECORD_EXISTS,
+                          "This Project already has this record; replacing a recorded "
+                          "reference is not supported.")
     if missing:
         result["missing_required_fields"] = missing
         name = kind.replace("_", " ").title()
@@ -534,28 +652,160 @@ def _revision(result, project, revisions, fields, missing, content_hash):
         "document_types": stored_types,
     }
     result["policy_notes"].append({
-        "code": "CONTENT_HASH_UNVERIFIED",
-        "explanation": "A revision stores content_hash as unverified text; no file storage "
-                       "exists (NL4D1 D4).",
+        "code": "METADATA_ONLY_REVISION",
+        "explanation": "The revision is recorded without a file (METADATA_ONLY): it carries no "
+                       "file or integrity evidence. Uploading a file is optional and separate.",
     })
     _basis(result, project, revisions=active)
+    if content_hash is not None:
+        return _block(result, "CONTENT_HASH_NOT_ACCEPTED",
+                      "A typed content hash cannot be verified, so it is never recorded. Remove "
+                      "it: the revision is recorded as metadata only (no file).")
     if missing:
         result["missing_required_fields"] = missing
         result["candidates"] = [{"document_type": t} for t in stored_types]
-        return _ask(result, "Which document type (for example CONTRACT) and which content hash "
-                            "should the new revision have?")
+        return _ask(result, "Which document type (for example CONTRACT) should the new "
+                            "revision have?")
     dates = {}
     for name in ("effective_date", "expiry_date"):
         try:
             dates[name] = date.fromisoformat(fields[name]) if fields[name] else None
         except ValueError:
             return _block(result, "DocumentEngineError", f"{name} is not a valid date.")
-    _judge(result, REVISION, lambda: propose_document_revision(
+    signed_active = [r for r in active if r.get("signed")
+                     and str(r.get("document_type")).upper() == fields["document_type"]]
+    if signed_active:
+        return _block(result, lifecycle.SIGNED_REVISION,
+                      "The active revision of this type is signed and is not superseded "
+                      "(DEC-D4e).")
+    revision_id = str(uuid.uuid4())
+    if _judge(result, REVISION, lambda: propose_document_revision(
         {"project": project, "revisions": revisions},
-        revision_id=_PLACEHOLDER_ID, document_type=fields["document_type"],
-        content_hash=content_hash, **dates,
+        revision_id=revision_id, document_type=fields["document_type"],
+        content_hash=lifecycle.metadata_only_hash(revision_id), **dates,
     ), plan_fields=("document_type", "revision_number", "previous_revision_id",
-                    "previous_revision_number", "event_type"))
+                    "previous_revision_number", "event_type")):
+        result["domain_validation"]["_revision_id"] = revision_id
+
+
+def _lifecycle_operation(result, kind, detail, params, holders, summary):
+    """CP12H.MASTER: the confirmable operation of a valid request, or why not."""
+
+    blockers = result["confirmation_blockers"]
+    if result["database_target"] not in lifecycle.CONFIRMABLE_TARGETS:
+        blockers.append("RUNTIME_EXECUTION_DISABLED")
+    if result["recording_operator"]["status"] != "TRUSTED":
+        blockers.append(result["recording_operator"]["status"])
+    if blockers:
+        return
+    try:
+        operation = lifecycle.build_operation(
+            kind, detail, params, result["recording_operator"]["operator_id"],
+            result["database_target"], holders, summary)
+    except lifecycle.LifecycleMismatch as error:
+        _block(result, error.reason, error.detail or error.reason)
+        return
+    result["requested_operation"] = operation
+    result["confirmation_available"] = True
+
+
+def _target_revision(result, revisions, fields):
+    """The one revision a signing request names (latest active by default)."""
+
+    kind, reference = fields.get("document_type"), fields.get("revision_reference", "LATEST")
+    candidates = [r for r in revisions if kind is None or str(r["document_type"]).upper() == kind]
+    if reference == "LATEST":
+        candidates = [r for r in candidates if r.get("superseded_by") is None]
+    else:
+        candidates = [r for r in candidates if r.get("revision_number") == reference]
+    if len(candidates) != 1:
+        result["candidates"] = [_revision_summary(r) for r in candidates
+                                or [r for r in revisions if r.get("superseded_by") is None]]
+        _ask(result, "Which document revision was signed? Name its document type (for example "
+                     "CONTRACT) or revision number.")
+        return None
+    return candidates[0]
+
+
+def _signing(result, detail, revisions, fields):
+    project = detail["project"]
+    active = [r for r in revisions if r.get("superseded_by") is None]
+    result["existing_evidence"] = {"active_revisions": [_revision_summary(r) for r in active]}
+    result["policy_notes"].append({
+        "code": "OPERATOR_ATTESTED_SIGNED",
+        "explanation": "Signing is recorded as attested by the trusted local operator "
+                       "(OPERATOR_ATTESTED_SIGNED). No signed file, signatory or cryptographic "
+                       "signature is verified.",
+    })
+    if not revisions:
+        return _block(result, "MISSING_DOCUMENT_REVISION",
+                      "No document revision exists, so there is nothing to sign.")
+    if fields.get("date_problem"):
+        return _ask(result, "The request names more than one date: which one is the signing "
+                            "date (YYYY-MM-DD)?")
+    target = _target_revision(result, revisions, fields)
+    if target is None:
+        return result
+    result["existing_evidence"]["revision"] = _revision_summary(target)
+    _basis(result, project, revisions=[target])
+    params = {"revision_id": _text(target["id"]), "signed_on": fields.get("signed_on")}
+    try:
+        plan = lifecycle.judge(lifecycle.SIGN, detail, params)
+    except lifecycle.LifecycleMismatch as error:
+        result["domain_validation"]["engine"] = _SOURCES[SIGNING]
+        return _block(result, error.reason, error.detail or error.reason)
+    result["domain_validation"].update(status="VALID", engine=_SOURCES[SIGNING], plan=plan)
+    result["outcome"] = VALID
+    _lifecycle_operation(result, lifecycle.SIGN, detail, params, (),
+                         f"record {target['document_type']} revision {target['revision_number']} "
+                         "as signed (operator-attested)")
+    return result
+
+
+def _completion(result, detail):
+    project = detail["project"]
+    steps = [dict(s) for s in detail.get("steps") or []]
+    finals = lifecycle.final_step_ids(detail)
+    result["existing_evidence"] = {
+        "project_status": project.get("status"),
+        "step_counts": {status: sum(1 for s in steps if s.get("status") == status)
+                        for status in sorted({str(s.get("status")) for s in steps})},
+        "unfinished_steps": [
+            {"step_id": _text(s["id"]), "sequence": s.get("sequence_number"),
+             "name": s.get("step_name"), "status": s.get("status")}
+            for s in sorted(steps, key=lambda s: s.get("sequence_number") or 0)
+            if str(s.get("status")) not in ("COMPLETED", "SKIPPED", "SUPERSEDED")],
+        "final_steps": [{"step_id": _text(s["id"]), "name": s.get("step_name"),
+                         "status": s.get("status")} for s in steps if _text(s["id"]) in finals],
+    }
+    _basis(result, project)
+    params = {"expected_version": project.get("version")}
+    try:
+        plan = lifecycle.judge(lifecycle.COMPLETE_PROJECT, detail, params)
+    except lifecycle.LifecycleMismatch as error:
+        result["domain_validation"]["engine"] = _SOURCES[COMPLETION]
+        return _block(result, error.reason, error.detail or error.reason)
+    result["domain_validation"].update(status="VALID", engine=_SOURCES[COMPLETION], plan=plan)
+    result["outcome"] = VALID
+    _lifecycle_operation(result, lifecycle.COMPLETE_PROJECT, detail, params, (),
+                         "complete the Project")
+    return result
+
+
+def _starting(result, detail):
+    project = detail["project"]
+    result["existing_evidence"] = {"project_status": project.get("status")}
+    _basis(result, project)
+    params = {"expected_version": project.get("version")}
+    try:
+        plan = lifecycle.judge(lifecycle.START_PROJECT, detail, params)
+    except lifecycle.LifecycleMismatch as error:
+        result["domain_validation"]["engine"] = _SOURCES[STARTING]
+        return _block(result, error.reason, error.detail or error.reason)
+    result["domain_validation"].update(status="VALID", engine=_SOURCES[STARTING], plan=plan)
+    result["outcome"] = VALID
+    _lifecycle_operation(result, lifecycle.START_PROJECT, detail, params, (), "start the Project")
+    return result
 
 
 def _approval(result, project, revisions, approvals, fields, missing):
@@ -572,6 +822,13 @@ def _approval(result, project, revisions, approvals, fields, missing):
     if missing:
         result["missing_required_fields"] = missing
         return _ask(result, "Whose approval should be previewed: LEGAL, ACCOUNTING or PARTNER?")
+    if fields["approval_status"] not in lifecycle.DECISIONS:
+        return _block(result, "DECISION_REQUIRED",
+                      "Only a final APPROVED or REJECTED decision is recorded; a pending "
+                      "request for approval is not.")
+    if fields.get("date_problem"):
+        return _ask(result, "The request names more than one date: which one is the decision "
+                            "date (YYYY-MM-DD)?")
     if not revisions:
         return _block(result, "MISSING_DOCUMENT_REVISION",
                       "No document revision exists, so there is nothing to approve.")
@@ -599,16 +856,23 @@ def _approval(result, project, revisions, approvals, fields, missing):
         ],
     })
     _basis(result, project, revisions=[target], approval=current)
+    approval_id = str(uuid.uuid4())
     if _judge(result, APPROVAL, lambda: propose_document_approval(
         {"project": project, "revisions": revisions, "approvals": approvals},
-        document_revision_id=_text(target["id"]), approval_id=_PLACEHOLDER_ID,
+        document_revision_id=_text(target["id"]), approval_id=approval_id,
         approver_role=role, approval_status=fields["approval_status"],
         expected_status=current.get("approval_status") if current else None,
     ), plan_fields=("operation", "approver_role", "document_type", "revision_number",
                     "current_status", "target_status", "event_type")):
+        # CP12H.MASTER (DEC-SIMPLIFY): the operator records the decision; the
+        # approver is not identified and never inferred.
         result["domain_validation"]["finality"] = _FINALITY
-        result["policy_blockers"] = [_POLICY_ATTESTATION, _POLICY_ACTOR]
-        result["outcome"] = POLICY_UNDECIDED
+        result["domain_validation"]["_approval_id"] = approval_id
+        result["policy_notes"].append({
+            "code": "OPERATOR_RECORDED_DECISION",
+            "explanation": "The trusted local operator records this decision on the "
+                           "approver's behalf; the approver is not identified or verified.",
+        })
 
 
 # ---------------------------------------------------------------- helpers

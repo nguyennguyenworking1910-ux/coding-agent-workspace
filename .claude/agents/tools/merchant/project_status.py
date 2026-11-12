@@ -101,12 +101,28 @@ def build_project_status(request: str, reads: Any, *, database_target: str | Non
     return _project_status(result, reads, project, match_kind)
 
 
-def resolve_merchant_phrase(reads: Any, phrase: str) -> tuple[dict[str, Any] | None, str | None]:
-    """(Merchant summary, None) or (None, question), from the repository only."""
+def resolve_merchant_phrase(
+    reads: Any, phrase: str, *, exact: bool = False
+) -> tuple[dict[str, Any] | None, str | None]:
+    """(Merchant summary, None) or (None, question), from the repository only.
 
-    merchant, _, question = resolve_merchant(reads.list_merchants(), phrase, None, None)
+    ``exact`` (CP12H.MASTER-FINAL, write previews) refuses a phrase of which
+    only a leading part names the Merchant; reads keep ignoring trailing words
+    ("... của Merchant Beta Cinemas kèm trạng thái").
+    """
+
+    merchant, rest, question = resolve_merchant(reads.list_merchants(), phrase, None, None)
     if merchant is None:
         return None, question
+    if exact and rest and rest.strip():
+        # CP12H.MASTER-FINAL: only a leading part of the phrase named this
+        # Merchant ("Beta Khác Cinemas" -> "Beta Cinemas"). For an existing
+        # Project the whole phrase must name the Merchant; never bind a
+        # different Merchant by dropping words.
+        return None, (
+            f"No Merchant is named exactly {phrase!r} ({merchant['name']} matches only "
+            f"{merchant['matched_text']!r}). Which Merchant do you mean?"
+        )
     return {
         "merchant_id": _text(merchant["merchant_id"]),
         "code": merchant["code"],

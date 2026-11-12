@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -61,8 +61,24 @@ class MerchantSigningRepository:
         document_revision_id: str,
         occurred_at: datetime | None = None,
         signed_by: str | None = None,
+        attestation: str | None = None,
+        recorded_by: str | None = None,
+        precondition: Any = None,
     ) -> DocumentSigningResult:
-        """Validate persisted evidence, sign, and audit."""
+        """Validate persisted evidence, sign, and audit.
+
+        CP12H.MASTER: ``attestation`` (OPERATOR_ATTESTED_SIGNED, migration 010)
+        records that the trusted local operator ``recorded_by`` attested the
+        signature; no signatory, file or cryptographic verification is
+        claimed (``signed_by`` must be absent). Written only when given.
+        ``precondition(connection)`` runs after the locks; raising refuses
+        the whole transaction.
+        """
+
+        if attestation is not None and (signed_by is not None or recorded_by is None):
+            raise SigningPersistenceError(
+                "An attested signature names its recorder and no signatory"
+            )
 
         normalized_revision_id = _uuid(
             document_revision_id,
@@ -101,6 +117,9 @@ class MerchantSigningRepository:
                         )
                     )
 
+                    if precondition is not None:
+                        precondition(connection)
+
                     plan = propose_document_signing(
                         {
                             "project": project,
@@ -122,9 +141,20 @@ class MerchantSigningRepository:
                         ),
                     )
 
+                    if attestation is not None:
+                        plan = replace(
+                            plan,
+                            signed_by=str(_uuid(recorded_by, "recorded_by")),
+                            new_values={
+                                **plan.new_values,
+                                "attestation": attestation,
+                            },
+                        )
+
                     self._sign_revision(
                         cursor,
                         plan,
+                        attestation,
                     )
 
                     event_id = uuid.uuid4()
@@ -288,13 +318,15 @@ class MerchantSigningRepository:
     def _sign_revision(
         cursor: Any,
         plan: DocumentSigningPlan,
+        attestation: str | None = None,
     ) -> None:
+        extra = ", signing_attestation = %s" if attestation is not None else ""
         cursor.execute(
-            """
+            f"""
             UPDATE merchant_ops.document_revisions
             SET
                 signed = TRUE,
-                signed_at = %s
+                signed_at = %s{extra}
             WHERE id = %s
               AND project_id = %s
               AND document_type = %s
@@ -305,6 +337,7 @@ class MerchantSigningRepository:
             """,
             (
                 plan.signed_at,
+                *((attestation,) if attestation is not None else ()),
                 uuid.UUID(plan.document_revision_id),
                 uuid.UUID(plan.project_id),
                 plan.document_type,

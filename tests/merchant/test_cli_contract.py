@@ -73,6 +73,7 @@ def test_command_allowlists_are_complete_and_disjoint():
         "contact import",
         "document approve",
         "document revision-create",
+        "document sign",
         "integration identifier-set",
         "merchant activate",
         "merchant activate-all",
@@ -121,7 +122,7 @@ def test_command_is_normalized_and_allowlisted():
 
 @pytest.mark.parametrize(
     "command",
-    (None, "", "document sign", "merchant delete"),
+    (None, "", "document delete", "merchant delete"),
 )
 def test_unknown_command_is_rejected(command):
     with pytest.raises(CommandNotAllowedError):

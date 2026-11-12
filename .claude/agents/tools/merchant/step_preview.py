@@ -302,7 +302,7 @@ def _evaluate(result, detail, project, steps, step, target):
                             + named(result["unmet_transitive_dependencies"]))
             blocking.append(_block("UNMET_DEPENDENCIES", message))
 
-    gate = _gate(result, detail, project, step)
+    gate = _gate(result, detail, project, step, target)
     if gate is not None and not gate["all_met"]:
         blocking.append(_block(
             "GATE_NOT_MET",
@@ -310,14 +310,31 @@ def _evaluate(result, detail, project, steps, step, target):
             + ", ".join(gate["blocking_codes"]),
         ))
 
-    if target == "COMPLETED" and str(project.get("project_type")) == "INTEGRATION_NEW_MERCHANT":
-        # Completing an activation step may activate the Merchant; its
-        # prerequisites need the locked write snapshot, so never READY here.
-        blocking.append(_block(
-            "MERCHANT_ACTIVATION_NOT_PREVIEWED",
-            "Completing a step of an INTEGRATION_NEW_MERCHANT Project may activate "
-            "the Merchant; that check is not previewed.",
-        ))
+    if target == "COMPLETED" and _activates_merchant(project, step):
+        # CP12H.MASTER: completing the activation Step activates the Merchant
+        # (ONBOARDING -> ACTIVE) in the same transaction, which re-checks the
+        # activation prerequisites under its locks and refuses atomically.
+        result["preview_notes"] = [*result.get("preview_notes", []), {
+            "code": "MERCHANT_ACTIVATION_IN_SAME_TRANSACTION",
+            "explanation": "Completing this Step also activates the Merchant "
+                           f"{project.get('merchant_code')} (ONBOARDING -> ACTIVE) in the same "
+                           "transaction; it is refused there if activation is not allowed.",
+        }]
+
+    if (target == "COMPLETED" and result["transition"]["supported"]
+            and _text(step["id"]) in _final_step_ids(detail)):
+        # CP12H.MASTER (R7): a final Step completes only after every other
+        # Step is COMPLETED or legitimately SKIPPED; a confirmation never
+        # skips unfinished required Steps.
+        open_steps = sorted(
+            (_step(s) for s in steps if _text(s["id"]) != step_id
+             and str(s.get("status")) not in ("COMPLETED", "SKIPPED", "SUPERSEDED")),
+            key=lambda s: (s["sequence"] is None, s["sequence"]))
+        if open_steps:
+            blocking.append(_block(
+                "FINAL_STEP_PREDECESSORS_UNFINISHED",
+                "Every other Step must be COMPLETED or legitimately SKIPPED first: "
+                + ", ".join(f"{s['sequence']} {s['name']}" for s in open_steps)))
 
     if not blocking:
         try:
@@ -336,7 +353,7 @@ def _evaluate(result, detail, project, steps, step, target):
             blocking.append(_block("DOMAIN_REJECTED", str(error)))
 
     if gate is not None:
-        del gate["result"]
+        gate.pop("result", None)
     result["project_state"] = _project_state(steps)
     result["outcome"] = READY if not blocking else BLOCKED
     if not blocking:
@@ -398,9 +415,13 @@ def step_basis_hash(detail: dict[str, Any], step_id: Any, target_status: str) ->
 
 
 def canonical_step_argv(operation: dict[str, Any]) -> list[str]:
-    """The one argv form of a previewed ``step update`` (fixed order)."""
+    """The one argv form of a previewed ``step update`` (fixed order).
 
-    return [
+    CP12H.MASTER: an operator-attested gate adds ``--gate-attestation
+    OPERATOR_ATTESTED`` at the end; nothing else changes.
+    """
+
+    argv = [
         "step", "update", operation["step_id"],
         "--status", operation["target_status"],
         "--expected-version", str(operation["step_version"]),
@@ -408,6 +429,39 @@ def canonical_step_argv(operation: dict[str, Any]) -> list[str]:
         "--merchant-code", operation["merchant_code"],
         "--expected-basis", operation["expected_basis"],
     ]
+    if operation.get("gate_attestation"):
+        argv += ["--gate-attestation", operation["gate_attestation"]]
+    return argv
+
+
+GATE_ATTESTATION = "OPERATOR_ATTESTED"
+GATE_ATTESTATION_KIND = "OPERATOR_ATTESTATION"
+GATE_DEFERRED_KIND = "ATTESTED_AT_COMPLETION"
+
+
+def _attested_gate(project, name=GATE_ATTESTATION_KIND):
+    from .gates import GateValidationResult
+
+    return GateValidationResult(
+        gate_name=name, project_id=_text(project["id"]),
+        document_revision_id=None, all_met=True, blocking_codes=(), approved_roles=(),
+        missing_roles=(), requires_procurement=False, purchase_request_present=False,
+        already_signed=False,
+    )
+
+
+def _final_step_ids(detail):
+    from .lifecycle_operation import final_step_ids
+
+    return final_step_ids(detail)
+
+
+def _activates_merchant(project, step):
+    if str(project.get("project_type")) != "INTEGRATION_NEW_MERCHANT":
+        return False
+    from .workflow_activation_integration import normalize_step_key
+
+    return normalize_step_key(step.get("step_name")) == "activate_merchant"
 
 
 def _requested_operation(result, detail, project, step, target):
@@ -428,6 +482,8 @@ def _requested_operation(result, detail, project, step, target):
         "target_status": target,
         "expected_basis": step_basis_hash(detail, step["id"], target),
     }
+    if (result.get("gate") or {}).get("attestation") == GATE_ATTESTATION:
+        operation["gate_attestation"] = GATE_ATTESTATION
     operation["argv"] = canonical_step_argv(operation)
     operation["note"] = OPERATION_NOTE
     validate_step_operation(operation)
@@ -471,6 +527,8 @@ def validate_step_operation(operation: Any) -> None:
     basis = operation.get("expected_basis")
     if not isinstance(basis, str) or not _HEX64.fullmatch(basis):
         raise ValueError("requested_operation has no valid expected_basis")
+    if operation.get("gate_attestation") not in (None, GATE_ATTESTATION):
+        raise ValueError("requested_operation has an unknown gate attestation")
     if operation.get("argv") != canonical_step_argv(operation):
         raise ValueError("requested_operation argv is not the canonical operation")
 
@@ -507,6 +565,14 @@ def verify_step_update(reads: Any, payload: dict[str, Any]) -> dict[str, Any]:
         raise StepPreviewMismatch(
             "STEP_NOT_READY", ", ".join(b["code"] for b in judged["blocking"])
         )
+    # CP12H.MASTER: an attested gate runs only with the confirmed attestation,
+    # and an attestation is never accepted where data decides the gate.
+    needed = (judged.get("gate") or {}).get("attestation")
+    if payload.get("gate_attestation") != needed:
+        raise StepPreviewMismatch(
+            "STEP_GATE_ATTESTATION_MISMATCH",
+            "the confirmed operation does not match the gate's attestation requirement",
+        )
     if step_basis_hash(detail, step["id"], payload["status"]) != payload["expected_basis_hash"]:
         raise StepPreviewMismatch(
             "STEP_BASIS_CHANGED",
@@ -515,7 +581,7 @@ def verify_step_update(reads: Any, payload: dict[str, Any]) -> dict[str, Any]:
     return judged
 
 
-def _gate(result, detail, project, step):
+def _gate(result, detail, project, step, target=None):
     """The stored-evidence gate the write path applies to an APPROVAL_GATE step."""
 
     if not is_approval_gate(step):
@@ -527,8 +593,17 @@ def _gate(result, detail, project, step):
             "approved_roles": [], "result": None}
 
     if kind is None:
-        # transition_repository passes no gate result for these: never met.
-        gate["blocking_codes"] = ["NO_DATABASE_GATE_EVALUATOR"]
+        # CP12H.MASTER (DEC-SIMPLIFY P7): a gate with no database evaluator is
+        # satisfied only by the user's confirmation that the operator attests
+        # it. The operation carries gate_attestation; the write path accepts
+        # it only from that confirmed operation.
+        # Starting such a Step needs nothing; only completing it is attested.
+        if target == "COMPLETED":
+            gate.update(kind=GATE_ATTESTATION_KIND, all_met=True, attestation=GATE_ATTESTATION,
+                        result=_attested_gate(project))
+        else:
+            gate.update(kind=GATE_DEFERRED_KIND, all_met=True, attestation=None,
+                        result=_attested_gate(project, GATE_DEFERRED_KIND))
         result["gate"] = gate
         return gate
 

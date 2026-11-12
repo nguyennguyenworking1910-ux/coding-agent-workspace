@@ -59,8 +59,10 @@ def run(repository, text):
     (f"Ghi nhận Payment Request PAY-001 cho {NAMED}", "BLOCKED", "ProcurementDependencyError"),
     (f"Legal đã phê duyệt revision mới nhất của {NAMED}.", "BLOCKED",
      "MISSING_DOCUMENT_REVISION"),
-    (f"Upload a new CONTRACT revision for {NAMED}, content hash sha256:nl4d3", "PREVIEW_VALID",
-     None),
+    # CP12H.MASTER: metadata-only revisions take no content hash.
+    (f"Upload a new CONTRACT revision for {NAMED}", "PREVIEW_VALID", None),
+    (f"Upload a new CONTRACT revision for {NAMED}, content hash sha256:nl4d3", "BLOCKED",
+     "CONTENT_HASH_NOT_ACCEPTED"),
     (f"Thêm revision tài liệu cho {NAMED}", "NEEDS_CLARIFICATION", None),
 ])
 def test_a_preview_on_the_test_database_reads_only(repository, text, outcome, code):
@@ -81,7 +83,7 @@ def test_a_preview_on_the_test_database_reads_only(repository, text, outcome, co
 
 
 def test_a_new_revision_would_be_the_first(repository):
-    result = run(repository, f"Upload a new CONTRACT revision for {NAMED}, content hash h")
+    result = run(repository, f"Upload a new CONTRACT revision for {NAMED}")
 
     assert result["domain_validation"]["plan"]["revision_number"] == 1
     assert result["domain_validation"]["plan"]["previous_revision_id"] is None

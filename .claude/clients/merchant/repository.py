@@ -417,7 +417,13 @@ class MerchantRepository:
                 effective_date,
                 expiry_date,
                 superseded_by,
-                created_at
+                created_at,
+                -- CP12H.MASTER: evidence labels (migrations 008-010). Read
+                -- through to_jsonb so a database without them (runtime,
+                -- schema 1-7) returns NULL instead of failing.
+                to_jsonb(revision) ->> 'evidence_status' AS evidence_status,
+                to_jsonb(revision) ->> 'signing_attestation'
+                    AS signing_attestation
             FROM merchant_ops.document_revisions AS revision
             WHERE revision.project_id = %s
                OR revision.id = (
@@ -447,7 +453,10 @@ class MerchantRepository:
                 approval.approver_role,
                 approval.approval_status,
                 approval.approved_at,
-                approval.notes
+                approval.notes,
+                -- CP12H.MASTER (migration 010), NULL where absent.
+                to_jsonb(approval) ->> 'recorded_by' AS recorded_by,
+                to_jsonb(approval) ->> 'decided_at' AS decided_at
             FROM merchant_ops.document_approvals AS approval
             JOIN merchant_ops.document_revisions AS revision
               ON revision.id = approval.document_revision_id

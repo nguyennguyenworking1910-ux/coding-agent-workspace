@@ -362,6 +362,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--allow-reopen",
         action="store_true",
     )
+    # CP12H.MASTER: present only for the confirmed operation of a verified
+    # preview; --operator-id names the previewed operator, and trusted code
+    # refuses unless it equals the local configuration.
+    project_update.add_argument("--merchant-code")
+    project_update.add_argument("--operator-id")
+    project_update.add_argument("--expected-basis", dest="expected_basis_hash")
     # Read-only natural-language Project creation preview. Hints are
     # untrusted candidates; only repository resolution binds identities.
     project_preview = project_actions.add_parser("preview")
@@ -418,6 +424,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     step_update.add_argument("--project-id")
     step_update.add_argument("--merchant-code")
     step_update.add_argument("--expected-basis", dest="expected_basis_hash")
+    # CP12H.MASTER: only on the confirmed operation of an attested gate.
+    step_update.add_argument("--gate-attestation", choices=("OPERATOR_ATTESTED",))
     # CP12H.NL4B: read-only natural-language Step Update preview.
     step_preview = step_actions.add_parser("preview")
     step_preview.add_argument("--request", required=True)
@@ -477,6 +485,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     revision_create.add_argument("--expiry-date", type=_iso_date)
     revision_create.add_argument("--created-by")
     revision_create.add_argument("--revision-id")
+    # CP12H.MASTER: present only for the confirmed operation of a verified
+    # preview; --operator-id names the previewed operator, and trusted code
+    # refuses unless it equals the local configuration.
+    revision_create.add_argument("--merchant-code")
+    revision_create.add_argument("--operator-id")
+    revision_create.add_argument("--expected-basis", dest="expected_basis_hash")
 
     document_approve = document_actions.add_parser("approve")
     _add_write_mode(document_approve)
@@ -504,6 +518,26 @@ def build_argument_parser() -> argparse.ArgumentParser:
     document_approve.add_argument("--acted-by")
     document_approve.add_argument("--notes")
     document_approve.add_argument("--approval-id")
+    document_approve.add_argument("--project-id")
+    # CP12H.MASTER: present only for the confirmed operation of a verified
+    # preview; --operator-id names the previewed operator, and trusted code
+    # refuses unless it equals the local configuration.
+    document_approve.add_argument("--merchant-code")
+    document_approve.add_argument("--operator-id")
+    document_approve.add_argument("--expected-basis", dest="expected_basis_hash")
+
+    # CP12H.MASTER: operator-attested signing, only as a confirmed operation.
+    document_sign = document_actions.add_parser("sign")
+    _add_write_mode(document_sign)
+    document_sign.add_argument("revision_id")
+    document_sign.add_argument("--signed-at", type=_iso_datetime)
+    document_sign.add_argument("--project-id")
+    # CP12H.MASTER: present only for the confirmed operation of a verified
+    # preview; --operator-id names the previewed operator, and trusted code
+    # refuses unless it equals the local configuration.
+    document_sign.add_argument("--merchant-code")
+    document_sign.add_argument("--operator-id")
+    document_sign.add_argument("--expected-basis", dest="expected_basis_hash")
 
     procurement_parser = resources.add_parser("procurement")
     procurement_actions = procurement_parser.add_subparsers(
@@ -909,7 +943,7 @@ def build_write_payload(
         return payload
 
     if command == "project update":
-        return _selected_fields(
+        return _with_binding(args, _selected_fields(
             args,
             (
                 "project_id",
@@ -919,7 +953,7 @@ def build_write_payload(
                 "triggered_by",
                 "allow_reopen",
             ),
-        )
+        ))
 
     if command == "step update":
         payload = _selected_fields(
@@ -934,14 +968,14 @@ def build_write_payload(
                 "allow_reopen",
             ),
         )
-        # Present only when confirming a preview (CP12H.NL4C1).
-        for name in ("project_id", "merchant_code", "expected_basis_hash"):
+        # Present only when confirming a preview (CP12H.NL4C1, CP12H.MASTER).
+        for name in ("project_id", "merchant_code", "expected_basis_hash", "gate_attestation"):
             if getattr(args, name, None) is not None:
                 payload[name] = getattr(args, name)
         return payload
 
     if command == "document revision-create":
-        return _selected_fields(
+        return _with_binding(args, _selected_fields(
             args,
             (
                 "revision_id",
@@ -952,7 +986,15 @@ def build_write_payload(
                 "expiry_date",
                 "created_by",
             ),
-        )
+        ))
+
+    if command == "document sign":
+        payload = _with_binding(args, _selected_fields(
+            args,
+            ("revision_id", "signed_at", "project_id"),
+        ))
+        payload["document_revision_id"] = payload.pop("revision_id")
+        return payload
 
     if command == "document approve":
         payload = _selected_fields(
@@ -971,7 +1013,9 @@ def build_write_payload(
         payload["document_revision_id"] = payload.pop(
             "revision_id"
         )
-        return payload
+        if getattr(args, "project_id", None) is not None:
+            payload["project_id"] = args.project_id
+        return _with_binding(args, payload)
 
     if command == "procurement update":
         payload = _selected_fields(
@@ -1376,6 +1420,15 @@ def _selected_alert_project_id(
         )
 
     return filtered_project_id or legacy_project_id
+
+
+def _with_binding(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
+    """CP12H.MASTER: add the confirmed-operation binding fields when present."""
+
+    for name in ("merchant_code", "operator_id", "expected_basis_hash"):
+        if getattr(args, name, None) is not None:
+            payload[name] = getattr(args, name)
+    return payload
 
 
 def _add_write_mode(parser: argparse.ArgumentParser) -> None:

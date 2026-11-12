@@ -169,6 +169,11 @@ def test_test_mode_admits_project_create_and_runtime_stays_disabled():
         "step update",
         # CP12H.NL4D4A: the confirmed Purchase Request.
         "procurement update",
+        # CP12H.MASTER: confirmed lifecycle operations (test database only).
+        "document revision-create",
+        "document approve",
+        "document sign",
+        "project update",
     }
 
     with pytest.raises(merchant_direct_handoff.DirectPreflightRefused) as error:
@@ -181,7 +186,9 @@ def test_test_mode_admits_project_create_and_runtime_stays_disabled():
         merchant_direct_handoff.preflight_direct_execute(
             attempt("test", "project update")
         )
-    assert error.value.reason == "TEST_MODE_COMMAND_UNSUPPORTED"
+    # CP12H.MASTER: `project update` joined test mode only as the user's
+    # confirmed Project completion; anything else is refused before any spend.
+    assert error.value.reason == "LIFECYCLE_CONFIRMATION_REQUIRED"
 
 
 def test_test_scope_runs_without_a_runtime_capability(monkeypatch):

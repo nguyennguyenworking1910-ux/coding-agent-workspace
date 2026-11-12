@@ -65,12 +65,17 @@ def test_test_mode_admits_step_update_and_runtime_stays_disabled():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
     # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
     assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
-                                          "procurement update"}
+                                          "procurement update",
+                                          # CP12H.MASTER: confirmed lifecycle operations.
+                                          "document revision-create", "document approve",
+                                          "document sign", "project update"}
     assert handoff.direct_execute_enabled("step update", "test")
     assert not handoff.direct_execute_enabled("step update", "runtime")
-    # No other Step or Project write joined test mode.
+    # CP12H.MASTER: Project completion and decisions joined test mode only as
+    # confirmed lifecycle operations; runtime stays disabled.
     for command in ("project update", "document approve"):
-        assert not handoff.direct_execute_enabled(command, "test")
+        assert command in handoff.LIFECYCLE_ONLY_COMMANDS
+        assert not handoff.direct_execute_enabled(command, "runtime")
 
 
 @pytest.mark.parametrize("target", [None, "test"])

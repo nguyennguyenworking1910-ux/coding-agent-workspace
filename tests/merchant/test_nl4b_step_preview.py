@@ -278,16 +278,26 @@ def test_another_projects_revision_never_satisfies_the_gate():
     assert codes(preview(f"Đánh dấu bước 6 của {NVC} là hoàn thành", reader)) == ["GATE_NOT_MET"]
 
 
-def test_gate_with_no_database_evaluator_is_never_ready():
+def test_gate_with_no_database_evaluator_is_completed_only_by_attestation():
+    # CP12H.MASTER (owner-approved DEC-SIMPLIFY P7): an evaluator-less gate no
+    # longer blocks forever. Completing it is READY only as the user's
+    # confirmed, operator-attested operation; nothing is verified by data.
     result = preview(f"Đánh dấu bước 7 của {NVC} là hoàn thành")
 
-    assert result["outcome"] == BLOCKED
-    assert result["gate"]["blocking_codes"] == ["NO_DATABASE_GATE_EVALUATOR"]
+    assert result["outcome"] == READY, result["blocking"]
+    assert result["gate"]["kind"] == "OPERATOR_ATTESTATION"
+    assert result["gate"]["database_verifiable"] is False
+    assert result["requested_operation"]["gate_attestation"] == "OPERATOR_ATTESTED"
+    assert result["requested_operation"]["argv"][-2:] == ["--gate-attestation", "OPERATOR_ATTESTED"]
 
 
-def test_merchant_activation_completion_is_not_previewed_as_ready():
+def test_an_integration_step_completion_is_previewed_with_its_attestation():
+    # CP12H.MASTER: only the activation Step activates the Merchant (and that
+    # is re-checked in the same transaction), so other INTEGRATION_NEW_MERCHANT
+    # Steps are no longer blanket-blocked.
     result = preview("Mark step 3 of project Beta Integration as completed")
-    assert result["outcome"] == BLOCKED and "MERCHANT_ACTIVATION_NOT_PREVIEWED" in codes(result)
+    assert "MERCHANT_ACTIVATION_NOT_PREVIEWED" not in codes(result)
+    assert result["outcome"] == READY, result["blocking"]
 
 
 # --------------------------------------------------------- clarification

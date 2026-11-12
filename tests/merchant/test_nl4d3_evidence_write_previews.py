@@ -166,10 +166,15 @@ def test_adding_a_revision_is_not_a_project_creation():
     assert interpret_project_request("Tạo project mở rạp Beta Nguyễn Văn Cừ").kind == PROJECT_CREATE
 
 
-def test_signing_is_not_an_evidence_write():
+def test_signing_is_a_previewed_evidence_write():
+    # CP12H.MASTER (DEC-SIMPLIFY P4): signing is recorded as operator-attested.
     text = f"Ký revision mới nhất của {NAMED}"
-    assert interpret_project_request(text).kind != EVIDENCE_WRITE
-    assert preview(text)["outcome"] == CLARIFY
+    assert interpret_project_request(text).kind == EVIDENCE_WRITE
+    result = preview(text, EvidenceReader(revisions=[revision(P, 1)]))
+    assert result["operation_kind"] == "RECORD_SIGNING"
+    # The signing gate (three APPROVED decisions) is not met: blocked, no operation.
+    assert result["outcome"] == BLOCKED and result["requested_operation"] is None
+    assert {n["code"] for n in result["policy_notes"]} == {"OPERATOR_ATTESTED_SIGNED"}
 
 
 def test_unicode_forms_parse_the_same():
@@ -266,30 +271,42 @@ def test_a_project_name_is_never_read_as_a_reference():
 # ---------------------------------------------------------------- revisions
 
 
-def test_a_revision_needs_its_type_and_content_hash():
+def test_a_revision_needs_its_type_but_no_content_hash():
+    # CP12H.MASTER (DEC-SIMPLIFY P5): a revision is metadata-only; no file or hash.
     result = preview(f"Thêm revision tài liệu cho {NAMED}.",
                      EvidenceReader(revisions=[revision(P, 1)]))
 
     assert result["outcome"] == CLARIFY
     assert result["operation_kind"] == "REGISTER_DOCUMENT_REVISION"
-    assert set(result["missing_required_fields"]) == {"document_type", "content_hash"}
+    assert set(result["missing_required_fields"]) == {"document_type"}
     assert result["existing_evidence"]["active_revisions"][0]["revision_number"] == 1
 
 
 def test_a_complete_revision_preview_supersedes_the_active_one():
-    result = preview(f"Upload a new CONTRACT revision for {NAMED}, content hash sha256:abc",
+    result = preview(f"Upload a new CONTRACT revision for {NAMED}",
                      EvidenceReader(revisions=[revision(P, 1)]))
 
     assert result["outcome"] == VALID
     plan = result["domain_validation"]["plan"]
     assert plan["revision_number"] == 2 and plan["previous_revision_number"] == 1
-    assert result["requested_fields"]["content_hash_provided"] is True
-    assert "sha256:abc" not in json.dumps(result)
+    assert {n["code"] for n in result["policy_notes"]} == {"METADATA_ONLY_REVISION"}
     assert_grants_nothing(result)
 
 
+def test_a_typed_content_hash_is_never_accepted_or_echoed():
+    # CP12H.MASTER: a typed hash cannot be verified, so it is never recorded.
+    result = preview(f"Upload a new CONTRACT revision for {NAMED}, content hash sha256:abc",
+                     EvidenceReader(revisions=[revision(P, 1)]))
+
+    assert result["outcome"] == BLOCKED
+    assert result["domain_validation"]["error"]["code"] == "CONTENT_HASH_NOT_ACCEPTED"
+    assert result["requested_fields"]["content_hash_provided"] is True
+    assert "sha256:abc" not in json.dumps(result)
+    assert result["requested_operation"] is None
+
+
 def test_an_invalid_date_range_is_blocked():
-    result = preview(f"Upload a new CONTRACT revision for {NAMED}, content hash h1, "
+    result = preview(f"Upload a new CONTRACT revision for {NAMED}, "
                      "effective 2026-12-01, expiry 2026-11-01")
 
     assert result["outcome"] == BLOCKED
@@ -299,16 +316,18 @@ def test_an_invalid_date_range_is_blocked():
 # ---------------------------------------------------------------- approvals
 
 
-def test_a_valid_approval_stops_at_the_undecided_attestation_policy():
+def test_a_valid_approval_is_an_operator_recorded_decision():
+    # CP12H.MASTER (DEC-SIMPLIFY P1-P3): no POLICY_UNDECIDED; the operator
+    # records the decision and the approver is never identified.
     result = preview(f"Legal đã phê duyệt revision mới nhất của {NAMED}.",
                      EvidenceReader(revisions=[revision(P, 1)]))
 
-    assert result["outcome"] == POLICY_UNDECIDED
+    assert result["outcome"] == VALID
     assert result["evidence_type"] == "LEGAL_APPROVAL"
     assert result["domain_validation"]["status"] == "VALID"
     assert result["domain_validation"]["plan"]["target_status"] == "APPROVED"
-    assert {b["code"] for b in result["policy_blockers"]} == {
-        "APPROVAL_ATTESTATION_POLICY_UNDECIDED", "APPROVAL_ACTOR_UNBOUND"}
+    assert result["policy_blockers"] == []
+    assert {n["code"] for n in result["policy_notes"]} == {"OPERATOR_RECORDED_DECISION"}
     assert "final" in result["domain_validation"]["finality"].lower()
     assert_grants_nothing(result)
 
@@ -322,7 +341,7 @@ def test_each_role_previews(text, role):
     result = preview(text, EvidenceReader(revisions=[revision(P, 1)]))
 
     assert result["evidence_type"] == f"{role}_APPROVAL"
-    assert result["outcome"] == POLICY_UNDECIDED
+    assert result["outcome"] == VALID
 
 
 def test_an_approval_without_a_revision_is_blocked():
@@ -355,7 +374,7 @@ def test_a_pending_approval_can_be_decided():
                             approvals=[approval(1, "PARTNER", status="PENDING")])
     result = preview(f"Add Partner approval for {NAMED}", reader)
 
-    assert result["outcome"] == POLICY_UNDECIDED
+    assert result["outcome"] == VALID
     assert result["domain_validation"]["plan"]["operation"] == "UPDATE"
 
 
@@ -368,7 +387,7 @@ def test_multiple_active_document_types_ask_which_one():
 
     assert asked["outcome"] == CLARIFY
     assert {c["document_type"] for c in asked["candidates"]} == {"CONTRACT", "ADDENDUM"}
-    assert chosen["outcome"] == POLICY_UNDECIDED
+    assert chosen["outcome"] == VALID
     assert chosen["existing_evidence"]["revision"]["document_type"] == "ADDENDUM"
 
 
@@ -512,19 +531,16 @@ def test_a_mixed_destructive_request_is_not_downgraded(isolated):
     ["document", "revision-create", P, "--type", "CONTRACT", "--content-hash", "h"],
 ])
 def test_a_typed_evidence_scope_is_still_refused(argv):
-    # Unchanged by NL4D3: neither target can execute these commands, so the
-    # preflight refuses a typed scope before anything is reserved or spent.
+    # Runtime never executes these. CP12H.NL4D4A / CP12H.MASTER: on the test
+    # database each runs only as the user's confirmation of a verified
+    # preview; a typed scope is refused at the intent gate, and the preflight
+    # requires the confirmed pending operation with the identical argv
+    # (test_nl4d4a_purchase_request.py, test_master_lifecycle_postgres.py).
     command = " ".join(argv[:2])
-    if command == "procurement update":
-        # CP12H.NL4D4A: test mode admits only the user's confirmation of a
-        # verified Purchase Request preview; a typed scope is refused at the
-        # intent gate (test_nl4d4a_purchase_request.py).
-        assert handoff.direct_execute_enabled(command, "runtime") is False
-        return
-
-    assert command not in handoff.TEST_MODE_COMMANDS
-    assert handoff.direct_execute_enabled(command, "test") is False
     assert handoff.direct_execute_enabled(command, "runtime") is False
+    if command != "procurement update":
+        assert command in handoff.LIFECYCLE_ONLY_COMMANDS
+        assert handoff.is_lifecycle_attempt(command, argv[2:], "test")
 
 
 # --------------------------------------------------------- CLI and security
@@ -542,8 +558,10 @@ def test_the_cli_exposes_a_read_that_cannot_write():
 def test_write_authority_is_unchanged():
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
     # CP12H.NL4D4A: the confirmed Purchase Request joined test mode.
+    # CP12H.MASTER: the confirmed lifecycle operations joined test mode.
     assert handoff.TEST_MODE_COMMANDS == {"merchant create", "project create", "step update",
-                                          "procurement update"}
+                                          "procurement update", "document revision-create",
+                                          "document approve", "document sign", "project update"}
 
 
 @pytest.fixture

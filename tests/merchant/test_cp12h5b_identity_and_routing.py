@@ -501,12 +501,16 @@ def test_test_to_runtime_escalation_in_state_is_rejected():
 
 def test_test_mode_refuses_non_create_writes(fake_runtime_handler, capsys):
     calls, _ = fake_runtime_handler
-    submit(f"Update merchant project {PROJECT_ID}", argv=UPDATE_ARGV,
-           target="test")
-    assert dispatch() is None
-    assert execute_request(UPDATE_ARGV, target="test") == 0
+    # CP12H.MASTER: `project update` runs on the test database only as the
+    # user's confirmed Project completion (lifecycle pending store), so a
+    # typed test-target scope is now refused earlier, at the intent gate,
+    # before any run, dispatch or spend.
+    result = submit(f"Update merchant project {PROJECT_ID}", argv=UPDATE_ARGV,
+                    target="test")
+    assert result["decision"] == "block"
+    assert "Xác nhận thực hiện" in result["reason"]
+    assert runtime_state.load_state(LEAD) is None
     assert calls == []
-    _refused_before_spend(capsys, "TEST_MODE_COMMAND_UNSUPPORTED")
 
 
 def test_runtime_execution_stays_disabled_without_code_change():

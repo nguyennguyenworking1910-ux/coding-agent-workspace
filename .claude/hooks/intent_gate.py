@@ -785,6 +785,125 @@ def confirm_pending_purchase_request(
     )
 
 
+LIFECYCLE_CONFIRMATION_NOT_ENABLED = (
+    "This operation is enabled only on the test database (runtime Direct "
+    "EXECUTE is disabled), so it was not confirmed; it stays pending until it "
+    "expires. Nothing was written."
+)
+
+
+def confirm_pending_lifecycle(
+    session_id: Any,
+    command: str,
+    request: str,
+    run_id: str,
+) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]] | None:
+    """CP12H.MASTER: "/solve Xác nhận thực hiện <code>" spends one pending
+    lifecycle operation (metadata-only revision, approval decision, attested
+    signing, Purchase Order, Payment Request or Project completion).
+
+    Same contract as ``confirm_pending_purchase_request``: the operation and
+    the recording operator come only from the verified record; the prompt
+    only picks which record. Refused unspent while execution is disabled for
+    the record's target or the trusted operator is unavailable or changed.
+    """
+    from claude.hooks import merchant_pending_confirmation as pending
+
+    parsed = pending.parse_lifecycle_confirmation(request)
+
+    if parsed is None:
+        return None
+
+    if command != "solve":
+        return block(
+            "An operation confirmation is accepted only as `/solve Xác nhận "
+            "thực hiện <code>`. Nothing was written."
+        )
+
+    from claude.clients.merchant.operator_identity import (
+        OperatorIdentityError,
+        require_operator,
+    )
+    from claude.hooks.merchant_direct_handoff import direct_execute_enabled
+
+    def allowed(record: dict[str, Any]) -> str | None:
+        operation = record.get("operation") or {}
+        if not direct_execute_enabled(
+            str(operation.get("command")), str(record.get("database_target"))
+        ):
+            return LIFECYCLE_CONFIRMATION_NOT_ENABLED
+        try:
+            require_operator(record.get("operator_id"))
+        except OperatorIdentityError as error:
+            return (
+                "The trusted recording operator is not the one this operation "
+                f"was previewed with ({error.reason}), so it was not confirmed. "
+                "Nothing was written. Preview it again."
+            )
+        return None
+
+    action, code = parsed
+    record, refusal = pending.resolve(
+        session_id, action, code, run_id,
+        kind=pending.LIFECYCLE_KIND, allowed=allowed,
+    )
+
+    if refusal is not None:
+        return block(refusal)
+
+    operation = record["operation"]
+
+    if action == pending.CANCEL:
+        return block(
+            "Cancelled the pending operation "
+            f"{pending._describe(record, pending.LIFECYCLE_KIND)}. Nothing was written."
+        )
+
+    try:
+        from claude.agents.tools.merchant.lifecycle_operation import validate_operation
+        from claude.system.merchant_runtime_handoff import validate_direct_scope
+
+        validate_operation(operation)
+
+        if (
+            operation["operation_id"] != record["operation_id"]
+            or operation["project_id"] != record["project_id"]
+            or operation["operator_id"] != record["operator_id"]
+            or operation["database_target"] != record["database_target"]
+        ):
+            raise ValueError("pending record fields disagree")
+
+        validated = validate_direct_scope(
+            operation["argv"], operation["database_target"]
+        )
+    except Exception:  # noqa: BLE001 - a damaged record never runs
+        return block(
+            "The pending operation could not be verified, so it was not "
+            "confirmed. Nothing was written. Preview it again."
+        )
+
+    return _conversational_scope(
+        validated,
+        request,
+        "The user confirmed the trusted pending operation "
+        f"{record['operation_id']} in their own prompt; the operation and the "
+        "recording operator come from verified preview evidence and trusted "
+        "local configuration, not from a model.",
+        {
+            "kind": "lifecycle",
+            "operation": operation["operation"],
+            "operation_id": record["operation_id"],
+            "summary": operation.get("summary"),
+            "project_id": record["project_id"],
+            "project_title": operation["project_title"],
+            "merchant_code": operation["merchant_code"],
+            "operator_id": operation["operator_id"],
+            "source_run_id": record["source_run_id"],
+            "pending_created_at": record["created_at"],
+        },
+    )
+
+
 def run(
     payload: dict[str, Any],
     *,
@@ -933,6 +1052,23 @@ def run(
         # authorized only by the user's confirmation of a verified preview.
         # CP12H.NL4D4A: likewise, procurement is recorded only from the user's
         # confirmation of a verified Purchase Request preview.
+        # CP12H.MASTER: revisions, approvals, signing and Project completion
+        # are authorized only by the user's confirmation of a verified preview.
+        if merchant_scope["command"] in (
+            "document revision-create", "document approve", "document sign",
+            "project update",
+        ) and (
+            merchant_scope["command"] == "document sign"
+            or merchant_scope.get("database_target") == "test"
+        ):
+            return block(
+                "This operation cannot be authorized with a typed "
+                "--merchant-scope. Preview it in your own words (for example "
+                "\"Ghi nhận Legal đã phê duyệt hợp đồng của Project ... trên "
+                "database test\"), then type `/solve Xác nhận thực hiện <code>`. "
+                "Nothing was dispatched."
+            )
+
         if merchant_scope["command"] == "procurement update":
             return block(
                 "A procurement record cannot be authorized with a typed "
@@ -993,6 +1129,11 @@ def run(
 
         if conversational is None:
             conversational = confirm_pending_purchase_request(
+                session_id, command, request, run_id
+            )
+
+        if conversational is None:
+            conversational = confirm_pending_lifecycle(
                 session_id, command, request, run_id
             )
 
@@ -1261,7 +1402,13 @@ def run(
         # Shown to the user by this hook, not rendered by the model.
         detail = envelope_payload["conversational_confirmation"]
         output["systemMessage"] = (
-            f"Confirmed Purchase Request {detail['reference']!r} for Project "
+            f"Confirmed operation {detail['operation_id'][:8]}: "
+            f"{detail.get('summary') or detail['operation']} for Project "
+            f"{detail['project_title']!r} ({detail['merchant_code']}, project_id "
+            f"{detail['project_id']}), recorded by operator {detail['operator_id']} "
+            f"on the {merchant_scope['database_target']} database. It runs once now."
+            if detail.get("kind") == "lifecycle"
+            else f"Confirmed Purchase Request {detail['reference']!r} for Project "
             f"{detail['project_title']!r} ({detail['merchant_code']}, project_id "
             f"{detail['project_id']}), recorded by operator {detail['operator_id']} "
             f"on the {merchant_scope['database_target']} database. It runs once now."

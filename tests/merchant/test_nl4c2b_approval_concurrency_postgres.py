@@ -26,6 +26,7 @@ import json
 import threading
 import uuid
 
+import psycopg
 import pytest
 
 from claude.agents.tools.merchant import write_adapters
@@ -281,13 +282,21 @@ def test_raw_rejection_before_the_gate_read_is_refused_by_the_gate(gated, monkey
 
     update = in_thread(lambda: apply(gated))
     assert reached.wait(30)
-    raw(gated, "UPDATE merchant_ops.document_approvals SET approval_status = 'REJECTED' "
-               "WHERE id = %s", gated.approval)     # bypasses every repository lock
-    release.set()
+    # CP12H.MASTER (migration 010): a recorded decision is immutable, so a raw
+    # APPROVED -> REJECTED flip is refused by the database itself; the
+    # bypassing change used here is the owner-only removal of the approval.
+    try:
+        with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
+            raw(gated, "UPDATE merchant_ops.document_approvals SET approval_status = 'REJECTED' "
+                       "WHERE id = %s", gated.approval)
+        raw(gated, "DELETE FROM merchant_ops.document_approvals WHERE id = %s",
+            gated.approval)                          # bypasses every repository lock
+    finally:
+        release.set()
     update["thread"].join(30)
 
     assert isinstance(update.get("error"), WorkflowGateNotMetError), update
-    assert facts(gated) == (before[0], before[1], "REJECTED")
+    assert step(gated.repository, gated.project_id, 5)["status"] == before[0]
 
 
 @pytest.mark.parametrize("kind", ["update-approval", "new-revision", "delete-approval"])
@@ -323,6 +332,11 @@ def test_raw_change_after_the_gate_read_waits_for_the_commit(gated, monkeypatch,
     update["thread"].join(30)
     writer["thread"].join(30)
 
+    if kind == "update-approval":
+        # CP12H.MASTER (migration 010): the database refuses changing a
+        # recorded decision at all; the Step Update committed against what it read.
+        assert isinstance(writer.get("error"), psycopg.errors.IntegrityConstraintViolation), writer
+        writer.pop("error")
     assert "error" not in update and "error" not in writer, (update, writer)
     status, events, _ = facts(gated) if kind != "delete-approval" else (
         step(gated.repository, gated.project_id, 5)["status"], before[1] + 1, None)

@@ -180,6 +180,7 @@ MERCHANT_WRITE_COMMANDS = frozenset(
         "contact import",
         "document approve",
         "document revision-create",
+        "document sign",
         "integration identifier-set",
         "merchant activate",
         "merchant activate-all",

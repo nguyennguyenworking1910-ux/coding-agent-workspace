@@ -191,7 +191,28 @@ def validate_direct_scope(
     ):
         _require_canonical_step_argv(tokens, payload)
 
-    if command == "procurement update":
+    from claude.agents.tools.merchant import lifecycle_operation
+
+    lifecycle_kind = (
+        lifecycle_operation.kind_of(command, payload)
+        if command in lifecycle_operation.LIFECYCLE_COMMANDS
+        else None
+    )
+
+    if lifecycle_kind is not None and lifecycle_operation.is_confirmed_payload(payload):
+        # CP12H.MASTER: a confirmed lifecycle operation is the preview's
+        # exact canonical argv, nothing added, removed or reordered.
+        try:
+            expected = lifecycle_operation.argv_from_payload(command, payload)
+        except (lifecycle_operation.LifecycleMismatch, KeyError, ValueError) as error:
+            raise MerchantRuntimeHandoffError(
+                "A confirmed operation must be the preview's exact operation"
+            ) from error
+        if list(tokens) != expected:
+            raise MerchantRuntimeHandoffError(
+                "A confirmed operation scope must be the preview's exact argv"
+            )
+    elif command == "procurement update":
         from claude.agents.tools.merchant.purchase_request import (
             is_confirmed_payload,
         )
@@ -310,6 +331,7 @@ def _require_canonical_step_argv(
                 "project_id": payload["project_id"],
                 "merchant_code": payload["merchant_code"],
                 "expected_basis": payload["expected_basis_hash"],
+                "gate_attestation": payload.get("gate_attestation"),
             }
         )
     except KeyError as error:

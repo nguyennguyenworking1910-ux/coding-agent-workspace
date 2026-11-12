@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from claude.agents.tools.merchant.engine import (
+    WorkflowGateNotMetError,
     WorkflowStepNotFoundError,
     WorkflowVersionConflictError,
     propose_step_transition,
@@ -90,6 +91,7 @@ class MerchantStepTransitionRepository:
         gate_required: bool = False,
         gate_result: GateValidationResult | None = None,
         precondition: Callable[[Any], None] | None = None,
+        gate_attestation: str | None = None,
     ) -> StepTransitionResult:
         """Lock project state, validate, update, and audit.
 
@@ -185,6 +187,58 @@ class MerchantStepTransitionRepository:
                         )
                     )
 
+                    if (
+                        persisted_gate_kind is None
+                        and stored_gate_required
+                        and gate_attestation is None
+                        and target_status != "COMPLETED"
+                    ):
+                        # CP12H.MASTER (DEC-SIMPLIFY P7): a gate with no
+                        # database evaluator guards completion only; starting
+                        # the Step needs no attestation.
+                        effective_gate_result = GateValidationResult(
+                            gate_name="ATTESTED_AT_COMPLETION",
+                            project_id=str(project["id"]),
+                            document_revision_id=None,
+                            all_met=True,
+                            blocking_codes=(),
+                            approved_roles=(),
+                            missing_roles=(),
+                            requires_procurement=False,
+                            purchase_request_present=False,
+                            already_signed=False,
+                        )
+                    elif (
+                        gate_attestation is not None
+                        and persisted_gate_kind is None
+                        and stored_gate_required
+                        and target_status == "COMPLETED"
+                    ):
+                        # CP12H.MASTER (DEC-SIMPLIFY P7): an evaluator-less
+                        # gate attested in a confirmed operation (the
+                        # precondition re-verified the preview above).
+                        if precondition is None or gate_attestation != "OPERATOR_ATTESTED":
+                            raise WorkflowGateNotMetError(
+                                "A gate attestation needs a confirmed operation"
+                            )
+                        effective_gate_result = GateValidationResult(
+                            gate_name="OPERATOR_ATTESTATION",
+                            project_id=str(project["id"]),
+                            document_revision_id=None,
+                            all_met=True,
+                            blocking_codes=(),
+                            approved_roles=(),
+                            missing_roles=(),
+                            requires_procurement=False,
+                            purchase_request_present=False,
+                            already_signed=False,
+                        )
+                    elif gate_attestation is not None:
+                        raise WorkflowGateNotMetError(
+                            "A gate attestation applies only to completing a Step whose "
+                            "gate has no stored-evidence evaluator"
+                        )
+
                     if persisted_gate_kind is not None:
                         revisions = (
                             self._read_document_revisions(
@@ -245,6 +299,8 @@ class MerchantStepTransitionRepository:
                     new_values = dict(
                         transition_plan.new_values
                     )
+                    if gate_attestation is not None:
+                        new_values["gate_attestation"] = gate_attestation
 
                     # An omitted assignment changes nothing, so it is
                     # not reported as an assignment change.
@@ -625,8 +681,14 @@ class MerchantProjectTransitionRepository:
         occurred_at: datetime | None = None,
         triggered_by: str | None = None,
         allow_reopen: bool = False,
+        precondition: Callable[[Any], None] | None = None,
     ) -> ProjectTransitionResult:
-        """Lock project state, validate, update, and audit."""
+        """Lock project state, validate, update, and audit.
+
+        ``precondition(connection)`` (CP12H.MASTER) runs after the Project and
+        its steps are locked and before anything changes; raising refuses
+        the whole transaction.
+        """
 
         normalized_project_id = _uuid(
             project_id,
@@ -651,6 +713,9 @@ class MerchantProjectTransitionRepository:
                         cursor,
                         normalized_project_id,
                     )
+
+                    if precondition is not None:
+                        precondition(connection)
 
                     transition_plan = (
                         propose_project_transition(

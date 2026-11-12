@@ -143,7 +143,8 @@ def test_blank_required_string_is_missing():
         (
             "document approve",
             (
-                "revision_id",
+                # CP12H.MASTER: the payload field (build_write_payload).
+                "document_revision_id",
                 "approver_role",
                 "approval_status",
             ),
@@ -194,6 +195,8 @@ def test_static_completeness_contract_covers_all_write_commands():
         "step update",
         "document revision-create",
         "document approve",
+        # CP12H.MASTER: operator-attested signing.
+        "document sign",
         "procurement update",
         "integration identifier-set",
     }

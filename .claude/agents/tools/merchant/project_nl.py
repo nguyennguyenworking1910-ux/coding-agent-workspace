@@ -153,6 +153,8 @@ _FURTHER_ACTION = (
     r"(?:tao|xoa|sua|them|gui|len lich|dat lich|cap nhat|danh dau|chuyen|duyet|"
     r"kich hoat|thuc thi|trien khai|chay|huy|doi|thay doi|nhap|gan|hoan thanh|"
     r"bat dau|bo qua|create|delete|remove|fix|update|add|send|schedule|book|"
+    # CP12H.MASTER: a second recorded operation ("... và ghi nhận PO ...").
+    r"ghi nhan|record|ky|sign|hoan tat|khoi dong|ket thuc|begin|finish|"
     r"deploy|run|set|change|approve|activate|execute|cancel|mark|complete|start|"
     r"skip|import|assign|email|notify|edit|refactor|implement)\b"
 )
@@ -183,7 +185,9 @@ _STOP_WORDS = frozenset(
     "depend depends waiting waits blocked bi "
     # "Project X completed?", "Project X đã hoàn thành chưa?" (pairs below:
     # a bare "da" also folds from "Đà" as in "Đà Nẵng").
-    "completed finished done".split()
+    "completed finished done "
+    # CP12H.MASTER: "Project X as signed", "Project X signed".
+    "as signed".split()
 )
 _STOP_PAIRS = frozenset(
     {"hien tai", "hien co", "du an", "la gi", "da hoan", "da xong", "hoan thanh",
@@ -221,14 +225,32 @@ _EVIDENCE_WRITE_OBJECT = (
     r"\b(?:phe duyet|duyet|approvals?|approve|approved|reject(?:ed|ion)?|tu choi|"
     r"revisions?|phien ban|tai lieu|ho so|documents?|"
     r"purchase (?:order|request|requisition)s?|payment requests?|de nghi thanh toan|"
-    r"don dat hang|yeu cau mua hang)\b"
+    r"don dat hang|yeu cau mua hang|"
+    # CP12H.MASTER: the contract, and that it was signed.
+    r"hop dong|contracts?|da ky|signed|chu ky)\b"
+)
+# CP12H.MASTER-FINAL: starting an existing Project ("Start project X",
+# "Bắt đầu Project X"): the verb is followed directly by the Project noun.
+_PROJECT_START = (
+    r"^(?:(?:hay|vui long|please) )?(?:(?:khong|dung|do not|don t|dont|never) )?"
+    r"(?:start|begin|kick off|bat dau|khoi dong)(?: (?:the|existing))? (?:project|du an)\b"
+)
+# CP12H.MASTER: completing the Project itself ("Hoàn tất Project X",
+# "Complete project X"). A step noun makes it a Step Update instead.
+_PROJECT_COMPLETE = (
+    r"^(?:(?:hay|vui long|please) )?(?:hoan tat|hoan thanh|complete|close|dong|ket thuc|finish|"
+    # Starting the Project itself (its prerequisite): "Bắt đầu Project X".
+    r"bat dau|khoi dong|start|begin|kick off)"
+    r"(?: (?:the|toan bo|ca))? (?:project|du an)\b"
 )
 _WRITE_LEAD = r"^(?:(?:hay|vui long|please) )?(?:(?:khong|dung|do not|don t|dont|never) )?"
 # "Ghi nhận ...", "Record ...", "Thêm revision ...", "Approve the document ...".
 _EVIDENCE_RECORD_START = (
     _WRITE_LEAD
     + r"(?:ghi nhan|record|register|them|add|upload|tai len|dinh kem|attach|nhap|"
-    r"luu|log|tao|create|approve|reject|phe duyet|duyet|tu choi)\b"
+    r"luu|log|tao|create|approve|reject|phe duyet|duyet|tu choi|"
+    # CP12H.MASTER: operator-attested signing ("Ký hợp đồng ...", "Sign ...").
+    r"ky|sign)\b"
 )
 _APPROVAL_ROLE = r"(?:legal|phap ly|phap che|accounting|ke toan|partner|doi tac)"
 # "Legal đã phê duyệt ...", "Partner approved ...": a statement, not a question.
@@ -239,7 +261,8 @@ _APPROVAL_STATEMENT = (
 )
 _EVIDENCE_WRITE_NEGATION = (
     r"^(?:(?:hay|vui long|please) )?(?:khong|dung|do not|don t|dont|never)\b"
-    r"|\b(?:chua|khong|not|did not|has not|hasn t) (?:phe duyet|duyet|approved?|rejected?|tu choi)\b"
+    r"|\b(?:chua|khong|not|did not|has not|hasn t) (?:phe duyet|duyet|approved?|rejected?|tu choi|"
+    r"ky|signed?|hoan tat|hoan thanh|completed?)\b"
 )
 _WRITE_QUESTION_START = r"^(?:has|have|did|does|is|are|was|were|can|could|should|lieu)\b"
 # "Add Partner approval": "add partner" is not a Merchant creation.
@@ -358,19 +381,31 @@ def interpret_project_request(request: str) -> ProjectRequestInterpretation:
     # CP12H.NL4D3: "Ghi nhận Purchase Request PR-001 cho Project X", "Legal
     # đã phê duyệt revision mới nhất của Project X" (a statement, not a
     # question). Never a Project creation ("Tạo project ...") or a Merchant one.
+    # CP12H.MASTER-FINAL: "Start project X" starts an existing Project; only
+    # an article or "new" before the noun ("Start a new project ...") or a
+    # Project type makes it a creation.
+    starts_project = re.search(_PROJECT_START, text) is not None and project_type is None
+    if starts_project:
+        creates_project = False
+    completes_project = (
+        re.search(_PROJECT_COMPLETE, text) is not None
+        and re.search(r"\b(?:buoc|step|steps)\b", text) is None
+    )
     evidence_write = (
         (
             re.search(_EVIDENCE_RECORD_START, text) is not None
             or re.search(_APPROVAL_STATEMENT, text) is not None
+            or completes_project
         )
         # The object follows the verb: "Approve the PR ..." names none.
-        and re.search(_EVIDENCE_WRITE_OBJECT, re.sub(_EVIDENCE_RECORD_START, " ", unnamed))
-        is not None
+        and (completes_project or re.search(
+            _EVIDENCE_WRITE_OBJECT, re.sub(_EVIDENCE_RECORD_START, " ", unnamed)) is not None)
         and not question
         and re.search(r"\b(?:chua|khong)$", text) is None
         and re.search(_WRITE_QUESTION_START, text) is None
         and project_type is None
-        and re.search(rf"\b{_CREATE_VERB}(?: (?:a|an|mot|new|moi))* {_PROJECT_NOUN}\b", text) is None
+        and (starts_project
+             or re.search(rf"\b{_CREATE_VERB}(?: (?:a|an|mot|new|moi))* {_PROJECT_NOUN}\b", text) is None)
         and (not creates_merchant or re.search(_PARTNER_APPROVAL, text) is not None)
     )
     kind = _classify(text, has_project, creates_merchant, creates_project, evidence_read,
@@ -870,7 +905,22 @@ class _Words:
             (end > start and self.breaks[end])
             or self.folded_words[end] in _STOP_WORDS
             or self._pair(end) in _STOP_PAIRS
+            or self._starts_date(end)
         ):
             end += 1
 
         return start, end
+
+    def _starts_date(self, index: int) -> bool:
+        """CP12H.MASTER: an ISO date (YYYY-MM-DD, also after "ngày"/"dated")
+        ends a name: "Project X ngày 2026-11-10" names Project X."""
+
+        words = self.folded_words
+        if words[index] in ("ngay", "dated") and index + 1 < len(words):
+            index += 1
+        return (
+            index + 2 < len(words)
+            and re.fullmatch(r"\d{4}", words[index]) is not None
+            and re.fullmatch(r"\d{2}", words[index + 1]) is not None
+            and re.fullmatch(r"\d{2}", words[index + 2]) is not None
+        )

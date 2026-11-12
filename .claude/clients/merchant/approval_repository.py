@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from typing import Any
 
 from psycopg import errors
@@ -69,8 +69,25 @@ class MerchantApprovalRepository:
         acted_by: str | None = None,
         notes: str | None = None,
         approval_id: str | None = None,
+        recorded_by: str | None = None,
+        precondition: Any = None,
     ) -> ApprovalMutationResult:
-        """Create or finalize one revision-specific approval."""
+        """Create or finalize one revision-specific approval.
+
+        CP12H.MASTER: ``recorded_by`` is the trusted local operator who records
+        a decision on the approver's behalf. It is stored as the recorder
+        (``recorded_by``, the event's ``triggered_by``) and never as the
+        approver: ``approved_by`` stays NULL and ``acted_by`` must be absent.
+        ``decided_at`` is the stated decision time (or now). These columns
+        (migration 010) are written only when ``recorded_by`` is given.
+        ``precondition(connection)`` runs after the locks; raising refuses
+        the whole transaction.
+        """
+
+        if recorded_by is not None and acted_by is not None:
+            raise ApprovalPersistenceError(
+                "A recorded decision never names the recorder as the approver"
+            )
 
         normalized_revision_id = _uuid(
             document_revision_id,
@@ -109,6 +126,9 @@ class MerchantApprovalRepository:
                             project_id,
                         )
 
+                        if precondition is not None:
+                            precondition(connection)
+
                         plan = propose_document_approval(
                             {
                                 "project": project,
@@ -134,15 +154,35 @@ class MerchantApprovalRepository:
                             notes=notes,
                         )
 
+                        recorder = None
+                        if recorded_by is not None:
+                            decided_at = (
+                                plan.approved_at
+                                or occurred_at
+                                or datetime.now(timezone.utc)
+                            )
+                            recorder = (_uuid(recorded_by, "recorded_by"), decided_at)
+                            plan = replace(
+                                plan,
+                                triggered_by=str(recorder[0]),
+                                new_values={
+                                    **plan.new_values,
+                                    "attestation": "OPERATOR_RECORDED",
+                                    "decided_at": decided_at.isoformat(),
+                                },
+                            )
+
                         if plan.operation == "INSERT":
                             self._insert_approval(
                                 cursor,
                                 plan,
+                                recorder,
                             )
                         elif plan.operation == "UPDATE":
                             self._update_approval(
                                 cursor,
                                 plan,
+                                recorder,
                             )
                         else:  # pragma: no cover
                             raise ApprovalPersistenceError(
@@ -286,9 +326,13 @@ class MerchantApprovalRepository:
     def _insert_approval(
         cursor: Any,
         plan: ApprovalMutationPlan,
+        recorder: tuple[uuid.UUID, datetime] | None = None,
     ) -> None:
+        extra_columns, extra_values = (
+            (", recorded_by, decided_at", ", %s, %s") if recorder else ("", "")
+        )
         cursor.execute(
-            """
+            f"""
             INSERT INTO merchant_ops.document_approvals (
                 id,
                 document_revision_id,
@@ -297,11 +341,11 @@ class MerchantApprovalRepository:
                 approved_at,
                 approved_by,
                 notes,
-                created_at
+                created_at{extra_columns}
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
-                CURRENT_TIMESTAMP
+                CURRENT_TIMESTAMP{extra_values}
             )
             """,
             (
@@ -316,6 +360,7 @@ class MerchantApprovalRepository:
                     else None
                 ),
                 plan.notes,
+                *(recorder or ()),
             ),
         )
 
@@ -323,15 +368,17 @@ class MerchantApprovalRepository:
     def _update_approval(
         cursor: Any,
         plan: ApprovalMutationPlan,
+        recorder: tuple[uuid.UUID, datetime] | None = None,
     ) -> None:
+        extra = ", recorded_by = %s, decided_at = %s" if recorder else ""
         cursor.execute(
-            """
+            f"""
             UPDATE merchant_ops.document_approvals
             SET
                 approval_status = %s,
                 approved_at = %s,
                 approved_by = %s,
-                notes = %s
+                notes = %s{extra}
             WHERE id = %s
               AND document_revision_id = %s
               AND approver_role = %s
@@ -346,6 +393,7 @@ class MerchantApprovalRepository:
                     else None
                 ),
                 plan.notes,
+                *(recorder or ()),
                 uuid.UUID(plan.approval_id),
                 uuid.UUID(plan.document_revision_id),
                 plan.approver_role,

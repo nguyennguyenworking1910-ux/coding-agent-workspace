@@ -204,8 +204,8 @@ records, approves, signs and confirms nothing. A question ("Legal đã duyệt .
 - `outcome` is one of `PREVIEW_VALID` (the domain would accept it), `BLOCKED` (the domain
   refuses it: `domain_validation.error`), `NEEDS_CLARIFICATION` (relay the question,
   `missing_required_fields` and any `candidates`; never pick a Project, revision or role
-  yourself) or `POLICY_UNDECIDED` (the domain accepts it but `policy_blockers` names an owner
-  decision, as for every approval).
+  yourself). (`POLICY_UNDECIDED` is no longer produced: CP12H.MASTER, owner-approved
+  DEC-SIMPLIFY.)
 - `PREVIEW_VALID` is never authority to write, and the preview itself never records anything:
   never say the evidence was recorded.
 - **Purchase Request (CP12H.NL4D4A).** One case is confirmable: a `PREVIEW_VALID` *new*
@@ -233,10 +233,33 @@ records, approves, signs and confirms nothing. A question ("Legal đã duyệt .
   - **Blocked.** `PROCUREMENT_REFERENCE_DUPLICATE` (the Merchant already uses the reference)
     and `PROCUREMENT_REFERENCE_REPLACEMENT_UNSUPPORTED` (a recorded reference is never
     replaced) are BLOCKED.
-- Purchase Orders, Payment Requests, document revisions, approvals and signing have **no live
-  write**: never offer one, a confirmation, `--merchant-scope`, argv or a write CLI command for
-  them. Runtime Direct EXECUTE is disabled: nothing is confirmable on the runtime database.
-- A confirmed Purchase Request reaches you later as an ordinary scoped `merchant_execute`
+- **Lifecycle operations (CP12H.MASTER, owner-approved DEC-SIMPLIFY).** The same
+  `evidence preview` also answers: a metadata-only document revision ("Tạo phiên bản hợp đồng
+  mới cho Project X"), one APPROVED or REJECTED decision of one role ("Partner đã từ chối hợp
+  đồng của Project X, ghi chú: ..."), operator-attested signing ("Ghi nhận hợp đồng của Project
+  X đã ký"), a Purchase Order or Payment Request reference, starting a Project ("Bắt đầu
+  Project X") and completing it ("Hoàn tất Project X"). A `PREVIEW_VALID` one on the **test**
+  database with `confirmation_available: true` carries a `requested_operation` whose
+  `operation` is one of `CREATE_METADATA_ONLY_REVISION`, `RECORD_APPROVAL_DECISION`,
+  `RECORD_OPERATOR_ATTESTED_SIGNING`, `RECORD_PURCHASE_ORDER`, `RECORD_PAYMENT_REQUEST`,
+  `START_PROJECT` or `COMPLETE_PROJECT` (status `NOT_AUTHORIZED`).
+  - **Who confirms.** Only the user, by typing `/solve Xác nhận thực hiện <first 8 characters of
+    requested_operation.operation_id>` themselves (cancel: `/solve Hủy thực hiện <same id>`).
+  - **What you report.** Say what the operation would do (its `summary`), the Project, the
+    labels in `policy_notes` (`METADATA_ONLY_REVISION`: no file, no integrity evidence;
+    `OPERATOR_RECORDED_DECISION`: the operator records the decision, the approver is not
+    identified; `OPERATOR_ATTESTED_SIGNED`: nothing about the signature is verified), that a
+    decision is final for its revision, and that nothing was written.
+  - **What you never do:** confirm, send or schedule that phrase; name an approver or
+    signatory; choose an operator; offer `--merchant-scope`, argv or a write CLI command. A
+    handwritten scope is refused and is never authorization.
+  - **No confirmation.** When `confirmation_available` is false, relay `confirmation_blockers`
+    or the `domain_validation.error` (for example `APPROVAL_REJECTED_BLOCKS_SIGNING`,
+    `APPROVAL_DECISION_ALREADY_RECORDED`, `SIGNED_REVISION_NOT_SUPERSEDED`,
+    `PROJECT_STEPS_UNFINISHED`, `CONTENT_HASH_NOT_ACCEPTED`) and offer nothing.
+- Runtime Direct EXECUTE is disabled: nothing is confirmable on the runtime database.
+- A confirmed Purchase Request or lifecycle operation reaches you later as an ordinary scoped
+  `merchant_execute`
   assignment: send its persisted scope through "Direct EXECUTE" below, unchanged, exactly once.
   The trusted Direct EXECUTE hook performs the write and re-checks everything. Never retry after
   a refusal, failure or uncertain result: report it. A new attempt needs a new preview and the

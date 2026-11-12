@@ -47,10 +47,15 @@ REQUIRED_WRITE_FIELDS = MappingProxyType(
             "document_type",
             "content_hash",
         ),
+        # CP12H.MASTER: the payload (build_write_payload) names the revision
+        # document_revision_id; "revision_id" could never be satisfied.
         "document approve": (
-            "revision_id",
+            "document_revision_id",
             "approver_role",
             "approval_status",
+        ),
+        "document sign": (
+            "document_revision_id",
         ),
         "procurement update": (
             "project_id",

@@ -827,6 +827,9 @@ def test_runtime_and_document_writes_stay_disabled():
     from claude.hooks import merchant_direct_handoff as handoff
 
     assert handoff.RUNTIME_DIRECT_EXECUTE_ENABLED is False
-    assert "document revision-create" not in handoff.TEST_MODE_COMMANDS
-    assert "document approve" not in handoff.TEST_MODE_COMMANDS
-    assert not handoff.direct_execute_enabled("document revision-create", "test")
+    # CP12H.MASTER: metadata-only revisions and decisions run on the test
+    # database only as confirmed lifecycle operations; no managed-file write
+    # (document_files INSERT) exists and runtime stays disabled.
+    assert "document revision-create" in handoff.LIFECYCLE_ONLY_COMMANDS
+    assert "document approve" in handoff.LIFECYCLE_ONLY_COMMANDS
+    assert not handoff.direct_execute_enabled("document revision-create", "runtime")
