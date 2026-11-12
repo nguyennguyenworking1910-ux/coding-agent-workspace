@@ -13,3 +13,12 @@
 *.ps1 text eol=crlf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Merchant migrations: migrate.py checksums the exact file bytes, and the
+# recorded checksums of applied migrations are fixed. Pin each file's
+# checkout line endings to the bytes that were applied, on every OS.
+.claude/clients/merchant/migrations/*.sql text eol=lf
+.claude/clients/merchant/migrations/0001_initial_schema.sql text eol=crlf
+.claude/clients/merchant/migrations/0002_add_project_payment_period.sql text eol=crlf
+.claude/clients/merchant/migrations/005_merchant_execution_ledger.sql text eol=crlf
+.claude/clients/merchant/migrations/006_merchant_execution_claims.sql text eol=crlf
