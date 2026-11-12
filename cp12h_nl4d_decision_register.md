@@ -9,11 +9,13 @@ Baseline `448003be64076e01350b4f55cc83a28787cde06a`, branch `feat/cp7-9-merchant
 
 **Status.** Every policy below is PROPOSED, except the four Local Test MVP decisions the owner **APPROVED on 2026-11-11**: DEC-A0, DEC-P1a, DEC-P1c and DEC-P2. They are implemented in commit `23f1f6dd2d892dd534638c325a149f4d5783db51` (CP12H.NL4D4A, test database only).
 
+The owner also approved the document-storage decisions **DEC-D4 and DEC-D4a–g** on 2026-11-11, **for the Local Test MVP only** (CP12H.NL4D5A1a).
+- These approvals cover storage policy only. **They do not authorize any document write.** Document revision execution stays unavailable until a later, separately accepted checkpoint, and runtime Direct EXECUTE stays disabled.
+
 The approved wording is the owner's own; where it differs from the recommended default, the approval governs. The other owner decisions in §4 remain PROPOSED, including:
 - DEC-P1b;
 - S1 and S2 (approval attestation);
 - D1 (signing);
-- D4 (document storage);
 - G1 and G2 (Step completion gates).
 
 Each item lists the owner decision it needs (§4). A recommendation is only a default to accept, change or reject.
@@ -194,6 +196,24 @@ Each entry: **Existing** · **Options** · **Tradeoffs** · **Recommended defaul
     4. an unreferenced file is reported, never auto-deleted while possibly in flight.
   - **Integrity on read:** re-hash on demand (`document verify`).
 - **Owner:** **DEC-D4a** (store location and backup), **DEC-D4b** (allowed media types and size limit), **DEC-D4c** (keep the original filename, or only its hash).
+- **Owner decisions, APPROVED — LOCAL TEST MVP, 2026-11-11.**
+  - The owner approved these for the **Local Test MVP only**. None of them authorizes a document write.
+  - The wording below is the owner's, quoted verbatim. Detailed design: `cp12h_nl4d5a_document_revision_design.md`.
+  - **DEC-D4:** "Immutable local document store with PostgreSQL metadata."
+  - **DEC-D4a:** "Configured storage outside the repository. Back up file storage before taking the corresponding database snapshot. Manual review and cleanup of orphaned files only."
+    - *Note (not part of the decision):* this replaces the design default of DB first, then store.
+    - The resulting backup gap and its mitigation are in `cp12h_nl4d5a1a_immutable_local_storage_foundation.md` §1.
+  - **DEC-D4b:** "Allowed formats: PDF, DOCX, PNG, JPEG. Maximum file size: 25 MiB = 26,214,400 bytes."
+  - **DEC-D4c:** "Storage identity is content-based SHA-256. Original filenames may be stored only as sanitized metadata. Original filenames must never determine a storage path."
+  - **DEC-D4d:** "Reject a new revision when its content matches the current active revision."
+  - **DEC-D4e:** "Do not supersede a signed revision until a separate signing lifecycle policy has been approved."
+  - **DEC-D4f:** "Preserve legacy hash-only revisions as UNVERIFIED_LEGACY. Do not automatically migrate, fabricate files, or treat their hashes as verified evidence."
+  - **DEC-D4g:** "Accept only canonical document types already recognized by the existing domain."
+    - *Implementation note (not part of the decision):* the existing domain enumerates no document-type list; it only applies the pattern `^[A-Z][A-Z0-9_]{0,99}$` (`document_engine.DOCUMENT_TYPE_PATTERN`).
+    - The canonical set must be identified from existing domain artifacts at integration (NL4D5A2) and approved. **None is invented here.**
+  - **Where they are enforced:**
+    - D4d, D4e, D4f and D4g are future domain contracts, enforced in the revision integration (NL4D5A2/A3);
+    - D4, D4a (configuration), D4b and D4c are enforced by the isolated storage module (NL4D5A1a).
 
 ### P1 — Valid procurement references and uniqueness
 
@@ -278,7 +298,11 @@ Each entry: **Existing** · **Options** · **Tradeoffs** · **Recommended defaul
 
 ## 4. Explicit owner decisions
 
-Four decisions were approved on 2026-11-11 (commit `23f1f6dd2d892dd534638c325a149f4d5783db51`). Every other decision is PROPOSED.
+Approved on 2026-11-11:
+- A0, P1a, P1c and P2, implemented in `23f1f6dd2d892dd534638c325a149f4d5783db51`;
+- D4 and D4a–g, **APPROVED — LOCAL TEST MVP**: storage policy only, with no document write authorized.
+
+Every other decision (P1b, S1, S2, D1, G1, G2) is PROPOSED.
 
 | ID | Question | Recommended answer | Status | Blocks |
 |---|---|---|---|---|
@@ -287,7 +311,12 @@ Four decisions were approved on 2026-11-11 (commit `23f1f6dd2d892dd534638c325a14
 | DEC-P1b | Reference format pattern per type? | None until ERP formats are given | PROPOSED | NL4D4 |
 | DEC-P1c | May a recorded reference be replaced? By whom? | Yes, via update with old/new shown in the confirmation; any authorized operator | **APPROVED 2026-11-11**: PR reference replacement not supported in NL4D4; any change is rejected | NL4D4 |
 | DEC-P2 | PR on a no-procurement Project? | Allow, with a confirmation warning | **APPROVED 2026-11-11**: allow, with `PROCUREMENT_NOT_REQUIRED`; no workflow change | NL4D4 |
-| DEC-D4a/b/c | Store location and backup; media types and size; original filename kept? | Outside-repo content-addressed store; PDF/DOCX/PNG/JPEG ≤ 25 MB; filename hash only | PROPOSED | NL4D5A |
+| DEC-D4 | Storage model | Managed local store + PostgreSQL metadata | **APPROVED — LOCAL TEST MVP, 2026-11-11** (immutable local store + PostgreSQL metadata) | NL4D5A |
+| DEC-D4a/b/c | Store location and backup; media types and size; original filename kept? | Outside-repo content-addressed store; PDF/DOCX/PNG/JPEG ≤ 25 MB; filename hash only | **APPROVED — LOCAL TEST MVP, 2026-11-11**:<br>• **D4a:** outside the repository; back up storage before the DB snapshot; manual orphan cleanup only;<br>• **D4b:** PDF/DOCX/PNG/JPEG, ≤ 26,214,400 bytes;<br>• **D4c:** identity = SHA-256; filename only as sanitized metadata, never a path. | NL4D5A |
+| DEC-D4d | New revision identical to the active one? | Reject | **APPROVED — LOCAL TEST MVP, 2026-11-11**: reject | NL4D5A2 |
+| DEC-D4e | May a signed revision be superseded? | — | **APPROVED — LOCAL TEST MVP, 2026-11-11**: no, until a signing lifecycle policy is approved | NL4D5A2 |
+| DEC-D4f | Legacy hash-only revisions | Keep, unmanaged | **APPROVED — LOCAL TEST MVP, 2026-11-11**: keep as UNVERIFIED_LEGACY; no migration, no fabricated files, never verified evidence | NL4D5A1b/A2 |
+| DEC-D4g | Document type allowlist | — | **APPROVED — LOCAL TEST MVP, 2026-11-11**: only canonical types already recognized by the domain (the canonical set is still to be identified; the domain has only a pattern today) | NL4D5A2 |
 | DEC-S1a/b | Who records which role; separation of duties | Per-role operator mapping; ≥ 2 distinct operators across the three roles | PROPOSED | NL4D5B |
 | DEC-S2a/b | Attestation fields; external reference without a file? | Fields as §S2; a file is required for PARTNER, an external reference is allowed for internal roles | PROPOSED | NL4D5B |
 | DEC-D1a/b/c | External signing evidence model; verify the signed copy; runtime grant | Accept (b); store the signed file and hash, no content comparison in the MVP; grant deferred | PROPOSED | NL4D5C |
