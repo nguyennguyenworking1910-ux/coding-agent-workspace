@@ -20,7 +20,9 @@ from claude.agents.tools.merchant.evidence_preview import BLOCKED, CLARIFY, VALI
 from claude.agents.tools.merchant.project_nl import EVIDENCE_WRITE, MIXED, interpret_project_request
 from claude.agents.tools.merchant.workflow_templates import STANDARD_WORKFLOW_TEMPLATES
 from claude.hooks import merchant_pending_confirmation as pending
-from tests.merchant.test_nl4d2_evidence_discovery import NAMED, P, EvidenceReader, approval, revision
+from tests.merchant.test_nl4d2_evidence_discovery import (
+    NAMED, P, REVIEWED, EvidenceReader, approval, revision,
+)
 
 OPERATOR = "0d5a0000-0000-4000-8000-0000000000c1"
 TRUSTED = {"status": "TRUSTED", "operator_id": OPERATOR}
@@ -112,7 +114,14 @@ def test_signing_needs_three_approvals_and_any_rejection_blocks_it():
         approvals=approved("LEGAL", "ACCOUNTING") + approved("PARTNER", status="REJECTED")))
     assert rejected["domain_validation"]["error"]["code"] == lifecycle.DECISION_REJECTED
 
+    # F1: with all three approvals, signing still waits for the signing-gate Step (8).
+    gate_open = preview(f"Ghi nhận hợp đồng của {NAMED} đã ký", EvidenceReader(
+        revisions=[revision(P, 1)], approvals=approved("LEGAL", "ACCOUNTING", "PARTNER")))
+    assert gate_open["domain_validation"]["error"]["code"] == lifecycle.SIGNING_GATE_OPEN
+    assert gate_open["requested_operation"] is None
+
     ready = preview(f"Ghi nhận hợp đồng của {NAMED} đã ký", EvidenceReader(
+        statuses={**REVIEWED, 5: "COMPLETED", 8: "COMPLETED"},
         revisions=[revision(P, 1)], approvals=approved("LEGAL", "ACCOUNTING", "PARTNER")))
     assert ready["outcome"] == VALID, ready["domain_validation"]
     assert ready["requested_operation"]["operation"] == lifecycle.SIGN

@@ -45,6 +45,7 @@ from typing import Any
 
 from .approval_engine import propose_document_approval
 from .document_engine import propose_document_revision
+from .gate_resolver import SIGNING_GATE_STEP_NAME, database_gate_kind
 from .procurement_engine import propose_procurement_mutation
 from .project_engine import PROJECT_TERMINAL_STEP_STATUSES, propose_project_transition
 from .signing_engine import propose_document_signing
@@ -100,6 +101,7 @@ NOT_VALID = "LIFECYCLE_OPERATION_NOT_VALID"
 SIGNED_REVISION = "SIGNED_REVISION_NOT_SUPERSEDED"
 DECISION_RECORDED = "APPROVAL_DECISION_ALREADY_RECORDED"
 DECISION_REJECTED = "APPROVAL_REJECTED_BLOCKS_SIGNING"
+SIGNING_GATE_OPEN = "SIGNING_GATE_STEP_NOT_COMPLETED"
 RECORD_EXISTS = "PROCUREMENT_RECORD_ALREADY_RECORDED"
 DUPLICATE_REFERENCE = "PROCUREMENT_REFERENCE_DUPLICATE"
 STEPS_UNFINISHED = "PROJECT_STEPS_UNFINISHED"
@@ -364,6 +366,18 @@ def judge(kind: str, detail: dict[str, Any], params: dict[str, Any],
             raise LifecycleMismatch(DECISION_REJECTED, (
                 f"{', '.join(rejected)} rejected this revision, so it cannot be signed; register a "
                 "new revision to start a new approval cycle"))
+        # F1: the template's signing gate precedes "Sign document" and refuses a
+        # signed revision, so signing first would leave it (and the Project)
+        # unfinishable. Found by template metadata, never by Step number.
+        open_gates = sorted((s.get("sequence_number"), s.get("step_name"))
+                            for s in detail.get("steps") or []
+                            if database_gate_kind(s) == SIGNING_GATE_STEP_NAME
+                            and str(s.get("status")).upper() != "COMPLETED")
+        if open_gates:
+            raise LifecycleMismatch(SIGNING_GATE_OPEN, "; ".join(
+                f"complete Step {n} {name!r} before signing (it is the workflow's signing "
+                "prerequisite and cannot complete once the revision is signed)"
+                for n, name in open_gates))
         plan = _engine(lambda: propose_document_signing(
             {"project": project, "document_revisions": revisions,
              "document_approvals": _approvals(detail),

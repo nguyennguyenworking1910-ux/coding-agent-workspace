@@ -111,6 +111,8 @@ def test_existing_document_media_project_completes_on_a_reused_signed_contract(p
     revision, _ = run_operation(db, f"Tạo phiên bản hợp đồng mới cho {ON}")
     for words in ("Legal", "Kế toán", "Partner"):
         run_operation(db, f"{words} đã phê duyệt hợp đồng của {ON}")
+    for sequence in (1, 2, 3, 4, 5, 8):     # F1: the signing-gate Step precedes signing
+        advance(db, project.project_id, sequence)
     run_operation(db, f"Ghi nhận hợp đồng của {ON} đã ký")
     source_id = revision["operation_id"]
     before = source_state(db, source_id)
