@@ -479,3 +479,31 @@ def test_readiness_result_is_json_compatible():
             "source"
         ],
     }
+
+def test_completing_last_predecessor_promotes_pending_successor():
+    from claude.agents.tools.merchant.dependencies import (
+        dependency_promotable_step_ids,
+    )
+
+    steps = [
+        step("start", "COMPLETED"),
+        step("legal", "IN_PROGRESS"),
+        step("accounting", "IN_PROGRESS"),
+        step("join", "PENDING"),
+        step("blocked_next", "BLOCKED"),
+    ]
+    dependencies = [
+        dependency("start", "legal"),
+        dependency("start", "accounting"),
+        dependency("legal", "join"),
+        dependency("accounting", "join"),
+        dependency("legal", "blocked_next"),
+    ]
+
+    # One of two parallel predecessors completing does not release the join.
+    steps[1]["status"] = "COMPLETED"
+    assert dependency_promotable_step_ids(steps, dependencies, "legal") == ()
+
+    # The last predecessor completing makes the join startable; BLOCKED is never promoted.
+    steps[2]["status"] = "COMPLETED"
+    assert dependency_promotable_step_ids(steps, dependencies, "accounting") == ("join",)

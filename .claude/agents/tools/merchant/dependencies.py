@@ -169,6 +169,45 @@ def dependency_ready_step_ids(
     return tuple(ready_ids)
 
 
+def dependency_promotable_step_ids(
+    steps: Sequence[Mapping[str, Any]],
+    dependencies: Sequence[Mapping[str, Any]],
+    completed_step_id: str,
+) -> tuple[str, ...]:
+    """Return PENDING steps that become READY once completed_step_id completes.
+
+    Only PENDING steps are promoted; BLOCKED steps keep their blocking condition.
+    """
+
+    step_index, _ = _index_and_validate(
+        steps,
+        dependencies,
+    )
+    normalized_completed_id = _normalize_identifier(
+        completed_step_id,
+        "step_id",
+    )
+    original_status = {
+        step_id: _step_status(step)
+        for step_id, step in step_index.items()
+    }
+    completed_steps = [
+        {**dict(step), "status": "COMPLETED"}
+        if _normalize_identifier(step.get("id"), "step.id") == normalized_completed_id
+        else dict(step)
+        for step in steps
+    ]
+
+    return tuple(
+        step_id
+        for step_id in dependency_ready_step_ids(
+            completed_steps,
+            dependencies,
+        )
+        if original_status[step_id] == "PENDING"
+    )
+
+
 def _index_and_validate(
     steps: Sequence[Mapping[str, Any]],
     dependencies: Sequence[Mapping[str, Any]],

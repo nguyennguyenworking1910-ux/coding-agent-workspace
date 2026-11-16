@@ -526,17 +526,26 @@ def test_ordinary_steps_run_through_the_confirmed_step_update_pipeline(project):
     completed = run_step(db, 1, "complete step 1")
     assert (completed["current_status"], completed["target_status"]) == ("IN_PROGRESS", "COMPLETED")
     assert "gate_attestation" not in completed               # an ordinary Step is not attested
-    ready = run_step(db, 2, "step 2 ready", request=(
-        f"Đánh dấu bước 2 của Project {TITLE} của Merchant {SHORT} Cinemas là sẵn sàng "
-        "trên database test"))
-    assert ready["target_status"] == "READY"
-    assert steps(db, pid)[1]["status"] == "COMPLETED" and steps(db, pid)[2]["status"] == "READY"
+    # Completing Step 1 promotes its PENDING successors (Legal and Accounting
+    # review) to READY in the same transaction, each with a tagged event.
+    current = steps(db, pid)
+    assert current[1]["status"] == "COMPLETED"
+    assert current[2]["status"] == "READY" and current[3]["status"] == "READY"
     with db.connection(read_only=True) as connection:
         events = connection.execute(
-            "SELECT count(*) AS n FROM merchant_ops.project_events WHERE project_id = %s "
-            "AND entity_type = 'STEP'", (pid,)).fetchone()["n"]
-    assert events == 3
-    assert claims(db) == ["COMPLETED"] * 3
+            "SELECT entity_id::text AS step_id, new_values, xmin::text AS tx "
+            "FROM merchant_ops.project_events WHERE project_id = %s AND entity_type = 'STEP'",
+            (pid,)).fetchall()
+    confirmed = [e for e in events if "promoted_after_step_id" not in e["new_values"]]
+    promoted = [e for e in events if "promoted_after_step_id" in e["new_values"]]
+    assert len(confirmed) == 2                                # start and complete Step 1
+    assert {e["step_id"] for e in promoted} >= {current[2]["id"], current[3]["id"]}
+    assert {e["new_values"]["promoted_after_step_id"] for e in promoted} == {current[1]["id"]}
+    (completion,) = [e for e in confirmed if e["new_values"]["status"] == "COMPLETED"]
+    assert {e["tx"] for e in promoted} == {completion["tx"]}  # same transaction as the completion
+    # A promotion is never reconstructed as a Step Update receipt of the promoted Step.
+    assert attempt_evidence.recover_step_update_receipts(db, current[2]["id"]) == []
+    assert claims(db) == ["COMPLETED"] * 2
 
 
 # ------------------------------------------------- rejection and new cycles

@@ -146,8 +146,10 @@ def step(repository, project_id, sequence):
 def facts(fixture):
     with fixture.repository.connection(read_only=True) as connection:
         events = connection.execute(
+            # Confirmed transitions only; dependency promotions to READY are their consequence.
             "SELECT count(*) AS n FROM merchant_ops.project_events "
-            "WHERE project_id = %s AND entity_type = 'STEP'", (fixture.project_id,),
+            "WHERE project_id = %s AND entity_type = 'STEP' "
+            "AND NOT (new_values ? 'promoted_after_step_id')", (fixture.project_id,),
         ).fetchone()["n"]
         approval = connection.execute(
             "SELECT approval_status FROM merchant_ops.document_approvals WHERE id = %s",

@@ -353,6 +353,7 @@ def step_update_receipt(
                 WHERE events.entity_type = 'STEP'
                   AND events.entity_id::text = %s
                   AND events.xmin::text = %s
+                  AND NOT (events.new_values ? 'promoted_after_step_id')
                 """,
                 (str(step_id), evidence["ledger_tx"]),
             )
@@ -430,6 +431,7 @@ def recover_step_update_receipts(
               ON events.xmin = ledger.xmin
             WHERE events.entity_type = 'STEP'
               AND events.entity_id::text = %s
+              AND NOT (events.new_values ? 'promoted_after_step_id')
             ORDER BY events.created_at, ledger.operation_key
             """,
             (str(step_id),),

@@ -16,6 +16,9 @@ from claude.agents.tools.merchant.engine import (
     WorkflowVersionConflictError,
     propose_step_transition,
 )
+from claude.agents.tools.merchant.dependencies import (
+    dependency_promotable_step_ids,
+)
 from claude.agents.tools.merchant.gates import (
     GateValidationResult,
 )
@@ -418,6 +421,98 @@ class MerchantStepTransitionRepository:
                             normalized_triggered_by,
                         ),
                     )
+
+                    # A completed predecessor can satisfy successors: promote
+                    # every PENDING step whose dependencies are now all met.
+                    if transition_plan.target_status == "COMPLETED":
+                        for promoted_id in dependency_promotable_step_ids(
+                            steps,
+                            dependencies,
+                            str(normalized_step_id),
+                        ):
+                            promoted = next(
+                                step
+                                for step in steps
+                                if str(step["id"]) == promoted_id
+                            )
+                            promoted_version = int(promoted["version"])
+
+                            cursor.execute(
+                                """
+                                UPDATE merchant_ops.project_steps
+                                SET
+                                    status = 'READY',
+                                    updated_at = CURRENT_TIMESTAMP,
+                                    version = %s
+                                WHERE id = %s
+                                  AND project_id = %s
+                                  AND status = 'PENDING'
+                                  AND version = %s
+                                """,
+                                (
+                                    promoted_version + 1,
+                                    promoted["id"],
+                                    project["id"],
+                                    promoted_version,
+                                ),
+                            )
+
+                            if cursor.rowcount != 1:
+                                raise WorkflowVersionConflictError(
+                                    "Project step changed before "
+                                    "dependency promotion could be applied"
+                                )
+
+                            cursor.execute(
+                                """
+                                INSERT INTO merchant_ops.project_events (
+                                    id,
+                                    merchant_id,
+                                    project_id,
+                                    event_type,
+                                    entity_type,
+                                    entity_id,
+                                    change_summary,
+                                    old_values,
+                                    new_values,
+                                    triggered_by,
+                                    created_at
+                                )
+                                VALUES (
+                                    %s, %s, %s, 'STEP_READY', 'STEP',
+                                    %s, %s, %s, %s, %s,
+                                    CURRENT_TIMESTAMP
+                                )
+                                """,
+                                (
+                                    uuid.uuid4(),
+                                    project["merchant_id"],
+                                    project["id"],
+                                    promoted["id"],
+                                    "Project step status changed from "
+                                    "PENDING to READY after a predecessor "
+                                    "completed",
+                                    Jsonb(
+                                        {
+                                            "status": "PENDING",
+                                            "version": promoted_version,
+                                        }
+                                    ),
+                                    # The tag keeps receipt recovery from
+                                    # attributing this attempt to the
+                                    # promoted Step (attempt_evidence).
+                                    Jsonb(
+                                        {
+                                            "status": "READY",
+                                            "version": promoted_version + 1,
+                                            "promoted_after_step_id": str(
+                                                normalized_step_id
+                                            ),
+                                        }
+                                    ),
+                                    normalized_triggered_by,
+                                ),
+                            )
 
         return StepTransitionResult(
             project_id=transition_plan.project_id,
