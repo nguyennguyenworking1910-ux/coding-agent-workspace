@@ -14,6 +14,7 @@ agents also load [`CLAUDE.md`](../CLAUDE.md) automatically. Historical checkpoin
 | | [merchant/project-manager-design.md](merchant/project-manager-design.md) | Original domain design: schema, workflows, gates, CLI and agent contracts, activation commands (sections on proposal/apply are historical) |
 | Operations | [operations/local-setup.md](operations/local-setup.md) | Python environment, `.env`, API keys, Google credentials |
 | | [operations/database-and-migrations.md](operations/database-and-migrations.md) | Runtime vs test database, migrations 001–011, integrity checks, backup and recovery |
+| | [operations/backup-restore.md](operations/backup-restore.md) | Backup inventory and verification status, naming, restore rules, retained local recovery artifacts |
 | | [operations/live-acceptance.md](operations/live-acceptance.md) | User-driven live `/solve` acceptance on the test database |
 | | [operations/merchant-alert-operations.md](operations/merchant-alert-operations.md) | One-shot alert worker modes, limits, health checks, recovery |
 | | [operations/scheduler.md](operations/scheduler.md) | `/schedule-agent` and `python .claude/schedule.py`, timezone, credential troubleshooting |
@@ -47,7 +48,7 @@ Each subject has one canonical home; other documents link to it instead of repea
 | Step state machine and promotion | [project-lifecycle.md §3](merchant/project-lifecycle.md#3-step-and-project-state-machines) |
 | Merchant activation | [project-lifecycle.md §5](merchant/project-lifecycle.md#5-merchant-activation) |
 | Signed revision reuse | [project-lifecycle.md §6](merchant/project-lifecycle.md#6-signed-revision-reuse-existing-document-media) |
-| Migrations, recovery | [database-and-migrations.md](operations/database-and-migrations.md) |
+| Migrations, recovery | [database-and-migrations.md](operations/database-and-migrations.md), [backup-restore.md](operations/backup-restore.md) |
 | Testing and acceptance | [testing.md](development/testing.md), [live-acceptance.md](operations/live-acceptance.md) |
 | Policy decisions | [decision-register.md](development/decision-register.md) |
 

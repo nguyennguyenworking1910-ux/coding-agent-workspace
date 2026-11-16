@@ -191,3 +191,105 @@ The final regression must be re-run to completion when memory allows:
   memory with no failure).
 - Before live `/solve`: start a fresh Claude Code session (agent definitions changed).
 - Open owner decisions carried forward: F7, DEC-P1b, the DEC-D4g type list.
+
+## 11. Backup and temporary file cleanup (additional scope)
+
+Scope: the repository folder only (`.git`, `.venv`, `rag-server/.venv` excluded). Searched for
+`*.bak *.backup *.old *.orig *.tmp *.temp *.swp *.dump *.gz *.zip *.tar *.log *.sql *.lock` and
+`backup*/ snapshots/ logs/ tmp/ temp/` directories. No `.dump`, `.gz`, `.zip`, `.tar`, `.orig`,
+`.old`, `.swp` or `.tmp` file exists. Every `.sql` file is an active migration or query template;
+none is a database backup.
+
+Recoverability test for local copies: the Git blob hash of each file was looked up among all
+objects reachable in the repository history. Present → the exact content is recoverable from Git.
+
+### Classification
+
+| Artifact | Size | Modified | Git | Class |
+|---|---|---|---|---|
+| `.claude/clients/merchant/migrations/*.sql` (001–011) | 48 KB | 09-03…11-12 | tracked | KEEP_ACTIVE (checksums unchanged) |
+| `rag-server/migrations/001_initial.sql`, `bigquery/templates/groupsale_usage_monthly.sql` | 14 KB | — | tracked | KEEP_ACTIVE |
+| `coding_agent_workspace.egg-info/` | 15 KB | — | ignored | KEEP_ACTIVE (editable install) |
+| `rag-server/.model-cache/` | 4.3 GB | — | ignored | KEEP_ACTIVE (RAG embedding model) |
+| `.claude/runtime/` | — | — | ignored | KEEP_ACTIVE / KEEP_AUDIT (session run state; all pending records spent and expired) |
+| `.claude/scheduled_tasks.lock` | 124 B | 11-12 | ignored | KEEP_ACTIVE (Claude Code harness lock) |
+| `.claude/runtime_backup_20260921_155111/` (9 files) | 12 KB | 09-21 | ignored since `f0a00bd` | DELETE_SAFE — every file is in Git history (e.g. `git show b585de2:<path>`) |
+| 14 `*.bak` source copies listed below | 360 KB | 09-07…10-15 | ignored | DELETE_SAFE — exact content in Git history |
+| `.gate11-pass-backup/` (6 files) | 348 KB | 09-18 | ignored (`.git/info/exclude`) | REVIEW_REQUIRED — `gate11-passing-full.diff` and `team_lifecycle.py` are not in Git |
+| `.claude/agents/tools/merchant/cli.py.checkpoint3a.bak`, `.claude/hooks/merchant_direct_recovery.py.pre17b3.bak`, `.claude/hooks/merchant_reserved_execution.py.pre17b3.bak`, `.claude/hooks/team_result_hook.py.pre17c5.bak` | 87 KB | 10-13…10-14 | ignored | REVIEW_REQUIRED — content not in Git history |
+| `checkpoint_12h8_full_regression.log` | 650 KB | 09-29 | ignored | REVIEW_REQUIRED / KEEP_AUDIT — only record of the CP12H.8 run (2764 passed) |
+| `.claude/worktrees/testing-docs` | empty dir | 07-30 | registered worktree, **locked** by a Claude session | REVIEW_REQUIRED — branch `worktree-testing-docs` (`8dae64f`) not merged; not pruned |
+| `__pycache__/` (19 dirs, 495 `.pyc`), `.pytest_cache/`, `.ruff_cache/` | 15.8 MB | — | ignored | DELETE_SAFE — generated |
+| External runtime DB backups (CP9 `5567a6ac…`, CP10 `7745c785…`) | — | 09-08, 09-09 | outside repository | KEEP_RECOVERY — not accessed, **not verified** in this cleanup |
+
+### Files removed (exact paths)
+
+```text
+.claude/agents/tools/merchant/agent_cli.py.checkpoint3d2.bak
+.claude/agents/tools/merchant/cli.py.checkpoint2a.bak
+.claude/agents/tools/merchant/write_commands.py.checkpoint1.bak
+.claude/clients/merchant/merchant_repository.py.checkpoint3d5g4.bak
+.claude/hooks/intent_envelope_bridge.py.checkpoint22h.bak
+.claude/hooks/intent_gate.py.checkpoint3d.bak
+.claude/hooks/merchant_tool_result_contract.py.checkpoint3d5d2.bak
+.claude/hooks/policy_gate.py.checkpoint3d.bak
+.claude/hooks/teammate_idle_orchestrator.py.checkpoint3d5f6.bak
+.claude/hooks/teammate_idle_orchestrator.py.pre17c5.bak
+.claude/hooks/team_result_contract.py.checkpoint3d5c.bak
+rag-server/tests/test_chat_ingestion_cli.py.bak
+tests/merchant/test_merchant_agent_cli.py.checkpoint3d3.bak
+tests/merchant/test_merchant_cli.py.checkpoint3c.bak
+.claude/runtime_backup_20260921_155111/debug-intent-envelope.json
+.claude/runtime_backup_20260921_155111/manual-hook-test.json
+.claude/runtime_backup_20260921_155111/merchant_confirmation/3547d3dc-be05-40fc-ae3f-ee54e280d9cd.json
+.claude/runtime_backup_20260921_155111/merchant_confirmation/c686a9d7-d075-4080-a6cb-74157bf11adf.json
+.claude/runtime_backup_20260921_155111/pending_team_results/c28f85fbd4c622ffb0a82ebaf85341c3a69c1dd6d82614c97cb0d82a9211a66e.json
+.claude/runtime_backup_20260921_155111/team_hook_debug.jsonl
+.claude/runtime_backup_20260921_155111/team_state/3547d3dc-be05-40fc-ae3f-ee54e280d9cd.json
+.claude/runtime_backup_20260921_155111/team_state/aca327cc-ab80-4535-943c-95eb5638e707.json
+.claude/runtime_backup_20260921_155111/team_state/c686a9d7-d075-4080-a6cb-74157bf11adf.json
+.pytest_cache/   .ruff_cache/   (all files)
+__pycache__/*.pyc in: ./ .claude/ .claude/agents/ .claude/agents/team/ .claude/agents/tools/
+  .claude/agents/tools/{bigquery,merchant,rag,scheduler}/ .claude/clients/ .claude/clients/merchant/
+  .claude/examples/ .claude/hooks/ .claude/scripts/ .claude/system/ .claude/workers/
+  rag-server/app/ tests/ tests/merchant/
+```
+
+Deletion used this explicit 530-file list, file by file; directories were removed only once
+empty. `.pyc` files are regenerated by Python on import (the active session's hooks recreated
+87 during the run, as expected).
+
+### Space
+
+| | KiB (repository folder excluding `.git`, venvs, model cache) |
+|---|---|
+| Before | 28,729 |
+| After | 13,095 |
+| Reclaimed | ≈ 15,634 (≈ 15.3 MiB; 16,186,226 bytes in the deleted files) |
+
+### `.gitignore` additions
+
+`.ruff_cache/`, `*.backup`, `*.old`, `*.orig`, `*.dump`, `*.sql.gz` (earlier in this checkpoint:
+`.claude/runtime_backup_*/`). `*.sql` is deliberately **not** ignored; migrations stay tracked
+(verified with `git check-ignore`).
+
+### Backup/restore readiness
+
+Documented in [backup and restore](../operations/backup-restore.md).
+
+- No database backup was created, restored, verified or deleted; no database write was made.
+- Runtime backups exist only as recorded evidence (CP9, CP10); their current integrity is
+  **unverified**.
+- **There is no backup of `coding_agent_merchant_test`**, which holds the accepted live-acceptance
+  records. Recommended operator action: a custom-format `pg_dump` stored outside the repository,
+  with its SHA-256 recorded (procedure in the backup document).
+
+### Verification after this cleanup
+
+- Migrations: no diff since `b585de2`; all 11 SHA-256 values unchanged.
+- REVIEW_REQUIRED files still present; no recovery copy deleted.
+- Active links/paths: 0 problems. `system_test.py`: 83/83. All hooks import;
+  `RUNTIME_DIRECT_EXECUTE_ENABLED = False`.
+- Test DB read-only snapshot: identical to the pre-cleanup snapshot. Runtime DB not accessed;
+  no live `/solve`.
+- Full regression: see the commit that follows this section (§12).

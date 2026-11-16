@@ -64,6 +64,8 @@ python .claude/clients/merchant/migrate.py --apply  --database test   # writes; 
 
 ## 4. Backup and recovery
 
+Inventory, naming and restore rules: [backup and restore](backup-restore.md).
+
 - Back up the managed document store (outside the repository) **before** the database snapshot
   (DEC-D4a); orphan cleanup is manual.
 - An interrupted write is never assumed rolled back: its outcome is read from the claim and

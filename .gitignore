@@ -54,13 +54,21 @@ Thumbs.db
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
 # Temporary
 *.tmp
 *.bak
+*.backup
+*.old
+*.orig
 *.log
+
+# Database dumps never belong in Git (migrations *.sql stay tracked)
+*.dump
+*.sql.gz
 test_output.txt
 workflow_test.txt
 
