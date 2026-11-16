@@ -22,13 +22,21 @@ it. Database environments and migrations: [database and migrations](database-and
 |---|---|---|---|
 | Runtime DB backup before CP9 runtime mutation (custom format) | Outside the repository (private; passed to `inspect_runtime_backup` via `MERCHANT_RUNTIME_BACKUP_FILE`) | `backup_sha256 5567a6ac9508490085382b58a6b8395e37814a698c0eb024577e94abaab2e145`, 53,606 bytes ([CP9 handoff §3](../../archive/checkpoints/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)) | **No** — not accessed during cleanup |
 | Runtime DB backup before migration 4 (CP10 Gate 10.7, custom format, restore listing verified then) | Outside the repository (private) | `backup_sha256 7745c7855d6fb0549c1e81c58af5e67a9c7da4289af0c8980ffff784045068be` ([CP10 handoff](../../archive/checkpoints/MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md)) | **No** |
-| Test DB (`coding_agent_merchant_test`), including accepted live records (Projects A, D and earlier NL acceptances) | Docker container `coding-agent-rag-db` | Read-only content snapshot hash `4d5716a99a295710…` (18 `merchant_ops` tables) | Content snapshot only — **no dump exists** |
+| Test DB (`coding_agent_merchant_test`), including accepted live records (Projects A, D and earlier NL acceptances) | Docker container `coding-agent-rag-db` | Read-only content snapshot hash `4d5716a99a295710…` (18 `merchant_ops` tables) | Yes: custom-format dump of 2026-11-16 14:55, SHA-256 `dfcecd94…3e02c`, `pg_restore --list` and a restore into a throwaway container verified ([cleanup report §12](../development/repository-cleanup-report.md#12-local-v10-release-gate--backup-and-full-regression-cp12hlocal-v1-release-gate)) |
 | Managed document store | `MERCHANT_DOCUMENT_STORE` (outside the repository) | — (no managed uploads implemented yet) | n/a |
 | Execution history (claims, ledger, events) | Inside each database | Receipts rebuildable via `attempt_evidence.recover_*` | Covered by the database backup only |
 | Session run state and pending confirmations | `.claude/runtime/` (git-ignored) | All pending records spent and expired | Not a backup; do not delete while a session runs |
 
-**Gap:** there is no backup of the test database, so the accepted live-acceptance evidence exists
-only in the running container. Recommended operator action (not run by the cleanup):
+Test-database backups are stored in `%USERPROFILE%\Backups\coding-agent-merchant\`. Procedure
+(from Git Bash, stream the dump to avoid paths inside the container):
+
+```bash
+docker exec coding-agent-rag-db pg_dump -U <superuser> -d coding_agent_merchant_test -Fc > <backup-dir>/coding_agent_merchant_test_test_<YYYYMMDD-HHMM>_custom.dump
+sha256sum <file>
+docker exec -i coding-agent-rag-db pg_restore --list < <file>   # the archive listing must parse
+```
+
+Equivalent PowerShell form:
 
 ```powershell
 docker exec coding-agent-rag-db pg_dump -U <owner> -d coding_agent_merchant_test -Fc -f /tmp/t.dump
