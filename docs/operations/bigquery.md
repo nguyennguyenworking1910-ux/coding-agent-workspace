@@ -20,7 +20,7 @@ code change.**
 | CLI | `.claude/bq_query.py` | `python .claude/bq_query.py <template> --param k=v` |
 
 Data flow, following the one-way dependency rule in
-[ARCHITECTURE.md](./ARCHITECTURE.md):
+[system overview](../architecture/system-overview.md):
 
 ```
 python .claude/bq_query.py daily_counts --param day=2026-08-01
@@ -77,7 +77,7 @@ below.
 ### 3. Install the package
 
 ```powershell
-pip install -r .claude/agents/requirements.txt
+pip install -e .
 ```
 
 Everything imports fine without `google-cloud-bigquery`; you just get a clear
@@ -337,7 +337,7 @@ usually a template that should have a `GROUP BY`.
 ### `The google-cloud-bigquery package is not installed.`
 
 ```powershell
-pip install -r .claude/agents/requirements.txt
+pip install -e .
 ```
 
 Nothing here fails at import time on a missing SDK, so `--list` still works — only the
@@ -425,9 +425,9 @@ template variant without that filter.
 
 ## Related documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — folder rules and the agents → tools → clients dependency direction
-- [SETUP.md](./SETUP.md) — the Google Calendar side of `clients/config.py`
-- [SCHEDULE_CLI.md](./SCHEDULE_CLI.md) — the other standalone CLI, same package-loading pattern
+- [system overview](../architecture/system-overview.md) — folder rules and the agents → tools → clients dependency direction
+- [local setup](local-setup.md) — the Google Calendar side of `clients/config.py`
+- [scheduler](scheduler.md) — the other standalone CLI, same package-loading pattern
 
 ---
 

@@ -13,16 +13,16 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_10_handoff_exists_and_is_indexed():
-    handoff = PROJECT_ROOT / ".claude" / "documents" / HANDOFF_NAME
+    handoff = PROJECT_ROOT / "archive" / "checkpoints" / HANDOFF_NAME
 
     assert handoff.is_file()
-    assert HANDOFF_NAME in _read(".claude/documents/README.md")
-    assert HANDOFF_NAME in _read("README.md")
-    assert HANDOFF_NAME in _read(".claude/documents/ARCHITECTURE.md")
+    assert HANDOFF_NAME in _read("docs/development/checkpoint-history.md")
+    assert "checkpoint-history.md" in _read("README.md")
+    assert "checkpoint-history.md" in _read("docs/README.md")
 
 
 def test_plan_records_completed_remote_implementation_state():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert (
         "Complete; implementation commit "
@@ -32,7 +32,7 @@ def test_plan_records_completed_remote_implementation_state():
 
 
 def test_handoff_records_final_checkpoint_and_execution_modes():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "final planned Merchant Project Manager implementation" in content
     for mode in (
@@ -47,7 +47,7 @@ def test_handoff_records_final_checkpoint_and_execution_modes():
 
 
 def test_handoff_records_honest_delivery_and_lease_contract():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "**at least\nonce**, not exactly once" in content
     assert "fresh opaque token" in content
@@ -57,7 +57,7 @@ def test_handoff_records_honest_delivery_and_lease_contract():
 
 
 def test_handoff_records_channels_and_private_payload_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for channel in ("`INTERNAL`", "`EMAIL`", "`SLACK`"):
         assert channel in content
@@ -67,7 +67,7 @@ def test_handoff_records_channels_and_private_payload_boundary():
 
 
 def test_handoff_records_migration_backup_and_authorization():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for value in (
         "5d305951e7970d982f3d839bc0bb1363d96beb16312445b07cdbde777109e110",
@@ -81,7 +81,7 @@ def test_handoff_records_migration_backup_and_authorization():
 
 
 def test_handoff_records_exact_redacted_runtime_state():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for row in (
         "| Merchant records | 22 |",
@@ -98,7 +98,7 @@ def test_handoff_records_exact_redacted_runtime_state():
 
 
 def test_handoff_records_runtime_hashes_and_role_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "c0c48cf58a0cd55a25a78abc35922114a36c42b92d29d6c1c58d97898733a501" in content
     assert "d657f977a384b4747882017ef77163bf4e268a38f6092dfbdd8dfc4ebb609354" in content
@@ -108,7 +108,7 @@ def test_handoff_records_runtime_hashes_and_role_boundary():
 
 
 def test_handoff_records_test_lifecycle_and_cleanup():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "separate-connection concurrent claim exclusion" in content
     assert "claim-token rotation and stale-token rejection" in content
@@ -117,7 +117,7 @@ def test_handoff_records_test_lifecycle_and_cleanup():
 
 
 def test_handoff_records_operations_and_activation_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "MERCHANT_ALERT_OPERATIONS.md" in content
     assert "Windows Task Scheduler with `IgnoreNew`" in content
@@ -127,7 +127,7 @@ def test_handoff_records_operations_and_activation_boundary():
 
 
 def test_handoff_records_gate_markers_and_final_staging_scope():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for marker in (
         "CHECKPOINT_10_GATE_1_DELIVERY_CONFIGURATION_AND_PAYLOAD_PASSED",
@@ -143,7 +143,7 @@ def test_handoff_records_gate_markers_and_final_staging_scope():
 
 
 def test_handoff_defines_ready_for_use_and_debugging_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "ready\nfor ordinary use, observation, and issue-driven debugging" in content
     assert "does not authorize a\nreal Merchant workflow mutation" in content
@@ -152,7 +152,7 @@ def test_handoff_defines_ready_for_use_and_debugging_boundary():
 
 
 def test_handoff_records_final_regression_and_remote_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "219 focused tests" in content
     assert "1,810 complete non-live tests" in content

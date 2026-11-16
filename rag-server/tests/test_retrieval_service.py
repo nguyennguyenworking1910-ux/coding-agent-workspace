@@ -92,7 +92,7 @@ def test_search_basic():
             "parent_id": "parent-1",
             "parent_chunk_index": 0,
             "content": "Architecture content",
-            "source_key": "workspace:.claude/documents/ARCHITECTURE.md",
+            "source_key": "workspace:docs/architecture/system-overview.md",
             "source_type": "project_document",
             "title": "Architecture",
             "source_id": "source-1",
@@ -122,7 +122,7 @@ def test_search_basic():
     )
     assert (
         response.results[0].source_key
-        == "workspace:.claude/documents/ARCHITECTURE.md"
+        == "workspace:docs/architecture/system-overview.md"
     )
 
 

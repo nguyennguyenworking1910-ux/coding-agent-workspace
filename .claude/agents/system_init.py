@@ -1,6 +1,6 @@
 """System initialization and enforcement rules.
 
-All agents must read ARCHITECTURE.md before executing any tasks.
+All agents must read docs/architecture/system-overview.md before executing any tasks.
 This module enforces that requirement.
 """
 
@@ -8,22 +8,22 @@ from pathlib import Path
 from typing import Dict, Any
 
 
-ARCHITECTURE_FILE = Path(__file__).parent.parent / "documents" / "ARCHITECTURE.md"
+ARCHITECTURE_FILE = Path(__file__).resolve().parents[2] / "docs" / "architecture" / "system-overview.md"
 
 ARCHITECTURE_CHECK_PROMPT = """
 Before you proceed with your task, you MUST read the system architecture document.
 
-📖 **REQUIRED READING**: Please read `.claude/documents/ARCHITECTURE.md`
+📖 **REQUIRED READING**: Please read `docs/architecture/system-overview.md`
 
 This document contains:
 - System overview and core concepts
 - Directory structure and folder responsibilities
 - Rules for building and adding agents, tools, and clients
-- Critical documentation storage rules (all .md files go in .claude/documents/)
+- Documentation placement rules (docs/, archive/, and the load-bearing .md locations)
 - Best practices and naming conventions
 - System orchestration and team hierarchy
 
-⚠️ **CRITICAL RULE**: All markdown documentation (.md files) MUST be stored in `.claude/documents/`
+⚠️ **CRITICAL RULE**: Documentation goes in `docs/`; agent definitions and slash commands stay in `.claude/agents/` and `.claude/commands/`
 
 Only proceed with your task AFTER reading this architecture document.
 
@@ -43,17 +43,17 @@ def get_architecture_check() -> str:
 
 
 def architecture_acknowledgment(agent_name: str) -> str:
-    """Generate acknowledgment message for agent reading ARCHITECTURE.md."""
+    """Generate acknowledgment message for agent reading the architecture overview."""
     return f"""
 ✅ {agent_name} Architecture Check
 
 Agent: {agent_name}
 Status: Ready to proceed
-Acknowledgment: I have read ARCHITECTURE.md and understand:
+Acknowledgment: I have read docs/architecture/system-overview.md and understand:
 - System architecture and components
 - Directory structure and folder ownership
 - Rules for adding new agents, tools, and clients
-- CRITICAL: All .md files must go in .claude/documents/
+- CRITICAL: Documentation goes in docs/; agents and commands keep their load-bearing locations
 - Best practices and naming conventions
 - System orchestration hierarchy
 
@@ -75,14 +75,14 @@ def create_agent_initialization(agent_name: str, agent_type: str) -> Dict[str, A
         "agent_name": agent_name,
         "agent_type": agent_type,
         "initialization_checklist": [
-            ("Read ARCHITECTURE.md", True),  # Required
+            ("Read docs/architecture/system-overview.md", True),  # Required
             ("Understand system structure", True),  # Required
             ("Know folder responsibilities", True),  # Required
             ("Understand documentation rules", True),  # Required
             ("Ready to execute tasks", False),  # Will be set after reading
         ],
         "critical_rules": [
-            "All .md files MUST go in .claude/documents/",
+            "Documentation goes in docs/ (history in archive/)",
             "Register new components in agents.json",
             "Follow directory structure strictly",
             "Use proper naming conventions",

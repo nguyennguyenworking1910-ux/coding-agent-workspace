@@ -13,20 +13,20 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_8_handoff_exists_and_is_indexed():
-    handoff = PROJECT_ROOT / ".claude" / "documents" / HANDOFF_NAME
-    document_index = _read(".claude/documents/README.md")
+    handoff = PROJECT_ROOT / "archive" / "checkpoints" / HANDOFF_NAME
+    document_index = _read("docs/development/checkpoint-history.md")
     root_readme = _read("README.md")
-    architecture = _read(".claude/documents/ARCHITECTURE.md")
+    architecture = _read("docs/architecture/system-overview.md")
 
     assert handoff.is_file()
     assert HANDOFF_NAME in document_index
-    assert HANDOFF_NAME in root_readme
-    assert HANDOFF_NAME in architecture
+    assert "checkpoint-history.md" in root_readme
+    assert "checkpoint-history.md" in _read("docs/README.md")
 
 
 def test_plan_and_handoff_record_completed_commit_status():
-    plan = _read(f".claude/documents/{PLAN_NAME}")
-    handoff = _read(f".claude/documents/{HANDOFF_NAME}")
+    plan = _read(f"archive/checkpoints/{PLAN_NAME}")
+    handoff = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "Implementation and verification complete; staging review pending" in plan
     assert "**Completion commit:** `efa05fa`" in handoff
@@ -34,7 +34,7 @@ def test_plan_and_handoff_record_completed_commit_status():
 
 
 def test_handoff_records_deadline_policy_and_five_types():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "Asia/Ho_Chi_Minh" in content
     assert "default due-soon window of seven calendar days" in content
@@ -50,7 +50,7 @@ def test_handoff_records_deadline_policy_and_five_types():
 
 
 def test_handoff_records_gate_and_parallel_branch_behavior():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "exact `project_step_id`, step name, and `branch_key`" in content
     assert "latest active document revision" in content
@@ -61,7 +61,7 @@ def test_handoff_records_gate_and_parallel_branch_behavior():
 
 
 def test_handoff_records_bounded_read_repository_and_filters():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "default is 100 candidate projects" in content
     assert "reviewed maximum is 500" in content
@@ -73,7 +73,7 @@ def test_handoff_records_bounded_read_repository_and_filters():
 
 
 def test_handoff_records_cli_compatibility_and_public_limit_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "project alerts <project_id>" in content
     assert "Equivalent positional and flagged ids" in content
@@ -82,7 +82,7 @@ def test_handoff_records_cli_compatibility_and_public_limit_boundary():
 
 
 def test_handoff_records_complete_regression_evidence():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "8.5 complete focused regression | 295 passed" in content
     assert "1,374 passed, 120 subtests passed" in content
@@ -91,7 +91,7 @@ def test_handoff_records_complete_regression_evidence():
 
 
 def test_handoff_records_live_lifecycle_and_cleanup():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "coding_agent_merchant_test" in content
     assert "user `merchant_test`" in content
@@ -103,7 +103,7 @@ def test_handoff_records_live_lifecycle_and_cleanup():
 
 
 def test_handoff_preserves_read_only_delivery_and_private_data_boundaries():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "may not" in content
     assert "enqueue or claim an alert delivery" in content
@@ -113,7 +113,7 @@ def test_handoff_preserves_read_only_delivery_and_private_data_boundaries():
 
 
 def test_handoff_defines_checkpoint_9_continuation_order():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 12. Next checkpoint — Checkpoint 9" in content
     assert "final currently planned core Phase 4 checkpoint" in content
@@ -124,7 +124,7 @@ def test_handoff_defines_checkpoint_9_continuation_order():
 
 
 def test_handoff_records_completed_commit_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 13. Commit record" in content
     assert (

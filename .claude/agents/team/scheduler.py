@@ -1,5 +1,5 @@
 ### Scheduler agent - LLM-powered Google Calendar management.
-### IMPORTANT: This agent enforces reading ARCHITECTURE.md before execution.
+### IMPORTANT: This agent enforces reading docs/architecture/system-overview.md before execution.
 ### All agents must understand system architecture, folder structure, and rules.
 
 
@@ -68,7 +68,7 @@ including: event name, date, time, and duration."""
         """
         Execute scheduling task with Google Calendar integration.
 
-        ⚠️ REQUIRED STEP 1: Read ARCHITECTURE.md
+        ⚠️ REQUIRED STEP 1: Read docs/architecture/system-overview.md
         Before proceeding, all agents must read and understand the system architecture,
         including folder structure, component responsibilities, and critical rules.
 

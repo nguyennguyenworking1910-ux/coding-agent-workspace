@@ -37,7 +37,7 @@ except ImportError:
 
 MISSING_PACKAGE_MESSAGE = (
     "The google-cloud-bigquery package is not installed.\n"
-    "Run: pip install -r .claude/agents/requirements.txt"
+    "Run: pip install -e ."
 )
 
 # On-demand analysis pricing, used only to turn a byte estimate into a number a
@@ -179,7 +179,7 @@ class BigQueryClient:
             f"2. {config.BIGQUERY_SERVICE_ACCOUNT} - Service account key (optional)\n\n"
             "Fix (no credential files needed):\n"
             f"  {config.BIGQUERY_ADC_LOGIN_COMMAND}\n\n"
-            "See .claude/documents/BIGQUERY_INTEGRATION.md for details."
+            "See docs/operations/bigquery.md for details."
         )
 
     @property

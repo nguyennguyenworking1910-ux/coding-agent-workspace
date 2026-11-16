@@ -15,9 +15,9 @@ MERCHANT_MANAGER_PATH = (
 )
 PROJECT_MANAGER_PATH = (
     PROJECT_ROOT
-    / ".claude"
-    / "documents"
-    / "MERCHANT_PROJECT_MANAGER.md"
+    / "docs"
+    / "merchant"
+    / "project-manager-design.md"
 )
 
 

@@ -74,16 +74,15 @@ def test_rag_tool_is_registered():
 def test_rag_documentation_is_indexed():
     documentation = (
         PROJECT_ROOT
-        / ".claude"
-        / "documents"
-        / "RAG_INTEGRATION.md"
+        / "docs"
+        / "operations"
+        / "rag.md"
     )
     index = (
         PROJECT_ROOT
-        / ".claude"
-        / "documents"
+        / "docs"
         / "README.md"
     ).read_text(encoding="utf-8")
 
     assert documentation.is_file()
-    assert "RAG_INTEGRATION.md" in index
+    assert "operations/rag.md" in index

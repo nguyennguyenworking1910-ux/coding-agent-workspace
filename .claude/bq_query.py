@@ -11,7 +11,7 @@ Adding a query needs no code: drop a `.sql` file into
 .claude/agents/tools/bigquery/templates/ and it shows up in --list.
 
 One-time setup (no local credentials needed) - see
-.claude/documents/BIGQUERY_INTEGRATION.md:
+docs/operations/bigquery.md:
     gcloud auth application-default login
 """
 
@@ -322,7 +322,7 @@ def print_result(result, output_format: str) -> bool:
         print(f"\n{result.get('error', 'Unknown error')}")
         if result.get("template"):
             print(f"\nTemplate: {result['template']}")
-        print("\nSee .claude/documents/BIGQUERY_INTEGRATION.md for setup and "
+        print("\nSee docs/operations/bigquery.md for setup and "
               "troubleshooting.")
         print("\n" + "=" * 70 + "\n")
         return False
@@ -388,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Add a query by dropping a .sql file into "
             f"{config.BIGQUERY_TEMPLATE_DIR} - no code change needed. "
-            "See .claude/documents/BIGQUERY_INTEGRATION.md."
+            "See docs/operations/bigquery.md."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

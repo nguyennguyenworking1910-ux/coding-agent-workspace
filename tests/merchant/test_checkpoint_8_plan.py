@@ -12,15 +12,15 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_8_plan_exists_and_is_indexed():
-    plan = PROJECT_ROOT / ".claude" / "documents" / PLAN_NAME
-    index = _read(".claude/documents/README.md")
+    plan = PROJECT_ROOT / "archive" / "checkpoints" / PLAN_NAME
+    index = _read("docs/development/checkpoint-history.md")
 
     assert plan.is_file()
     assert PLAN_NAME in index
 
 
 def test_plan_uses_the_pushed_checkpoint_7_commit_as_baseline():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "**Base commit:** `370b0d0`" in content
     assert "Gate 8.0 baseline verified" in content
@@ -28,7 +28,7 @@ def test_plan_uses_the_pushed_checkpoint_7_commit_as_baseline():
 
 
 def test_plan_reuses_the_existing_checker():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert ".claude/agents/tools/merchant/checker.py" in content
     assert "must not create a duplicate checker" in content
@@ -37,7 +37,7 @@ def test_plan_reuses_the_existing_checker():
 
 
 def test_plan_preserves_the_five_database_alert_types():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for alert_type in (
         "OVERDUE",
@@ -52,7 +52,7 @@ def test_plan_preserves_the_five_database_alert_types():
 
 
 def test_plan_keeps_calculation_read_only_and_delivery_separate():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "deterministic, read-only alert view" in content
     assert "Alert delivery is not part of Checkpoint 8" in content
@@ -60,7 +60,7 @@ def test_plan_keeps_calculation_read_only_and_delivery_separate():
 
 
 def test_plan_covers_global_query_filters():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "optional merchant id, project id, alert type" in content
     assert "due-date-before filters" in content
@@ -68,14 +68,14 @@ def test_plan_covers_global_query_filters():
 
 
 def test_plan_defines_all_checkpoint_8_gates():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for gate in range(8):
         assert f"### Gate 8.{gate}" in content
 
 
 def test_plan_records_the_remaining_roadmap():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "Checkpoint 8 is not the final core checkpoint" in content
     assert "Checkpoint 9 — Private Runtime Initialization" in content

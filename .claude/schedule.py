@@ -5,7 +5,7 @@ Usage:
     python .claude/schedule.py "schedule task 'trình ký GLX appendix 28' 30 mins"
 
 This path needs local credentials. One-time setup - see
-.claude/documents/SETUP.md, and .claude/documents/SCHEDULE_CLI.md for usage:
+docs/operations/local-setup.md, and docs/operations/scheduler.md for usage:
     gcloud auth application-default login \
       --scopes=openid,https://www.googleapis.com/auth/userinfo.email,\
 https://www.googleapis.com/auth/calendar
@@ -125,8 +125,8 @@ def print_result(result) -> bool:
         print("   - Create service account in Google Cloud")
         print("   - Share calendar with service account email")
         print(f"   - Place JSON key at {config.SERVICE_ACCOUNT_FILE}")
-        print("\nSee .claude/documents/SETUP.md for details,")
-        print("or .claude/documents/SCHEDULE_CLI.md to troubleshoot a specific message.")
+        print("\nSee docs/operations/local-setup.md for details,")
+        print("or docs/operations/scheduler.md to troubleshoot a specific message.")
 
     print("\n" + "=" * 70 + "\n")
     return bool(succeeded)

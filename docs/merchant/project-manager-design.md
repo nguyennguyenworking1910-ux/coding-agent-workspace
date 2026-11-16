@@ -1,6 +1,9 @@
 # Merchant Project Manager — Phase 4 Architecture Contract
 
-**Status:** Authoritative Design Document
+**Status:** Original domain design (data model, workflows, gates). Where it describes
+proposal/apply, confirmation tokens or evidence rules, it is superseded by
+[project lifecycle](project-lifecycle.md), [trusted execution](../architecture/trusted-execution.md)
+and the [decision register](../development/decision-register.md).
 **Phase:** 4 (Checkpoint 1: Architecture Contract)
 **Last Updated:** August 28, 2026
 **Timezone:** Asia/Ho_Chi_Minh
@@ -1667,8 +1670,8 @@ Deliver notifications:
 - Add environment variables to `.env.example`
 
 ### Checkpoint 3: Versioned Migrations and Database Client
-- Create `.claude/clients/merchant/migrations/versions/001_initial_schema.sql`
-- Implement migration runner (`.claude/clients/merchant/migrations/migrate.py`)
+- Create `.claude/clients/merchant/migrations/0001_initial_schema.sql`
+- Implement migration runner (`.claude/clients/merchant/migrate.py`)
 - Create PostgreSQL wrapper client (`.claude/clients/merchant/client.py`)
 - Create data access repository (`.claude/clients/merchant/repository.py`)
 - Implement parameterized query execution

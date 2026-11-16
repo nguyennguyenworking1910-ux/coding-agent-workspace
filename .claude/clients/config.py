@@ -126,7 +126,7 @@ BIGQUERY_MAX_BYTES_BILLED = _resolve_int("BIGQUERY_MAX_BYTES_BILLED", 10 * 1024*
 BIGQUERY_MAX_ROWS = _resolve_int("BIGQUERY_MAX_ROWS", 1000)
 
 # Where `.sql` query templates are discovered. Dropping a file in here is all that
-# is needed to add a query - see .claude/documents/BIGQUERY_INTEGRATION.md.
+# is needed to add a query - see docs/operations/bigquery.md.
 BIGQUERY_TEMPLATE_DIR = _resolve_path(
     "BIGQUERY_TEMPLATE_DIR",
     BASE_DIR.parent / "agents" / "tools" / "bigquery" / "templates",

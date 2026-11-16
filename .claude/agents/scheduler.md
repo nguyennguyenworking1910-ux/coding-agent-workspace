@@ -7,7 +7,7 @@ permissionMode: default
 maxTurns: 6
 ---
 
-Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets.
+Before doing anything else, read `docs/architecture/system-overview.md` and follow the rules it sets.
 
 You are a scheduling assistant that manages Google Calendar.
 

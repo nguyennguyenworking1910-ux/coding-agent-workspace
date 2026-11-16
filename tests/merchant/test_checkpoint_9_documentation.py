@@ -13,20 +13,20 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_9_handoff_exists_and_is_indexed():
-    handoff = PROJECT_ROOT / ".claude" / "documents" / HANDOFF_NAME
-    document_index = _read(".claude/documents/README.md")
+    handoff = PROJECT_ROOT / "archive" / "checkpoints" / HANDOFF_NAME
+    document_index = _read("docs/development/checkpoint-history.md")
     root_readme = _read("README.md")
-    architecture = _read(".claude/documents/ARCHITECTURE.md")
+    architecture = _read("docs/architecture/system-overview.md")
 
     assert handoff.is_file()
     assert HANDOFF_NAME in document_index
-    assert HANDOFF_NAME in root_readme
-    assert HANDOFF_NAME in architecture
+    assert "checkpoint-history.md" in root_readme
+    assert "checkpoint-history.md" in _read("docs/README.md")
 
 
 def test_plan_and_handoff_record_final_commit_status():
-    plan = _read(f".claude/documents/{PLAN_NAME}")
-    handoff = _read(f".claude/documents/{HANDOFF_NAME}")
+    plan = _read(f"archive/checkpoints/{PLAN_NAME}")
+    handoff = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert (
         "Complete; implementation commit "
@@ -40,7 +40,7 @@ def test_plan_and_handoff_record_final_commit_status():
 
 
 def test_handoff_records_exact_redacted_runtime_state():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "| Merchant records | 22 |" in content
     assert "| `ONBOARDING` | 22 |" in content
@@ -50,7 +50,7 @@ def test_handoff_records_exact_redacted_runtime_state():
 
 
 def test_handoff_records_catalog_hash_and_privacy_contract():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert (
         "c0c48cf58a0cd55a25a78abc35922114"
@@ -66,7 +66,7 @@ def test_handoff_records_catalog_hash_and_privacy_contract():
 
 
 def test_handoff_records_separate_authorizations_and_backup():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "MIGRATIONS_2_3_AUTHORIZED" in content
     assert "STANDARD_TEMPLATES_AUTHORIZED" in content
@@ -80,7 +80,7 @@ def test_handoff_records_separate_authorizations_and_backup():
 
 
 def test_handoff_records_migrations_and_templates():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for version in (1, 2, 3):
         assert f"| {version} |" in content
@@ -95,7 +95,7 @@ def test_handoff_records_migrations_and_templates():
 
 
 def test_handoff_records_atomic_catalog_and_rollback_correction():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "one connection, one transaction" in content
     assert "22 deterministic `MERCHANT_CATALOG_INITIALIZED` events" in content
@@ -106,7 +106,7 @@ def test_handoff_records_atomic_catalog_and_rollback_correction():
 
 
 def test_handoff_records_read_only_workflow_compatibility():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "collects two read-only snapshots" in content
     assert "stored catalog hash equal" in content
@@ -117,7 +117,7 @@ def test_handoff_records_read_only_workflow_compatibility():
 
 
 def test_handoff_records_privacy_scan_and_safe_staging_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "scanned every modified and untracked text file" in content
     assert "private codes and names and found no match" in content
@@ -126,7 +126,7 @@ def test_handoff_records_privacy_scan_and_safe_staging_boundary():
 
 
 def test_handoff_records_final_regression_markers():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     for marker in (
         "CHECKPOINT_9_GATE_7_FOCUSED_REGRESSION_PASSED",
@@ -141,7 +141,7 @@ def test_handoff_records_final_regression_markers():
 
 
 def test_handoff_records_final_core_and_future_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "completes the core Phase 4A" in content
     assert "Checkpoint 10 remains the optional Phase 4B" in content
@@ -149,7 +149,7 @@ def test_handoff_records_final_core_and_future_boundary():
 
 
 def test_handoff_records_pushed_commit_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 15. Commit and remote boundary" in content
     assert "2ac90c0a57ac857da8d537b8aeeea7b04fc97cb9" in content

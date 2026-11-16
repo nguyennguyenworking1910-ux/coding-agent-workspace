@@ -49,7 +49,6 @@ class SystemTest:
             '.claude/agents/tools',
             '.claude/clients',
             '.claude/commands',
-            '.claude/documents',
             '.claude/system',
         ]
 
@@ -63,11 +62,11 @@ class SystemTest:
                 self.tests_failed += 1
 
     def test_documentation_files(self):
-        """Test 2: Verify all .md files are in documents folder."""
+        """Test 2: Verify every .md file is in a valid location."""
         print_header("TEST 2: DOCUMENTATION FILES")
 
         # Find all .md files
-        md_files = list(self.base_path.glob('.claude/**/*.md'))
+        md_files = list(self.base_path.glob('.claude/**/*.md')) + list(self.base_path.glob('*.md'))
 
         # Filter out examples and other special directories
         invalid_locations = []
@@ -78,7 +77,8 @@ class SystemTest:
             # as_posix() so the separator check works on Windows too.
             location = relative.as_posix()
 
-            if location.startswith('.claude/documents/'):
+            if location in ('README.md', 'CLAUDE.md'):
+                # Repository overview and project instructions.
                 valid_locations.append(relative)
             elif location.startswith('.claude/commands/'):
                 # Slash command definitions; the harness only looks here.
@@ -144,7 +144,7 @@ class SystemTest:
             print_warning("Scheduler agent not found in agents.json")
 
     def test_agent_files(self):
-        """Test 4: Verify every subagent is defined and enforces ARCHITECTURE.md."""
+        """Test 4: Verify every subagent is defined and requires the architecture overview."""
         print_header("TEST 4: SUBAGENT DEFINITIONS")
 
         # Subagents are markdown files with YAML frontmatter; that is the only
@@ -178,11 +178,11 @@ class SystemTest:
                 print_error(f"Subagent missing name/description frontmatter: {agent_file}")
                 self.tests_failed += 1
 
-            if 'ARCHITECTURE.md' in content:
-                print_success(f"Subagent has ARCHITECTURE.md requirement: {agent_file}")
+            if 'docs/architecture/system-overview.md' in content:
+                print_success(f"Subagent has architecture-overview requirement: {agent_file}")
                 self.tests_passed += 1
             else:
-                print_error(f"Subagent missing ARCHITECTURE.md requirement: {agent_file}")
+                print_error(f"Subagent missing architecture-overview requirement: {agent_file}")
                 self.tests_failed += 1
 
     def _parse_frontmatter(self, content):
@@ -358,7 +358,7 @@ class SystemTest:
         """Test 6: Verify documentation README exists and is complete."""
         print_header("TEST 6: DOCUMENTATION INDEX")
 
-        readme_path = self.base_path / '.claude' / 'documents' / 'README.md'
+        readme_path = self.base_path / 'docs' / 'README.md'
 
         if not readme_path.exists():
             print_error("Documentation README.md not found!")
@@ -373,10 +373,13 @@ class SystemTest:
 
         # Check for key documentation files
         required_docs = [
-            ('ARCHITECTURE.md', 'System architecture'),
-            ('SETUP.md', 'Setup guide'),
-            ('SCHEDULE_CLI.md', 'Schedule agent'),
-            ('AGENT_INITIALIZATION.md', 'Agent initialization'),
+            ('architecture/system-overview.md', 'System architecture'),
+            ('architecture/trusted-execution.md', 'Trusted execution'),
+            ('merchant/project-lifecycle.md', 'Merchant lifecycle'),
+            ('operations/local-setup.md', 'Setup guide'),
+            ('operations/scheduler.md', 'Schedule agent'),
+            ('development/testing.md', 'Testing'),
+            ('development/checkpoint-history.md', 'Checkpoint history'),
         ]
 
         for doc_name, description in required_docs:
@@ -392,11 +395,12 @@ class SystemTest:
         print_header("TEST 7: CRITICAL DOCUMENTATION")
 
         critical_docs = [
-            '.claude/documents/ARCHITECTURE.md',
-            '.claude/documents/AGENT_INITIALIZATION.md',
-            '.claude/documents/SETUP.md',
-            '.claude/documents/SCHEDULE_CLI.md',
-            '.claude/documents/README.md',
+            'docs/README.md',
+            'docs/architecture/system-overview.md',
+            'docs/architecture/trusted-execution.md',
+            'docs/merchant/project-lifecycle.md',
+            'docs/operations/local-setup.md',
+            'docs/operations/scheduler.md',
         ]
 
         for doc_file in critical_docs:
@@ -470,11 +474,11 @@ class SystemTest:
             print_error("SchedulerAgent missing execute method")
             self.tests_failed += 1
 
-        if 'ARCHITECTURE.md' in content and 'STEP 1' in content:
-            print_success("SchedulerAgent enforces ARCHITECTURE.md requirement")
+        if 'docs/architecture/system-overview.md' in content and 'STEP 1' in content:
+            print_success("SchedulerAgent enforces the architecture-overview requirement")
             self.tests_passed += 1
         else:
-            print_error("SchedulerAgent missing ARCHITECTURE.md enforcement")
+            print_error("SchedulerAgent missing architecture-overview enforcement")
             self.tests_failed += 1
 
     def test_git_status(self):

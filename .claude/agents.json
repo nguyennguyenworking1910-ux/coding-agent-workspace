@@ -118,7 +118,7 @@
         "enabled": true,
         "datasets": ["group_sales", "sales_metrics"],
         "operations": ["query"],
-        "note": "Reached through the bigquery_tools module (claude.agents.tools.bigquery) on top of .claude/clients/bigquery_client.py, which authenticates with gcloud ADC. Queries are `.sql` templates in .claude/agents/tools/bigquery/templates/ bound with named parameters; run them with `python .claude/bq_query.py <template> --param key=value`. The `bq` CLI via Bash remains available for ad-hoc inspection. Writes require explicit user approval. See .claude/documents/BIGQUERY_INTEGRATION.md."
+        "note": "Reached through the bigquery_tools module (claude.agents.tools.bigquery) on top of .claude/clients/bigquery_client.py, which authenticates with gcloud ADC. Queries are `.sql` templates in .claude/agents/tools/bigquery/templates/ bound with named parameters; run them with `python .claude/bq_query.py <template> --param key=value`. The `bq` CLI via Bash remains available for ad-hoc inspection. Writes require explicit user approval. See docs/operations/bigquery.md."
       }
     },
     {
@@ -259,7 +259,7 @@
       "module": "claude.agents.tools.bigquery",
       "entry_point": ".claude/bq_query.py",
       "auth": "gcloud Application Default Credentials",
-      "note": "Values are bound as BigQuery named query parameters (@name), never interpolated into SQL. Capped by BIGQUERY_MAX_BYTES_BILLED (10 GiB default) and BIGQUERY_MAX_ROWS (1000 default). See .claude/documents/BIGQUERY_INTEGRATION.md.",
+      "note": "Values are bound as BigQuery named query parameters (@name), never interpolated into SQL. Capped by BIGQUERY_MAX_BYTES_BILLED (10 GiB default) and BIGQUERY_MAX_ROWS (1000 default). See docs/operations/bigquery.md.",
       "methods": [
         {"name": "list_templates", "description": "List available .sql templates with their descriptions and required @params"},
         {"name": "describe_template", "description": "Describe one template: description, required @params, and SQL"},

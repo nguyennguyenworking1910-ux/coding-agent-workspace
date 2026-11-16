@@ -14,7 +14,7 @@ The `scheduler` subagent has `Read` and `Bash` only — no calendar tools of its
 `/schedule-agent` is a wrapper around the entry point, not an alternative to it. Use the slash
 command inside a session for the confirmation flow and a relayed summary; use the CLI directly
 for scripting, cron, or anything outside a session. Either way, the credential setup in
-[SETUP.md](./SETUP.md) has to be done first.
+[local setup](local-setup.md) has to be done first.
 
 ---
 
@@ -110,7 +110,7 @@ The target calendar is `GOOGLE_CALENDAR_ID`, default `primary`.
 ## Credential troubleshooting
 
 Both paths need credentials, since both end at the CLI. Full setup, including the resolution
-order, is in [SETUP.md](./SETUP.md); this is what to do when a specific message appears.
+order, is in [local setup](local-setup.md); this is what to do when a specific message appears.
 
 ### `No credentials found` / the setup options block
 
@@ -153,15 +153,15 @@ fall back to `primary`, or share the calendar with that account.
 ### `ModuleNotFoundError: No module named 'claude'`
 
 Not a credential problem — the package is not installed. Activate `.venv` and run
-`pip install -e .` (see [SETUP.md](./SETUP.md)).
+`pip install -e .` (see [local setup](local-setup.md)).
 
 ---
 
 ## Related documentation
 
-- [SETUP.md](./SETUP.md) — Python environment, ADC, and the credential resolution order
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — why the scheduler is the one Python agent in the repo
-- [BIGQUERY_INTEGRATION.md](./BIGQUERY_INTEGRATION.md) — the other standalone CLI, same
+- [local setup](local-setup.md) — Python environment, ADC, and the credential resolution order
+- [system overview](../architecture/system-overview.md) — why the scheduler is the one Python agent in the repo
+- [BigQuery](bigquery.md) — the other standalone CLI, same
   package-loading pattern
 
 ---

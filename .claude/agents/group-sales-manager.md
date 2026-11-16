@@ -7,7 +7,7 @@ permissionMode: plan
 maxTurns: 8
 ---
 
-Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it
+Before doing anything else, read `docs/architecture/system-overview.md` and follow the rules it
 sets.
 
 ## Workspace knowledge retrieval
@@ -95,7 +95,7 @@ Treat writes as requiring explicit approval: report the `INSERT`/`UPDATE` you wo
 wait to be told to run it. Never run one unprompted.
 
 If BigQuery is not authenticated or a table is unavailable, say so and stop rather than
-inventing numbers. See `.claude/documents/BIGQUERY_INTEGRATION.md`.
+inventing numbers. See `docs/operations/bigquery.md`.
 
 ## Taking the request from the team lead
 

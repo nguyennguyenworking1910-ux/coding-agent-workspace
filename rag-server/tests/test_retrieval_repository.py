@@ -137,7 +137,7 @@ def test_vector_search_with_source_key_filter():
     candidates = repo.vector_search(
         embedding,
         candidate_k=40,
-        source_keys=["workspace:.claude/documents/ARCHITECTURE.md"],
+        source_keys=["workspace:docs/architecture/system-overview.md"],
     )
 
     assert len(candidates) == 1

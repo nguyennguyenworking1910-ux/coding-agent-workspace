@@ -30,7 +30,7 @@ def test_claude_instructions_include_merchant_boundary():
 
 
 def test_architecture_lists_merchant_agent_and_adapter():
-    content = _read(".claude/documents/ARCHITECTURE.md")
+    content = _read("docs/architecture/system-overview.md")
 
     assert "Merchant operations" in content
     assert "merchant-manager.md" in content
@@ -40,17 +40,17 @@ def test_architecture_lists_merchant_agent_and_adapter():
 
 def test_checkpoint_6_handoff_exists_and_is_indexed():
     handoff = (
-        PROJECT_ROOT / ".claude" / "documents" / HANDOFF_NAME
+        PROJECT_ROOT / "archive" / "checkpoints" / HANDOFF_NAME
     )
-    index = _read(".claude/documents/README.md")
+    index = _read("docs/development/checkpoint-history.md")
 
     assert handoff.is_file()
     assert HANDOFF_NAME in index
-    assert "The eight specialists" in index
+    assert "The eight specialists" in _read("docs/README.md")
 
 
 def test_handoff_records_fail_closed_checkpoint_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "runtime_authorized=False" in content
     assert "rejects every runtime apply" in content
@@ -59,7 +59,7 @@ def test_handoff_records_fail_closed_checkpoint_boundary():
 
 
 def test_handoff_records_final_regression_evidence():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "**Completion commit:** `ba16daa`" in content
     assert "**Status:** Complete, committed, and pushed" in content
@@ -72,7 +72,7 @@ def test_handoff_records_final_regression_evidence():
 
 
 def test_handoff_records_completed_commit_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 12. Commit record" in content
     assert "ba16daa Complete Checkpoint 6 merchant manager agent" in content
@@ -81,7 +81,7 @@ def test_handoff_records_completed_commit_boundary():
 
 
 def test_handoff_defines_checkpoint_7_continuation_order():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 11. Next checkpoint — Checkpoint 7" in content
     assert "Merchant read, proposal, and confirmed-apply operations" in content
@@ -90,7 +90,7 @@ def test_handoff_defines_checkpoint_7_continuation_order():
 
 
 def test_handoff_preserves_runtime_migration_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "Migration 3 remains unapplied to the runtime database" in content
     assert "fresh read-only plan" in content

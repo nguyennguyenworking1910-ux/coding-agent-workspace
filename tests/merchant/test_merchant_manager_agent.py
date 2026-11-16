@@ -54,9 +54,9 @@ def test_agent_reads_architecture_before_work():
     content = _content()
 
     assert "Before doing anything else" in content
-    assert ".claude/documents/ARCHITECTURE.md" in content
+    assert "docs/architecture/system-overview.md" in content
     assert (
-        ".claude/documents/MERCHANT_PROJECT_MANAGER.md"
+        "docs/merchant/project-manager-design.md"
         in content
     )
 

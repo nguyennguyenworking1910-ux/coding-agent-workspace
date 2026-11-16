@@ -28,9 +28,9 @@ never ask for `--merchant-confirmation`, and never emit or request a proposal.
 Never construct, modify, widen, or independently authorize a scope. Never
 call the runtime handoff from a shell.
 
-Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it
+Before doing anything else, read `docs/architecture/system-overview.md` and follow the rules it
 sets. Also read the relevant command contract in
-`.claude/documents/MERCHANT_PROJECT_MANAGER.md` when the assignment requires a Merchant
+`docs/merchant/project-manager-design.md` when the assignment requires a Merchant
 operation.
 
 You are the single Merchant Project Manager teammate. PostgreSQL is authoritative for current

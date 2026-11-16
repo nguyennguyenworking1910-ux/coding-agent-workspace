@@ -1,5 +1,12 @@
 # CP12H.MASTER — Live Acceptance Runbook (workflows A–D, test database)
 
+> **Status (2026-11-16):** the §10 smoke acceptance was run: Project A (document revision, three
+> approvals, signing) and Project D (signed revision reuse, PO, Payment Request, all four Steps,
+> Project COMPLETED) passed on the test database. Since `1f7fb4c`, completing a Step promotes
+> its fully satisfied PENDING successors to READY, so a separate "sẵn sàng" Step Update is only
+> needed for a Step that was not promoted. Current rules: [project lifecycle](../merchant/project-lifecycle.md).
+> Paths to `cp12h_*.md` reports below now live in `archive/checkpoints/cp12h/`.
+
 > **Use §10 (Risk-Based Live Smoke Acceptance, added by CP12H.MASTER-LIVE-SMOKE) for Local MVP acceptance.** It needs 40 core confirmed writes instead of about 211. §4–§8 stay as the optional exhaustive reference. One correction to them: a contract is signed only after its signing-gate Step is COMPLETED. Since CP12H.MASTER-FIX-F1 the system enforces this. An early signing preview is BLOCKED with `SIGNING_GATE_STEP_NOT_COMPLETED` (see §10.1, finding F1, FIXED).
 
 Prepared 2026-11-13 by CP12H.MASTER-LIVE-PREFLIGHT. This checkpoint was **read-only**: no code changed, no Project created, no Merchant write, no live `/solve`, no commit. It supersedes the runbook in `cp12h_master_local_mvp_completion.md` §12, because the new one covers workflows A–D and fixes the wording findings in §4.0.

@@ -51,7 +51,7 @@ python .claude/schedule.py "<request>"
 
 That path uses the Google Calendar REST API and **requires local credentials**. If the subagent
 reports an authentication or setup failure, pass the message on — the fix is in
-`.claude/documents/SETUP.md`, and `.claude/documents/SCHEDULE_CLI.md` walks through the
+`docs/operations/local-setup.md`, and `docs/operations/scheduler.md` walks through the
 specific errors. Do not work around it by reaching for calendar tools yourself.
 
 ## Example flows

@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DOCUMENT_NAME = "MERCHANT_ALERT_OPERATIONS.md"
+DOCUMENT_NAME = "merchant-alert-operations.md"
 
 
 def _read(relative_path: str) -> str:
@@ -14,15 +14,15 @@ def _read(relative_path: str) -> str:
 
 
 def test_operations_runbook_exists_and_is_indexed():
-    document = PROJECT_ROOT / ".claude" / "documents" / DOCUMENT_NAME
+    document = PROJECT_ROOT / "docs" / "operations" / DOCUMENT_NAME
 
     assert document.is_file()
-    assert DOCUMENT_NAME in _read(".claude/documents/README.md")
+    assert DOCUMENT_NAME in _read("docs/README.md")
     assert DOCUMENT_NAME in _read("README.md")
 
 
 def test_operations_runbook_requires_one_explicit_mode():
-    content = _read(f".claude/documents/{DOCUMENT_NAME}")
+    content = _read(f"docs/operations/{DOCUMENT_NAME}")
 
     for mode in (
         "--dry-run",
@@ -39,7 +39,7 @@ def test_operations_runbook_requires_one_explicit_mode():
 
 
 def test_operations_runbook_records_safety_and_recovery_contracts():
-    content = _read(f".claude/documents/{DOCUMENT_NAME}")
+    content = _read(f"docs/operations/{DOCUMENT_NAME}")
 
     for required_text in (
         "at least once",
@@ -57,7 +57,7 @@ def test_operations_runbook_records_safety_and_recovery_contracts():
 
 
 def test_operations_runbook_does_not_claim_exactly_once_delivery():
-    content = _read(f".claude/documents/{DOCUMENT_NAME}")
+    content = _read(f"docs/operations/{DOCUMENT_NAME}")
 
     assert "not exactly once" in content
     assert "at least once" in content

@@ -133,7 +133,7 @@ gcloud config set project my-project-id
 ```
 
 Details, environment variables, and safety caps are in
-[BIGQUERY_INTEGRATION.md](./BIGQUERY_INTEGRATION.md).
+[BigQuery](bigquery.md).
 
 ### Calendar credential resolution order
 
@@ -154,7 +154,7 @@ switch accounts. None of these files need to exist if ADC is set up. Other calen
 `Asia/Ho_Chi_Minh`).
 
 Credential troubleshooting for the scheduler specifically is in
-[SCHEDULE_CLI.md](./SCHEDULE_CLI.md).
+[scheduler](scheduler.md).
 
 ---
 
@@ -207,10 +207,9 @@ shell.
 
 ## Related documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — folder ownership and the rules for adding anything
-- [SCHEDULE_CLI.md](./SCHEDULE_CLI.md) — scheduling from a session or a shell
-- [BIGQUERY_INTEGRATION.md](./BIGQUERY_INTEGRATION.md) — the BigQuery side of `clients/config.py`
-- [AGENT_INITIALIZATION.md](./AGENT_INITIALIZATION.md) — what every agent reads before executing
+- [system overview](../architecture/system-overview.md) — folder ownership and the rules for adding anything
+- [scheduler](scheduler.md) — scheduling from a session or a shell
+- [BigQuery](bigquery.md) — the BigQuery side of `clients/config.py`
 
 ---
 

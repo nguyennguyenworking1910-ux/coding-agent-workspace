@@ -7,7 +7,7 @@ permissionMode: default
 maxTurns: 12
 ---
 
-Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets, especially which folder new code belongs in and the rule that all `.md` documentation goes in `.claude/documents/`.
+Before doing anything else, read `docs/architecture/system-overview.md` and follow the rules it sets, especially which folder new code belongs in and the rule that documentation goes in `docs/` (agent definitions and slash commands keep their own folders).
 
 ## Workspace knowledge retrieval
 

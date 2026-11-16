@@ -12,19 +12,19 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_7_handoff_exists_and_is_indexed():
-    handoff = PROJECT_ROOT / ".claude" / "documents" / HANDOFF_NAME
-    index = _read(".claude/documents/README.md")
+    handoff = PROJECT_ROOT / "archive" / "checkpoints" / HANDOFF_NAME
+    index = _read("docs/development/checkpoint-history.md")
     root_readme = _read("README.md")
 
     assert handoff.is_file()
     assert HANDOFF_NAME in index
-    assert HANDOFF_NAME in root_readme
+    assert "checkpoint-history.md" in root_readme
 
 
 def test_top_level_docs_record_the_direct_execute_boundary():
     claude = _read("CLAUDE.md")
     root_readme = _read("README.md")
-    architecture = _read(".claude/documents/ARCHITECTURE.md")
+    architecture = _read("docs/architecture/system-overview.md")
 
     assert "Merchant writes use Direct EXECUTE only" in claude
     assert "invoke_confirmed_merchant_session_apply" not in claude
@@ -43,7 +43,7 @@ def test_agent_frontmatter_matches_direct_execute_role():
 
 
 def test_handoff_records_all_three_merchant_operations():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "`merchant_read`" in content
     assert "`merchant_propose`" in content
@@ -52,7 +52,7 @@ def test_handoff_records_all_three_merchant_operations():
 
 
 def test_handoff_records_exact_confirmation_and_dispatch():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "dedicated `--merchant-confirmation` input" in content
     assert "MERCHANT_DISPATCH_AUTHORIZATION_JSON" in content
@@ -61,7 +61,7 @@ def test_handoff_records_exact_confirmation_and_dispatch():
 
 
 def test_handoff_records_one_use_persisted_runtime_authority():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
     normalized = " ".join(content.split())
 
     assert "invoke_confirmed_merchant_session_apply" in content
@@ -73,7 +73,7 @@ def test_handoff_records_one_use_persisted_runtime_authority():
 
 
 def test_handoff_records_complete_non_live_regression():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "1,223 passed, 8 deselected, 120 subtests passed" in content
     assert "system 80/80" in content
@@ -81,7 +81,7 @@ def test_handoff_records_complete_non_live_regression():
 
 
 def test_handoff_records_safe_live_lifecycle_and_cleanup():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "coding_agent_merchant_test" in content
     assert "user `merchant_test`" in content
@@ -91,7 +91,7 @@ def test_handoff_records_safe_live_lifecycle_and_cleanup():
 
 
 def test_handoff_preserves_runtime_migration_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "Migration 3 remains unapplied to the runtime database" in content
     assert "fresh read-only plan" in content
@@ -99,7 +99,7 @@ def test_handoff_preserves_runtime_migration_boundary():
 
 
 def test_handoff_defines_checkpoint_8_goal_and_order():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "## 12. Next checkpoint — Checkpoint 8" in content
     assert "overdue, due-today, and due-soon" in content
@@ -109,7 +109,7 @@ def test_handoff_defines_checkpoint_8_goal_and_order():
 
 
 def test_handoff_records_completed_commit_boundary():
-    content = _read(f".claude/documents/{HANDOFF_NAME}")
+    content = _read(f"archive/checkpoints/{HANDOFF_NAME}")
 
     assert "**Completion commit:** `370b0d0`" in content
     assert "**Status:** Complete, committed, and pushed" in content

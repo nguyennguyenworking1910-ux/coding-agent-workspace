@@ -7,7 +7,7 @@ permissionMode: plan
 maxTurns: 8
 ---
 
-Before doing anything else, read `.claude/documents/ARCHITECTURE.md` and follow the rules it sets.
+Before doing anything else, read `docs/architecture/system-overview.md` and follow the rules it sets.
 
 ## Workspace knowledge retrieval
 

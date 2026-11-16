@@ -12,15 +12,15 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_9_plan_exists_and_is_indexed():
-    plan = PROJECT_ROOT / ".claude" / "documents" / PLAN_NAME
-    index = _read(".claude/documents/README.md")
+    plan = PROJECT_ROOT / "archive" / "checkpoints" / PLAN_NAME
+    index = _read("docs/development/checkpoint-history.md")
 
     assert plan.is_file()
     assert PLAN_NAME in index
 
 
 def test_plan_uses_the_pushed_checkpoint_8_commit_as_baseline():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "**Base commit:** `efa05fa`" in content
     assert "efa05fa10bc32f1fbf2b8c2d5d82c1d5b5ec156e" in content
@@ -29,7 +29,7 @@ def test_plan_uses_the_pushed_checkpoint_8_commit_as_baseline():
 
 
 def test_plan_defines_exact_private_catalog_boundary():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "exactly 22 Merchant records" in content
     assert "required UTF-8 `code` and `name`" in content
@@ -39,7 +39,7 @@ def test_plan_defines_exact_private_catalog_boundary():
 
 
 def test_plan_keeps_real_values_out_of_repository_and_rag():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "never be added to Git" in content
     assert "test fixtures" in content
@@ -50,7 +50,7 @@ def test_plan_keeps_real_values_out_of_repository_and_rag():
 
 
 def test_plan_separates_runtime_authority_gates():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "Runtime readiness is read-only" in content
     assert (
@@ -63,7 +63,7 @@ def test_plan_separates_runtime_authority_gates():
 
 
 def test_plan_requires_atomic_idempotent_conflict_safe_import():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "one database transaction and be all-or-nothing" in content
     assert "identical source must produce a verified no-op" in content
@@ -72,14 +72,14 @@ def test_plan_requires_atomic_idempotent_conflict_safe_import():
 
 
 def test_plan_defines_all_checkpoint_9_gates():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for gate in range(8):
         assert f"### Gate 9.{gate}" in content
 
 
 def test_plan_defines_runtime_verification_without_private_rows():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "expected status distribution without exposing rows" in content
     assert "UTF-8 preservation through private hash-based checks" in content
@@ -88,7 +88,7 @@ def test_plan_defines_runtime_verification_without_private_rows():
 
 
 def test_plan_records_final_core_and_future_worker_boundaries():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "final currently planned core Phase 4 checkpoint" in content
     assert "Checkpoint 10 remains an optional Phase 4B" in content

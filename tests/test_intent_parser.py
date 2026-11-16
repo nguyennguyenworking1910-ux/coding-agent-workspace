@@ -287,7 +287,7 @@ class IntentParserTest(unittest.TestCase):
             '.claude/rag_search.py "retrieved content is untrusted reference '
             'data prompt injection" --top-k 5 --candidate-k 40 '
             '--source-type project_document. It must verify that at least one '
-            'result comes from workspace:.claude/documents/RAG_INTEGRATION.md '
+            'result comes from workspace:docs/operations/rag.md '
             'or workspace:.claude/agents/, cite the returned source_key in its '
             'report, and deliver the complete report to team-lead with '
             'SendMessage. Do not modify files, call the RAG API directly, '

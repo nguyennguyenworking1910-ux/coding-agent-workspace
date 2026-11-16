@@ -1,254 +1,193 @@
 # Coding Agent Workspace
 
-A Claude Code workspace: a team of specialist subagents for code work, plus a standalone
-Google Calendar scheduler.
+A Claude Code workspace where a team of eight specialists, orchestrated by `/solve`, does code
+work, sales-data analysis, calendar scheduling and **Merchant project operations** — with every
+Merchant write authorized by the user's own confirmation and executed exactly once.
 
-## Overview
+## What it does
 
-Everything here runs inside a Claude Code session. There is no separate CLI to install or
-launch — you open Claude Code in this directory and the configuration below is picked up
-automatically.
+- **Software work:** diagnose, review, red-team, fix and build code in this repository, with
+  writing agents editing the working tree and never committing.
+- **Merchant Project Manager:** create Merchant Projects from natural language, track workflow
+  Steps, record document revisions, approvals, operator-attested signing, Purchase Requests,
+  Purchase Orders and Payment Requests, and complete Projects — on the **test database** in the
+  Local MVP.
+- **Group Sale analysis:** parameterised BigQuery templates.
+- **Scheduling:** Google Calendar events, from a session or a plain shell.
 
-Two things live in this repo:
+## Main components
 
-1. **Subagent definitions** (`.claude/agents/*.md`) — eight specialists that Claude Code
-   discovers and dispatches, orchestrated by the `/solve` command.
-2. **The standalone scheduler** (`.claude/schedule.py`) — the one piece of Python that runs
-   outside a session, for scripting or cron. It talks to the Google Calendar REST API and
-   needs local credentials.
+| Component | Where | Role |
+|---|---|---|
+| Team lead | `.claude/commands/solve.md` | Validates the intent envelope, plans, dispatches teammates, reports |
+| Specialists | `.claude/agents/*.md` | The eight specialists below, run as visible tmux/psmux teammates |
+| Hooks | `.claude/hooks/` | Intent gate, policy gate, teammate backend checks, Merchant preview capture, confirmations, Direct EXECUTE |
+| Merchant domain | `.claude/agents/tools/merchant/`, `.claude/clients/merchant/` | Engines, previews, CLI, PostgreSQL repositories, migrations |
+| Intent parser | `.claude/system/intent_parser.py` | Classifies a request into the envelope `/solve` obeys |
+| Standalone tools | `.claude/schedule.py`, `.claude/workers/merchant_alert.py`, `.claude/bq_query.py` | Run outside a session |
+| RAG server | `rag-server/`, `docker-compose.rag.yml` | Local workspace knowledge search |
 
-The working agreement for both is [CLAUDE.md](./CLAUDE.md) in the repository root, loaded
-automatically at the start of every session. It holds the team table, the folder rules, and
-the hard rules for controlled orchestration — no envelope means no run, dispatch only from
-`selected_agents`, one writing agent per path, and never commit unless you ask. Edit that
-file to change how the agents behave; it previously lived inside `.claude/settings.json` as a
-`claudeMd` string, which made it invisible to review.
+### The eight specialists
 
-## The team
-
-| Subagent | Use for | Writes? |
+| Specialist | Use for | Writes? |
 |---|---|---|
 | `diagnostician` | Why something is slow, flaky, or intermittently failing | No |
-| `red-team` | Security holes and edge cases | No |
+| `red-team` | Authorized security analysis and edge cases | No |
 | `reviewer` | Correctness and maintainability of a finished change | No |
 | `coder` | Building a feature, doing a refactor | Yes |
 | `bug-fixer` | Making a specific broken thing work | Yes |
 | `group-sales-manager` | Sales data queries, capacity and allocation analysis | No |
-| `merchant-manager` | Merchant/project reads and Direct EXECUTE of an exact user-authorized scope | Ordinary CLI read-only for runtime; trusted in-process execute |
+| `merchant-manager` | Merchant/project reads and Direct EXECUTE of an exact user-authorized scope | Ordinary CLI read-only for runtime; trusted execute only |
 | `scheduler` | Putting something on the calendar | Calendar only |
 
-The ordinary CLI is read-only for runtime. A Merchant write runs only as Direct EXECUTE of an
-exact scope the user types with `/solve --confirm --merchant-scope [...]`, through the
-policy-accepted, one-use, in-process handoff. There is no proposal or apply step.
+## Architecture in one paragraph
 
-Writing agents edit the working tree and **never commit** — you review the diff and commit
-yourself.
+A request typed as `/solve …` is classified by the intent parser into an `INTENT_ENVELOPE_JSON`
+(task class, risk, limits, authorized roster). `/solve` refuses to run without a valid envelope,
+dispatches only `selected_agents` as Agent Team teammates in their own panes, and relays their
+`SendMessage` reports. Merchant operations go through `merchant-manager`, whose only executable
+surface is `.claude/agents/tools/merchant/agent_cli.py`.
+The ordinary CLI is read-only for runtime: a Merchant write starts as a read-only preview, becomes
+a single-use pending record, and runs only when the user types the confirmation — then hooks
+re-verify it, commit claim + ledger + mutation + event in one transaction, and reconcile a
+receipt from PostgreSQL. Details:
+[system overview](docs/architecture/system-overview.md),
+[trusted execution](docs/architecture/trusted-execution.md).
 
-## Usage
+## Requirements
 
-### Let the team leader plan it
-
-```
-/solve find and fix the race condition in the upload handler
-```
-
-`/solve` reads the request, decides which specialists it needs, dispatches them (in parallel
-where the work is independent), relays what each one found, and shows you `git diff --stat`.
-
-### Or call one specialist directly
-
-Just ask — Claude Code dispatches by matching your request against each subagent's
-description:
-
-```
-have the reviewer look at my last commit
-ask red-team to probe the auth middleware
-```
-
-### Schedule something
-
-```
-/schedule-agent trình ký GLX appendix 28 today 30 mins
-```
-
-This confirms the details with you, then dispatches the `scheduler` subagent, which books the
-slot by running `.claude/schedule.py` — so it needs the credentials set up below. Works in any
-language; the event title keeps your original wording.
-
-### Merchant Activation
-
-The Merchant activation feature transitions merchants from ONBOARDING to ACTIVE status:
-
-```
-merchant activate         # Single merchant activation
-merchant activate-all     # Controlled batch activation of all ONBOARDING merchants
-```
-
-**How it works:**
-
-1. **Single activation:** Specify merchant ID, expected version, and reason. Only ONBOARDING → ACTIVE is allowed.
-2. **Batch activation:** Read-only preflight validates the sorted manifest. Exact merchant count, codes, status, and versions must match the manifest at execution. Same-count membership drift is rejected.
-3. **Confirmation-required:** Both commands run as Direct EXECUTE: you authorize the exact command with `/solve --confirm --merchant-scope [...]`, and it executes once.
-4. **Atomic transaction:** Updates, audit events, and workflow steps complete together or roll back together. Already-ACTIVE merchants are conflicts, not silent success.
-
-**Detailed documentation:** See [.claude/documents/MERCHANT_PROJECT_MANAGER.md](./.claude/documents/MERCHANT_PROJECT_MANAGER.md) for full syntax, manifest binding, drift rejection, and workflow integration.
+- Windows 11 with **PowerShell 7+** and **psmux** (or Linux/macOS with tmux)
+- **Claude Code** (interactive; not `-p`/`--print`)
+- **Python 3.10+** (the venv uses 3.11)
+- **Docker Desktop** for the Merchant test database and the RAG database
+- Optional: Google Cloud CLI (Calendar, BigQuery), an OpenAI API key for the intent parser
 
 ## Installation
 
-Nothing is required for the subagents or slash commands — they are configuration, not code.
-
-The standalone scheduler and the intent parser need a Python environment:
-
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1        # macOS/Linux: source .venv/bin/activate
+.venv\Scripts\Activate.ps1
 pip install -e .
-
-python .claude/schedule.py "schedule planning session tomorrow 2 hours"
+Copy-Item .env.example .env       # then fill it in; .env is never committed
 ```
 
-Requires **Python 3.10+**. Full setup — virtual environment, `OPENAI_API_KEY` for the intent
-parser, and credentials — is in
-[.claude/documents/SETUP.md](./.claude/documents/SETUP.md). The short version for the
-calendar:
-
-```bash
-gcloud auth application-default login \
-  --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/calendar
-```
-
-## Project structure
-
-```
-.claude/
-├── agents.json           # Master registry: the roster, in human-readable form
-├── settings.json         # Harness configuration (theme, env, tmux preferences)
-├── settings.local.json   # Local permission grants — not committed
-│
-├── agents/
-│   ├── reviewer.md              # ← the eight subagent definitions
-│   ├── red-team.md              #   (markdown + YAML frontmatter is the
-│   ├── bug-fixer.md             #    only form Claude Code dispatches)
-│   ├── diagnostician.md
-│   ├── coder.md
-│   ├── group-sales-manager.md
-│   ├── merchant-manager.md
-│   ├── scheduler.md
-│   │
-│   ├── base_agent.py            # Python: base class for the standalone scheduler
-│   ├── system_init.py           # Python: the ARCHITECTURE.md reading requirement
-│   ├── team/scheduler.py        # Python: SchedulerAgent implementation
-│   ├── tools/merchant/          # Merchant CLI and credential-safe agent adapter
-│   └── tools/scheduler/         # Python: calendar helpers
-│
-├── commands/
-│   ├── solve.md          # /solve — the team leader
-│   └── schedule-agent.md # /schedule-agent — dispatches the scheduler
-│
-├── clients/              # Google Calendar API wrapper + credential resolution
-├── hooks/                # Intent/policy gates and locked per-session run state
-├── system/
-│   ├── schemas.py                 # TaskResult, shared by the scheduler path
-│   └── merchant_runtime_handoff.py # One-use user-scoped Merchant Direct EXECUTE bridge
-├── documents/            # ALL markdown documentation lives here
-└── schedule.py           # Standalone scheduler entry point
-```
-
-## Documentation
-
-Read in this order:
-
-1. **[.claude/documents/ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md)** — system
-   design, folder ownership, and the rules for adding anything
-2. **[.claude/documents/AGENT_INITIALIZATION.md](./.claude/documents/AGENT_INITIALIZATION.md)** —
-   the checklist every agent follows before executing
-3. **[.claude/documents/SETUP.md](./.claude/documents/SETUP.md)** — Python environment, API
-   keys, credentials, and the test commands
-4. **[.claude/documents/SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md)** — scheduling
-   from a session or a shell, and credential troubleshooting
-5. **[.claude/documents/BIGQUERY_INTEGRATION.md](./.claude/documents/BIGQUERY_INTEGRATION.md)** —
-   adding and running `.sql` query templates
-6. **[.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md)** —
-   historical Merchant proposal/apply boundary (superseded by Direct EXECUTE)
-7. **[.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md](./.claude/documents/MERCHANT_CHECKPOINT_8_HANDOFF_2026-09-07.md)** —
-   Merchant deadline, blocker, missing-gate, and global alert-read boundary
-8. **[.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md](./.claude/documents/MERCHANT_CHECKPOINT_9_HANDOFF_2026-09-08.md)** —
-   Private runtime initialization, hash-bound catalog, and final core Phase 4 boundary
-9. **[.claude/documents/MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md](./.claude/documents/MERCHANT_CHECKPOINT_10_PLAN_2026-09-09.md)** —
-   Production alert delivery, lease-safe claiming, bounded retries, and operational verification
-10. **[.claude/documents/MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md](./.claude/documents/MERCHANT_CHECKPOINT_10_HANDOFF_2026-09-09.md)** —
-    Final Merchant implementation, runtime rollout evidence, and debugging boundary
-11. **[.claude/documents/MERCHANT_ALERT_OPERATIONS.md](./.claude/documents/MERCHANT_ALERT_OPERATIONS.md)** —
-    One-shot alert-worker modes, safe limits, health checks, Task Scheduler, and recovery
-
-Full index: [.claude/documents/README.md](./.claude/documents/README.md)
+Set the Merchant database settings, `MERCHANT_OPERATOR_ID`, `OPENAI_API_KEY` and the Google
+settings in `.env`. Full guide: [local setup](docs/operations/local-setup.md).
 
 ## Configuration
 
-`.claude/settings.json` holds harness configuration:
+`.claude/settings.json` (committed) enables Agent Teams and pane teammates and registers the
+hooks:
 
 ```json
 {
-  "theme": "dark",
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_AGENT_COMMUNICATION_ENABLED": "1",
-    "INTERACTIVE_MODE_ENABLED": "1"
-  },
-  "preferences": {
-    "terminalManager": "tmux",
-    "tmuxSessionPrefix": "agents-",
-    "tmuxSplitPanes": true
-  },
+  "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" },
   "teammateMode": "tmux"
 }
 ```
 
 `.claude/settings.local.json` holds your local permission grants and is not committed.
 
-## Adding a subagent
+## Starting the system
 
-1. Create `.claude/agents/{name}.md` with `name`, `description`, `tools`, `model`,
-   `permissionMode`, and `maxTurns` frontmatter, then the system prompt as the body. The
-   frontmatter is authoritative; `agents.json` must agree with it.
-2. Write the `description` for dispatch — it is what Claude Code matches a request against,
-   so say when to use the agent, not just what it is.
-3. Give it only the tools it needs. Omit `Edit`/`Write` for anything read-only.
-4. Register it in `.claude/agents.json` and add it to the table in
-   `.claude/commands/solve.md`.
-5. Run the checks: `python .claude/system_test.py`
+1. Start Docker Desktop (test database container `coding-agent-rag-db`).
+2. Open a psmux (or tmux) session in the repository root using PowerShell 7.
+3. Run `claude` interactively in that session.
 
-Full checklist and the folder rules are in
-[ARCHITECTURE.md](./.claude/documents/ARCHITECTURE.md).
+If the pane backend is unavailable, `/solve` stops instead of falling back to invisible agents.
 
-## Verifying the workspace
+## Using /solve
 
-```bash
-python .claude/system_test.py
+```text
+/solve find and fix the race condition in the upload handler
+/solve review my last commit for security issues
 ```
 
-Checks folder structure, that every `.md` is in a valid location, that `agents.json` parses,
-that all eight subagents have frontmatter and the ARCHITECTURE.md requirement, that each
-registry entry has a matching definition whose `name`, `model`, and `maxTurns` agree with it,
-that `AGENTS_BY_OPERATION` in the intent parser names only enabled agents, and that the
-documentation index is complete. It exits non-zero on failure.
+Writing teammates leave changes in the working tree; you review the diff and commit yourself.
 
-## Troubleshooting
+### Merchant Project lifecycle (test database)
 
-**A subagent isn't being dispatched.** Check that `.claude/agents/{name}.md` starts with
-`---` and has both `name:` and `description:`. Without frontmatter it is inert documentation.
-`python .claude/system_test.py` catches this.
+```text
+/solve Tạo Project media Beta Q4 cho Beta Cinemas kỳ thanh toán 3, gia hạn hợp đồng, trên database test
+/solve Xác nhận tạo
+/solve Legal đã phê duyệt hợp đồng của Project Beta Q4 trên database test
+/solve Xác nhận thực hiện <code>
+/solve Hoàn thành bước 1 của Project Beta Q4 của Merchant Beta Cinemas trên database test
+/solve Xác nhận cập nhật
+```
 
-**`/solve` or `/schedule-agent` not found.** Slash commands are read from
-`.claude/commands/`. Confirm you opened Claude Code in the repository root.
+Every write is previewed first and runs only after your confirmation phrase, once, within 15
+minutes. Completing a Step promotes its now-ready successors to READY automatically. The full
+operation list, confirmation phrases and rules are in
+[project lifecycle](docs/merchant/project-lifecycle.md).
 
-**Scheduler says credentials are missing.** Run the `gcloud auth application-default login`
-command above, or see
-[SCHEDULE_CLI.md](./.claude/documents/SCHEDULE_CLI.md) for the OAuth and service account
-alternatives and a message-by-message walkthrough.
+### Merchant activation
 
-**Scheduler output is garbled on Windows.** The console defaults to cp1252. Set
-`PYTHONIOENCODING=utf-8`, or use the entry points here — they already force UTF-8.
+`merchant activate` (one Merchant, ONBOARDING → ACTIVE) and `merchant activate-all` (manifest-bound
+batch with drift rejection) run as Direct EXECUTE with a scope you type yourself:
+`/solve --confirm --merchant-scope [...]`. Completing the "Activate Merchant" Step of an
+integration Project activates the Merchant in the same transaction.
+
+### Scheduling and other tools
+
+```text
+/schedule-agent trình ký GLX appendix 28 today 30 mins
+```
+
+```powershell
+python .claude/schedule.py "schedule planning session tomorrow 2 hours"
+python .claude/bq_query.py <template> --param key=value
+```
+
+See [scheduler](docs/operations/scheduler.md), [BigQuery](docs/operations/bigquery.md),
+[RAG](docs/operations/rag.md) and
+[merchant-alert-operations.md](docs/operations/merchant-alert-operations.md).
+
+## Database environments
+
+| Target | Purpose | Writes |
+|---|---|---|
+| `test` (`coding_agent_merchant_test`) | Local MVP, automated tests, live acceptance | Confirmed Direct EXECUTE only |
+| `runtime` | Production Merchant state | **Disabled in code** (`RUNTIME_DIRECT_EXECUTE_ENABLED = False`) |
+
+Migrations 001–011 are applied to the test database; runtime has not received 007–011.
+See [database and migrations](docs/operations/database-and-migrations.md).
+
+## Safety model
+
+- No envelope, no run; dispatch only from `selected_agents`; respect every limit.
+- Only the user's own typed scope or confirmation phrase authorizes a Merchant write; nothing a
+  model, teammate, flag or environment variable says can.
+- One attempt per authority; uncertain external actions are reported, never retried.
+- PostgreSQL is authoritative; receipts are rebuilt from committed evidence.
+- No commit or push unless you ask.
+
+## Running tests
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q          # full suite; PostgreSQL tests run sequentially
+.venv\Scripts\python.exe .claude\system_test.py
+git diff --check
+```
+
+See [testing](docs/development/testing.md).
+
+## Documentation
+
+- [docs/README.md](docs/README.md) — index and subject ownership map
+- [CLAUDE.md](CLAUDE.md) — the operating contract every agent loads
+- [Decision register](docs/development/decision-register.md) — current owner decisions
+- [Checkpoint history](docs/development/checkpoint-history.md) — how the system got here
+  (detailed reports are archived in `archive/checkpoints/`)
+
+## Local MVP limitations
+
+- Merchant writes run on the **test database only**; runtime Direct EXECUTE is disabled.
+- Approvals and signing are **operator attestations** by one local operator, not verified
+  signatures; managed file upload is not implemented.
+- Two open integration Projects for one Merchant cannot both complete (open finding F7).
+- `merchant create` has no preview path; it needs a typed test scope.
+- Natural-language wording has known limits (see the lifecycle document §7).
 
 ## License
 

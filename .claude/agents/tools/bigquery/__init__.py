@@ -6,7 +6,7 @@ Registered in `.claude/agents.json` as `bigquery_tools`. Driven by
     from claude.agents.tools.bigquery import BIGQUERY_TOOLS
     BIGQUERY_TOOLS["run_template"]("daily_counts", {"start_date": date(2026, 8, 1)})
 
-See .claude/documents/BIGQUERY_INTEGRATION.md.
+See docs/operations/bigquery.md.
 """
 
 from .templates import (

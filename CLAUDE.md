@@ -6,8 +6,9 @@ Calendar scheduler.
 
 ## Before building anything
 
-Read `.claude/documents/ARCHITECTURE.md` before inspecting, designing, or changing the system.
+Read `docs/architecture/system-overview.md` before inspecting, designing, or changing the system.
 It owns the folder rules, dependency direction, naming conventions, and component boundaries.
+The documentation index is `docs/README.md`.
 
 Run the structural checks with:
 
@@ -16,36 +17,24 @@ python .claude/system_test.py
 ```
 
 `/solve` has one ordering exception: it must validate the injected intent envelope before
-reading project files. After the gate passes, it reads `ARCHITECTURE.md` before dispatching
-teammates.
+reading project files. After the gate passes, it reads `docs/architecture/system-overview.md`
+before dispatching teammates.
 
 ## System model
 
-The workspace has two execution paths:
+1. **Interactive Agent Team path** — `/solve` validates the request envelope, plans the work, and
+   dispatches selected specialist definitions as Agent Team teammates, each in its own visible
+   tmux/psmux pane.
+2. **Standalone Python path** — `.claude/schedule.py` runs the Google Calendar scheduler from a
+   shell, cron job, or the scheduler teammate.
 
-1. **Interactive Agent Team path**
-
-   `/solve` validates the request envelope, plans the work, and dispatches selected specialist
-   definitions as Agent Team teammates. Each teammate runs in its own visible tmux/psmux pane.
-
-2. **Standalone Python path**
-
-   `.claude/schedule.py` runs the Google Calendar scheduler from a normal shell, cron job, or
-   scheduler teammate.
-
-The interactive team and standalone scheduler share project rules, but they are different
-runtime systems.
+They share project rules but are different runtime systems.
 
 ## The team
 
-Specialist definitions live in `.claude/agents/*.md`.
-
-Markdown with valid YAML frontmatter is the only form Claude Code discovers as an agent type.
-A Python agent class is invisible to the Claude Code harness and cannot be dispatched by
-`/solve`.
-
-During `/solve`, these definitions must run as **Agent Team teammates**, not ordinary
-in-process subagents.
+Specialist definitions live in `.claude/agents/*.md`. Markdown with valid YAML frontmatter is the
+only form Claude Code discovers as an agent type; a Python agent class cannot be dispatched by
+`/solve`. During `/solve` they run as **Agent Team teammates**, never ordinary subagents.
 
 | Teammate type | Use for | Writes? |
 |---|---|---|
@@ -58,225 +47,94 @@ in-process subagents.
 | `merchant-manager` | Merchant/project reads and Direct EXECUTE of an exact user-authorized scope | Merchant runtime via trusted handoff only |
 | `scheduler` | Creating a confirmed Google Calendar event through `.claude/schedule.py` | Calendar only |
 
-The main Claude Code session is the team lead. `/solve` is the command that defines how the lead
-validates, plans, dispatches, coordinates, and reports a run.
-
-Teammates cannot create nested teams. Only the main session may dispatch and coordinate the
-session-scoped Agent Team.
+The main Claude Code session is the team lead; `/solve` defines how it validates, plans,
+dispatches, coordinates, and reports. Teammates cannot create nested teams.
 
 ## Agent Team runtime
 
-`/solve` is designed to run specialists in visible split panes.
+Required: interactive Claude Code (not `-p`/`--print`) inside a compatible `tmux` or `psmux`
+session; `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; `teammateMode` `tmux` (both set in
+`.claude/settings.json`); PowerShell 7+ when running through psmux on Windows.
 
-The required runtime is:
-
-- Claude Code runs interactively, not with `-p` or `--print`.
-- Claude Code runs inside a compatible `tmux` or `psmux` session.
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is enabled.
-- `teammateMode` is set to `tmux`, or Claude Code starts with `--teammate-mode tmux`.
-- PowerShell 7 or later is used when running through psmux on Windows.
-
-The project settings provide the required feature flag and teammate mode:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  },
-  "teammateMode": "tmux"
-}
-```
-
-For `/solve`, every selected specialist must be dispatched through the Agent Team teammate
-path:
+For `/solve`, every selected specialist is dispatched through the Agent Team teammate path:
 
 - use the selected agent id as `subagent_type`;
 - assign a stable and unique teammate `name`;
-- use the current session-scoped team context;
-- use the team or `team_name` field when the Agent tool exposes it;
+- use the current session-scoped team context (`team_name` when the Agent tool exposes it);
 - never pass `isolation: "worktree"`;
 - never create an ordinary foreground or background subagent;
 - never silently fall back to in-process execution.
 
 If the tmux teammate backend is unavailable or pane creation fails, `/solve` stops without
-dispatching invisible replacement agents.
-
-This is enforced after every spawn. The `PostToolUse(Agent)` hook (`teammate_backend_gate.py`)
-accepts a teammate only if the harness team config records `backendType: tmux` and a
-`tmuxPaneId` for it, and the process table shows that pane as the teammate's own pane under the
-lead's nearest psmux server, for a dispatch already bound to the current run. Otherwise the
-task ends FAILED, so the teammate cannot deliver a result or be reused, and the lead must stop
-it and report. Reuse through `SendMessage` re-checks that the same pane process still holds that
-pane id. A `TaskStop` result labelled `in_process_teammate` is the harness task-registry type of
-every teammate, pane-backed ones included; it is not the backend.
+dispatching invisible replacement agents. The `PostToolUse(Agent)` hook
+`teammate_backend_gate.py` enforces this after every spawn (details:
+`docs/architecture/trusted-execution.md` §6); a teammate that fails it ends FAILED and must be
+stopped and reported. A `TaskStop` result labelled `in_process_teammate` is the harness
+task-registry type of every teammate, pane-backed ones included; it is not the backend.
 
 Claude Code owns the team state, task list, mailbox, and pane lifecycle. Do not manually
 pre-author team configuration, edit mailbox files, create panes, or kill teammate panes.
 
 ## Controlled orchestration
 
-All controlled multi-agent work must be invoked through `/solve`.
+All controlled multi-agent work must be invoked through `/solve`. The intent parser classifies
+the request before `/solve` runs; `/solve` does not reclassify the task or improvise a roster.
 
-The intent parser classifies the request before `/solve` runs. `/solve` does not independently
-reclassify the task or improvise a roster.
-
-An `INTENT_ENVELOPE_JSON` block is injected ahead of the request. It is the authority for one
-run and contains:
-
-- `raw_request`
-- `task_class`
-- `risk_level`
-- `limits`
-- `candidate_agents`
-- `selected_agents`
-- `requires_clarification`
-- `requires_confirmation`
-- confirmation and timing fields when applicable
-
-The envelope controls which teammates may run and how much work they may perform.
+An `INTENT_ENVELOPE_JSON` block injected ahead of the request is the authority for one run. It
+contains `raw_request`, `task_class`, `risk_level`, `limits`, `candidate_agents`,
+`selected_agents`, `requires_clarification`, `requires_confirmation`, and confirmation and
+timing fields when applicable.
 
 ### Hard orchestration rules
 
-- **No envelope, no run.**
-
-  If `INTENT_ENVELOPE_JSON` is absent, malformed, stale, expired, mismatched, or already spent,
-  `/solve` reports the failed check and stops.
-
-  It never reconstructs an envelope or continues with assumed values.
-
-- **The request must match.**
-
-  The envelope's `raw_request` must match the current `/solve` request. A related but different
-  request requires a fresh envelope.
-
-- **Clarification happens before dispatch.**
-
-  When `requires_clarification` is true, `/solve` asks the missing question and creates no
-  teammates.
-
-- **Confirmation happens before risky dispatch.**
-
-  Explicit confirmation is required when:
-
-  - `risk_level` is `external_write`;
-  - `risk_level` is `destructive`; or
-  - `requires_confirmation` is true.
-
-  Confirmation must apply to the exact action being performed.
-
-- **Dispatch only from `selected_agents`.**
-
-  `candidate_agents` is a ranked longlist. `selected_agents` is the authorized roster after
-  applying `limits.max_members`.
-
-  A specialist outside `selected_agents` is unauthorized for that run.
-
-- **Respect every limit.**
-
-  `/solve` must remain inside:
-
-  - `max_members`
-  - `max_tool_rounds`
-  - `max_total_tool_calls`
-  - `max_run_budget_usd`
-
-  The main session is the lead and does not count as a team member.
-
-- **Use Agent Team teammates only.**
-
-  Each selected specialist runs as a named teammate in a visible tmux/psmux pane.
-
-  Ordinary in-process subagents and worktree-isolated agents are not valid fallbacks.
-
-- **Never silently substitute a teammate.**
-
-  If an authorized teammate is unavailable, inappropriate, or fails, `/solve` reports the
-  problem and stops.
-
-  It does not choose a neighbouring role or spawn an unauthorized replacement.
-
-- **Never dispatch overlapping writers.**
-
-  Two writing teammates must not edit overlapping paths concurrently or within the same
-  dispatch round.
-
-  Give them disjoint file ownership or run them sequentially.
-
-- **Do not retry uncertain external actions.**
-
-  Calendar creation, deployment, deletion, and other external or destructive operations receive
-  one attempt. An uncertain result is reported rather than retried.
-
+- **No envelope, no run.** If `INTENT_ENVELOPE_JSON` is absent, malformed, stale, expired,
+  mismatched, or already spent, `/solve` reports the failed check and stops. It never
+  reconstructs an envelope or continues with assumed values.
+- **The request must match.** `raw_request` must match the current `/solve` request; a related
+  but different request requires a fresh envelope.
+- **Clarification happens before dispatch.** When `requires_clarification` is true, ask the
+  missing question and create no teammates.
+- **Confirmation happens before risky dispatch.** Explicit confirmation of the exact action is
+  required when `risk_level` is `external_write` or `destructive`, or `requires_confirmation` is
+  true.
+- **Dispatch only from `selected_agents`.** `candidate_agents` is a ranked longlist; a specialist
+  outside `selected_agents` is unauthorized for that run.
+- **Respect every limit:** `max_members`, `max_tool_rounds`, `max_total_tool_calls`,
+  `max_run_budget_usd`. The lead does not count as a member.
+- **Use Agent Team teammates only.** In-process and worktree-isolated agents are not fallbacks.
+- **Never silently substitute a teammate.** If an authorized teammate is unavailable,
+  inappropriate, or fails, report it and stop.
+- **Never dispatch overlapping writers.** Give writing teammates disjoint file ownership or run
+  them sequentially.
+- **Do not retry uncertain external actions.** Calendar creation, deployment, deletion, and other
+  external or destructive operations get one attempt; an uncertain result is reported.
 - **Never commit or push unless explicitly requested and authorized.**
-
-  Writing teammates leave changes in the working tree. The user reviews the diff before deciding
-  whether to commit, push, or discard specific changes.
 
 ## Teammate dispatch and coordination
 
-For every teammate, `/solve` provides a bounded assignment containing:
+Each teammate gets a bounded assignment: exact objective, relevant request context, owned files
+or domain, whether writes are allowed, expected output, applicable limits, and
+failure-reporting requirements. Teammates load `CLAUDE.md`, their definition, tools, and project
+configuration, but not the lead's conversation, so the assignment must be self-contained.
 
-- the exact objective;
-- relevant request context;
-- owned files or domain;
-- whether writes are allowed;
-- expected output;
-- applicable limits;
-- failure-reporting requirements.
+Independent teammates may run concurrently. Dependent work runs sequentially (diagnose before
+fixing; implement before reviewing; retrieve data before analyzing). The lead waits for required
+teammates and does not do specialist work itself while waiting.
 
-Teammates load the project's `CLAUDE.md`, agent definition, tools, and project configuration,
-but they do not inherit the lead's full conversation history. The dispatch prompt must therefore
-contain all task-specific information required to work correctly.
-
-Independent teammates may run concurrently in separate panes.
-
-Dependent work must run sequentially, for example:
-
-- diagnose before fixing;
-- implement before reviewing;
-- retrieve data before analyzing it.
-
-The lead waits for required teammates to finish before synthesizing the final answer. It does
-not start implementing specialist work itself while waiting.
-
-Even though the user can see teammate panes, the lead must still provide a complete final
-summary covering:
-
-- what each teammate did;
-- findings and decisions;
-- changed files;
-- test or validation results;
-- failures and unresolved issues;
-- working-tree and commit status.
+A teammate's result reaches the lead only through its final `SendMessage`; a `TaskUpdate`, pane
+text, or idle notification does not prove delivery. The lead's final summary covers what each
+teammate did, findings and decisions, changed files, test or validation results, failures and
+unresolved issues, and working-tree and commit status.
 
 ## Working-tree safety
 
-Writing teammates may edit only the paths assigned to them.
-
-Before and after a writing run, `/solve` inspects:
-
-```bash
-git status --short
-git diff --stat
-```
-
-Pre-existing changes belong to the user unless proven otherwise. Teammates must preserve them
-and must not attribute unrelated changes to the current run.
-
-Do not use broad discard operations such as `git checkout .`, `git restore .`, or destructive
-resets. If the user wants to discard changes, first identify the exact paths and confirm that
-those changes may be removed.
+Before and after a writing run, `/solve` inspects `git status --short` and `git diff --stat`.
+Pre-existing changes belong to the user unless proven otherwise; teammates preserve them and do
+not attribute unrelated changes to the current run. Writing teammates edit only their assigned
+paths. Never use broad discard operations (`git checkout .`, `git restore .`, destructive
+resets); to discard changes, identify the exact paths and confirm first.
 
 ## Markdown placement
-
-General project documentation belongs in:
-
-```text
-.claude/documents/
-```
-
-The following Markdown files are executable or load-bearing configuration and must remain in
-their required locations:
 
 | File type | Required location |
 |---|---|
@@ -284,200 +142,86 @@ their required locations:
 | Repository overview | `README.md` |
 | Agent definitions | `.claude/agents/*.md` |
 | Slash commands | `.claude/commands/*.md` |
-| General documentation | `.claude/documents/*.md` |
+| Current documentation | `docs/` (indexed in `docs/README.md`) |
+| Historical checkpoint reports | `archive/checkpoints/` (evidence only, not authoritative) |
 
-Moving an agent definition or slash command into `.claude/documents/` causes Claude Code to stop
-discovering it.
-
-When adding general documentation:
-
-1. Save it under `.claude/documents/`.
-2. Add it to `.claude/documents/README.md`.
-3. Update architecture documentation when the system structure changes.
+Moving an agent definition or slash command out of its folder causes Claude Code to stop
+discovering it. New documentation goes in the matching `docs/` subfolder and into
+`docs/README.md`; link to the canonical document for a subject instead of repeating it.
 
 ## Merchant Manager boundary
 
-The `merchant-manager` teammate is the only owner of operational Merchant CLI requests. It
-uses this registered adapter through `Bash`:
+The `merchant-manager` teammate is the only owner of operational Merchant CLI requests. Its only
+executable surface is one literal, direct invocation of:
 
 ```bash
 python .claude/agents/tools/merchant/agent_cli.py <resource> <action> [arguments]
 ```
 
-The adapter fixes the database target to `runtime`. It exposes no database-selection,
-connection, or credential arguments; the only exceptions are `project preview --test-database`,
-`project status --test-database`, `project evidence --test-database` (CP12H.NL4D2, read-only evidence and
-approval discovery), `evidence preview --test-database` (CP12H.NL4D3, read-only evidence write
-preview) and `step preview --test-database`, reads of the Merchant test database. For runtime it is read-only: it accepts the allowlisted
-reads and `completeness check`, and rejects every write mode including `--propose`, `--apply`,
-and `--execute`.
+(or `.claude/rag_search.py`), with no interpreter flags, environment assignments, chaining,
+redirection, or substitution. Neither the lead nor another teammate may execute the Merchant CLI
+when `merchant-manager` is absent from `selected_agents`. The full contract is in
+`docs/architecture/trusted-execution.md`; the business rules are in
+`docs/merchant/project-lifecycle.md`. The invariants every agent must respect:
 
-Merchant writes use Direct EXECUTE only (`merchant_execute`). `merchant_propose`,
-`merchant_apply`, and `--merchant-confirmation` are removed and rejected. The only runtime-write
-authority is an exact scope the user types with `/solve --confirm --merchant-scope [...]`, or the
-user's own `/solve Xác nhận tạo [<id>]` prompt, which the intent gate turns into the same scope
-from exactly one trusted pending Project create (created only from a verified preview capture,
-owned by that session, 15-minute single use; see `merchant_pending_confirmation.py`). No model
-classifies a confirmation, and a scheduled (`CronCreate`/`ScheduleWakeup`/`RemoteTrigger`) prompt
-can never carry one. The policy gate records one dispatch receipt for it. CP12H.NL4C1 adds the same foundation for Step Updates in a separate store:
-a verified READY `step preview` records its exact `requested_operation` (argv bound to a basis
-hash of the judged Project snapshot), `/solve Xác nhận cập nhật [<step id>]` spends one into a
-scope, and `verify_step_update` re-judges it before any spend and inside the write transaction.
-CP12H.NL4C2A enables Step Update execution on the test database only: `step update` is in
-`TEST_MODE_COMMANDS`, but a typed Step `--merchant-scope` is refused, and the preflight requires the
-trusted pending Step Update this session confirmed for this exact run (same argv and target) before
-any spend. It runs through the unchanged scoped-write pipeline (claim, ledger and Step event in one
-transaction), and a SUCCEEDED attempt records a receipt reconciled from that durable evidence
-(`merchant_step_update_receipt` in the run state). A runtime-target Step confirmation is refused
-unspent. CP12H.NL4D4A adds the same path for recording one new Purchase Request on the test
-database only (approved DEC-A0, P1a, P1c, P2): a valid `evidence preview` carries a NOT_AUTHORIZED
-`procurement update` operation bound to the trusted local recording operator
-(`MERCHANT_OPERATOR_ID`, local configuration only, `operator_identity.py`; attribution, not approver
-authorization) and a basis hash; the verified capture records it in a third pending store
-(`/solve Xác nhận ghi nhận`); a typed `procurement update` scope is refused; the preflight and the
-write transaction re-judge it (`purchase_request.verify_purchase_request`), operator included; a
-reference is unique per (Merchant, type, reference), enforced by migration 007; an existing Purchase
-Request reference is never replaced. Its receipt (`merchant_purchase_request_receipt`) is reconciled
-from the ledger, claim, procurement row and PROCUREMENT event of one transaction. CP12H.MASTER
-(owner-approved DEC-SIMPLIFY, Local Test MVP; `lifecycle_operation.py`) adds, on the test database
-only and in the same way, the confirmation-first lifecycle: a metadata-only document revision
-(METADATA_ONLY, no file), one APPROVED or REJECTED decision per role (the operator is stored as
-`recorded_by`, never as the approver; decisions are immutable), operator-attested signing
-(OPERATOR_ATTESTED_SIGNED, the existing signing gate unchanged), a Purchase Order or Payment
-Request (create-only), Project start and completion (every Step terminal, final Step COMPLETED).
-Each runs only from a verified `evidence preview` the user confirms with `/solve Xác nhận thực
-hiện <code>` (fourth pending store), is re-judged in the preflight and inside the write
-transaction, and gets a receipt (`merchant_lifecycle_receipt`) reconciled from PostgreSQL. A gate
-Step with no stored-evidence evaluator completes only through a confirmed, operator-attested Step
-Update (`gate_attestation`). CP12H.MASTER-FIX: an Existing-Document Media Project binds, at its confirmed creation, one signed
-CONTRACT revision of another Project of the same Merchant (`document_reuse.py`; immutable
-`projects.reused_document_revision_id`, migration 011), which its Purchase Order and Payment
-Request then accept; nothing is copied and the source is never changed. The scope must satisfy the deterministic
-required-field completeness contract (blank required values are rejected). The teammate sends
-one `MERCHANT_EXECUTE_REQUEST_JSON:` request from the tmux pane the harness recorded for it in
-the team config (`TMUX_PANE` must equal `members[].tmuxPaneId`, that pane's process must be an
-ancestor of the hook process, and the pane's psmux server must be the nearest server ancestor of
-the harness `leadProcess.pid`; pane ids are per-server under psmux, so `%N` alone is never an
-identity; self-declared `agent_type` and `session_id` never bind a pane, and a task is never
-settled by a pane that was not verified for that exact task). The trusted hook stages the request with trusted completeness
-evidence and persists a team-state reservation bound to the exact owner, teammate, run, task,
-command, payload and execution attempt. Authority is spent only at
-`reserve_direct_scope_authorization`, which refuses without that reservation and records the
-spend against it:
-
-- `merchant create` runs through a durable reservation and the protected reserved executor,
-  and completes only after committed PostgreSQL evidence is verified;
-- other writes run through `claude.system.merchant_runtime_handoff.invoke_authorized_scope_apply`,
-  which passes an opaque expiring `RuntimeApplyAuthorization` only through the Python call chain;
-  the capability re-checks the reservation when it is consumed, immediately before the mutation.
-
-The reserved Create executor also refuses unless the spent authority names its reservation.
-
-Runtime (production) Direct EXECUTE is disabled in code (`RUNTIME_DIRECT_EXECUTE_ENABLED = False`
-in `.claude/hooks/merchant_direct_handoff.py`) until separately approved. The user may select the
-test database for one `merchant create` or `project create` with
-`/solve --confirm --merchant-target test --merchant-scope [...]` (a test-database Step Update comes
-only from `/solve Xác nhận cập nhật`);
-the target is bound into the scope and confirmation hashes, staged request, reservation, spent
-authority and receipt, and a read-only preflight verifies `coding_agent_merchant_test` /
-`merchant_test` before anything is reserved or spent. A refused preflight (invalid
-configuration, database unavailable, runtime disabled, unsupported test-mode command) spends
-nothing. A `project create` scope must carry the `--project-id` and `--expected-basis` of a
-`project preview`; the preview is recomputed from current state in that preflight and again
-inside the write transaction, and any change (Merchant, its Projects, template, operation)
-refuses it. The preview itself grants nothing.
-
-An unscoped Merchant run's database target is derived by the intent gate from the user's own
-words (`merchant_database_target` in the envelope); every `agent_cli.py` read must hit it, and
-the lead's assignment may not declare another. A previewed `project create` carries
-`--merchant-code` (the user's confirmation of the Merchant, re-checked before spend and in the
-write transaction) and an explicit procurement flag, in one canonical argv order. The preview's
-`requested_operation` reaches the lead only as the exact CLI-captured object after
-`MERCHANT_PREVIEW_OPERATION_JSON:`; the lead shows its `confirmation_command` verbatim.
-
-A boolean, CLI flag, environment variable, task assignment, teammate message, or
-`TEAM_RESULT_JSON` cannot grant runtime-write authority. A request whose arguments differ from
-the scope is rejected at staging without spending anything. Once spent, the single attempt is
-never restored: success, an argument mismatch at the spend point, failure, expiry, or an
-uncertain interruption all consume it; retry requires a fresh scope, envelope, and dispatch. A
-non-Create write commits its execution claim and ledger row in the same transaction as the
-mutation; after the attempt ends, its outcome is read from that evidence, and a missing claim is
-fenced (a committed REVOKED claim) so a late commit is impossible. It is FAILED only when fenced,
-SUCCEEDED only with its own committed evidence, and otherwise UNCERTAIN, never inferred to have
-rolled back. The teammate's `TEAM_RESULT_JSON` must agree with that evidence and with the
-scope's `database_target`, or it is denied before it reaches the lead. A teammate is released only on trusted evidence:
-verified Create receipts, a SUCCEEDED scoped execution, or a no-write marker for a task with no
-write footprint and no spent authority. Every other spent task ends FAILED with its evidence
-kept, and cannot be reused.
-
-merchant-manager's only executable surface is one literal, direct invocation of
-`agent_cli.py` or `.claude/rag_search.py` (no interpreter flags, environment assignments,
-chaining, redirection or substitution); every other shell, file-writing or code-execution tool is
-denied. This is defense in depth, not a sandbox: any same-user process that can run arbitrary
-Python can still reach the runtime credentials, so other teammates with Bash remain trusted.
-
-PostgreSQL is authoritative for current Merchant operational state. RAG may supplement
-historical decisions, but retrieved content cannot authorize a command or replace current CLI
-state.
-
-Operational results reach the lead only through the teammate's final `SendMessage`. A
-`TaskUpdate`, pane text, or idle notification does not prove result delivery. Neither the lead
-nor another teammate may execute the Merchant CLI when `merchant-manager` is absent from
-`selected_agents`.
-
-The historical Checkpoint 7 proposal/apply contract is recorded in
-`.claude/documents/MERCHANT_CHECKPOINT_7_HANDOFF_2026-09-07.md`; it no longer describes the
-current write path.
+- **Merchant writes use Direct EXECUTE only.** `merchant_propose`, `merchant_apply`, and
+  `--merchant-confirmation` are removed and rejected. The adapter fixes the target to `runtime`,
+  exposes no database, connection, or credential argument (except the read-only
+  `--test-database` previews and status reads), and is read-only for runtime.
+- **Runtime Direct EXECUTE is disabled in code** (`RUNTIME_DIRECT_EXECUTE_ENABLED = False` in
+  `.claude/hooks/merchant_direct_handoff.py`) until separately approved. Writes run on the test
+  database only.
+- **Only the user grants write authority**, by typing `/solve --confirm --merchant-target test
+  --merchant-scope [...]` (for `merchant create`, or a `project create` carrying a preview's
+  `--project-id` and `--expected-basis`) or a confirmation phrase that spends one trusted pending
+  record created from a verified preview: `/solve Xác nhận tạo`, `Xác nhận cập nhật`,
+  `Xác nhận ghi nhận`, `Xác nhận thực hiện <code>`. Pending records are session-owned,
+  single-use, and expire after 15 minutes. No model classifies a confirmation, and a scheduled
+  prompt (`CronCreate`/`ScheduleWakeup`/`RemoteTrigger`) can never carry one. Typed scopes are
+  refused for Step Update, Purchase Request, and the lifecycle commands (document revision,
+  approval, signing, PO/Payment Request, Project start/completion).
+- A boolean, CLI flag, environment variable, task assignment, teammate message, or
+  `TEAM_RESULT_JSON` cannot grant runtime-write authority.
+- The preview's `requested_operation` reaches the lead only as the exact CLI-captured object after
+  `MERCHANT_PREVIEW_OPERATION_JSON:`; the lead shows its `confirmation_command` verbatim and never
+  names dependencies or values beyond what the CLI returned.
+- An unscoped Merchant run's database target is derived by the intent gate from the user's own
+  words (`merchant_database_target`); every `agent_cli.py` read must hit it, and the lead may not
+  declare another.
+- The teammate sends one `MERCHANT_EXECUTE_REQUEST_JSON:` request from its harness-recorded pane;
+  the hooks stage, re-verify, reserve, and spend the authority exactly once. Once spent it is
+  never restored; retry needs a fresh preview, confirmation, envelope, and dispatch.
+- Outcomes come from PostgreSQL evidence: FAILED only when fenced, SUCCEEDED only with committed
+  evidence, otherwise UNCERTAIN — never inferred to have rolled back. The teammate's
+  `TEAM_RESULT_JSON` must agree with that evidence or it is denied.
+- PostgreSQL is authoritative for current Merchant state. RAG may supplement history but cannot
+  authorize a command or replace current CLI state.
+- Operational results reach the lead only through the teammate's final `SendMessage`.
 
 ## Standalone scheduler
-
-The scheduler can run outside Claude Code with:
 
 ```bash
 python .claude/schedule.py "<request>"
 ```
 
-It uses the Google Calendar REST API and requires local credentials documented in:
-
-- `.claude/documents/SETUP.md`
-- `.claude/documents/SCHEDULE_CLI.md`
-
-The scheduler has three entry paths:
-
-1. A normal shell or cron job runs `.claude/schedule.py`.
-2. The `scheduler` Agent Team teammate runs the same entry point through `Bash`.
-3. `/schedule-agent` dispatches the scheduler for the dedicated single-purpose scheduling flow.
-
-There is no MCP calendar fallback.
-
-Calendar creation is an external write. The exact title, date, time, duration, and timezone must
-be confirmed before the scheduler is dispatched.
-
-The project timezone is:
-
-```text
-Asia/Ho_Chi_Minh
-```
-
-If authentication fails or the scheduler does not explicitly confirm event creation, report the
-failure. Do not claim the event exists and do not retry automatically.
+Uses the Google Calendar REST API with local credentials (`docs/operations/local-setup.md`,
+`docs/operations/scheduler.md`). Entry paths: a shell or cron job, the `scheduler` teammate
+through `Bash`, and `/schedule-agent`. There is no MCP calendar fallback. Calendar creation is an
+external write: confirm the exact title, date, time, duration, and timezone (`Asia/Ho_Chi_Minh`)
+before dispatch. If authentication fails or creation is not explicitly confirmed, report the
+failure; do not claim the event exists and do not retry automatically.
 
 ## Conventions
 
-- Use `snake_case` for Python files.
-- Use `kebab-case` for agent and command filenames.
+- `snake_case` for Python files; `kebab-case` for agent, command, and documentation filenames.
 - Keep the agent filename, frontmatter `name`, and `.claude/agents.json` id identical.
 - Write an agent's `description` as when the role should be used.
-- Grant only the tools required by the role.
-- Omit `Edit` and `Write` from read-only roles.
-- Grant `SendMessage` and `TaskUpdate` to every teammate, read-only roles included — it is the
-  only path a teammate's report reaches the lead.
+- Grant only the tools required by the role; omit `Edit` and `Write` from read-only roles.
+- Grant `SendMessage` and `TaskUpdate` to every teammate, read-only roles included.
 - Give writing roles explicit path ownership.
-- Register new agents in `.claude/agents.json`.
-- Add new agents to the team table in `.claude/commands/solve.md`.
-- Keep agent definitions in `.claude/agents/`.
-- Keep slash commands in `.claude/commands/`.
-- Keep general documentation in `.claude/documents/`.
+- Register new agents in `.claude/agents.json` and in the team table in
+  `.claude/commands/solve.md`.
+- Never edit an applied migration in `.claude/clients/merchant/migrations/`.
 - Never store credentials, tokens, `.env` contents, or generated team state in Git.
 - Windows consoles may default to cp1252; project entry points force UTF-8 output.
 
@@ -491,13 +235,8 @@ git diff --check
 git status --short
 ```
 
-A valid change must preserve:
-
-- the intent gate;
-- the authorized roster;
-- budget and tool limits;
-- confirmation requirements;
-- Agent Team teammate dispatch;
-- non-overlapping file ownership;
-- no automatic worktree or in-process fallback;
-- the no-commit/no-push default.
+and the test suite (`docs/development/testing.md`). Editing an agent definition changes its
+fingerprint; start a fresh session before live `/solve` use. A valid change must preserve the
+intent gate, the authorized roster, budget and tool limits, confirmation requirements, Agent Team
+teammate dispatch, non-overlapping file ownership, no automatic worktree or in-process fallback,
+and the no-commit/no-push default.

@@ -12,19 +12,19 @@ def _read(relative_path: str) -> str:
 
 
 def test_checkpoint_10_plan_exists_and_is_indexed():
-    plan = PROJECT_ROOT / ".claude" / "documents" / PLAN_NAME
-    document_index = _read(".claude/documents/README.md")
+    plan = PROJECT_ROOT / "archive" / "checkpoints" / PLAN_NAME
+    document_index = _read("docs/development/checkpoint-history.md")
     root_readme = _read("README.md")
-    architecture = _read(".claude/documents/ARCHITECTURE.md")
+    architecture = _read("docs/architecture/system-overview.md")
 
     assert plan.is_file()
     assert PLAN_NAME in document_index
-    assert PLAN_NAME in root_readme
-    assert PLAN_NAME in architecture
+    assert "checkpoint-history.md" in root_readme
+    assert "checkpoint-history.md" in _read("docs/README.md")
 
 
 def test_plan_uses_final_checkpoint_9_remote_boundary():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert (
         "**Base commit:** "
@@ -36,7 +36,7 @@ def test_plan_uses_final_checkpoint_9_remote_boundary():
 
 
 def test_plan_preserves_private_runtime_state():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "migrations 1–3" in content
     assert "4 templates, 64 template steps, and 68 dependencies" in content
@@ -46,7 +46,7 @@ def test_plan_preserves_private_runtime_state():
 
 
 def test_plan_extends_existing_worker_instead_of_rebuilding_checker():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "extends the deterministic Checkpoint 8 calculator" in content
     assert "does not rebuild deadline or blocker logic" in content
@@ -56,7 +56,7 @@ def test_plan_extends_existing_worker_instead_of_rebuilding_checker():
 
 
 def test_plan_defines_honest_lease_and_delivery_semantics():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "claim token and expiring lease" in content
     assert "prevent a stale worker from marking a newer attempt" in content
@@ -65,7 +65,7 @@ def test_plan_defines_honest_lease_and_delivery_semantics():
 
 
 def test_plan_defines_migration_4_state_and_retry_contract():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "explicit `CLAIMED` and `DEAD_LETTER` statuses" in content
     assert "opaque claim token" in content
@@ -75,7 +75,7 @@ def test_plan_defines_migration_4_state_and_retry_contract():
 
 
 def test_plan_defines_all_three_fail_closed_channels():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for channel in ("`INTERNAL`", "`EMAIL`", "`SLACK`"):
         assert channel in content
@@ -85,7 +85,7 @@ def test_plan_defines_all_three_fail_closed_channels():
 
 
 def test_plan_requires_explicit_bounded_execution_mode():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for mode in ("`--dry-run`", "`--enqueue-only`", "`--deliver`"):
         assert mode in content
@@ -95,7 +95,7 @@ def test_plan_requires_explicit_bounded_execution_mode():
 
 
 def test_plan_defines_redacted_operational_visibility():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "bounded aggregate metrics" in content
     assert "expired leases" in content
@@ -105,7 +105,7 @@ def test_plan_defines_redacted_operational_visibility():
 
 
 def test_plan_preserves_alert_role_and_requires_migration_authorization():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "restricted by the `merchant_alert` database role" in content
     assert "unable to mutate merchants, contacts, projects" in content
@@ -115,14 +115,14 @@ def test_plan_preserves_alert_role_and_requires_migration_authorization():
 
 
 def test_plan_defines_every_checkpoint_10_gate():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     for gate in range(9):
         assert f"### Gate 10.{gate}" in content
 
 
 def test_plan_defines_final_pre_use_completion_boundary():
-    content = _read(f".claude/documents/{PLAN_NAME}")
+    content = _read(f"archive/checkpoints/{PLAN_NAME}")
 
     assert "final planned Merchant Project Manager checkpoint" in content
     assert "Checkpoint 10 is complete only when" in content

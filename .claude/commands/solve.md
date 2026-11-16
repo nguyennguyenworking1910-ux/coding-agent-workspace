@@ -171,7 +171,7 @@ Failing this gate is a valid fail-closed outcome.
 
 After validation:
 
-1. Read `.claude/documents/ARCHITECTURE.md`.
+1. Read `docs/architecture/system-overview.md`.
 2. Apply its folder ownership, dependency, naming, documentation, and safety rules.
 3. Confirm that `$ARGUMENTS` is not empty.
 4. Report these authoritative envelope fields before dispatch:
@@ -797,8 +797,8 @@ identifying the exact paths and confirming those changes may be removed.
 
 ## Architectural boundaries
 
-- Components are `agents`, `tools`, `clients`, `commands`, and `documents`.
-- Documentation belongs in `.claude/documents/`.
+- Components are `agents`, `tools`, `clients`, `commands`, `hooks`, and `system`.
+- Documentation belongs in `docs/` (indexed in `docs/README.md`); `archive/` is historical only.
 - Agent definitions belong in `.claude/agents/`.
 - Slash commands belong in `.claude/commands/`.
 - Dependencies flow one way: agents → tools → clients.
