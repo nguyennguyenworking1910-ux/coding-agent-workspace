@@ -236,7 +236,7 @@ def test_vietnamese_and_english_requests_bind_the_one_eligible_revision(project,
     assert fields["payment_period_number"] == 3
     assert output["merchant"]["code"].startswith("PYTEST_MASTER_")
     assert one(db, "SELECT count(*) AS n FROM merchant_ops.projects WHERE reused_document_revision_id "
-                   "IS NOT NULL")["n"] == 0                                   # a preview binds nothing
+                   "IS NOT NULL AND merchant_id = %s", project.merchant_id)["n"] == 0                                   # a preview binds nothing
 
 
 # --------------------------------------------- authority and staleness
@@ -265,7 +265,7 @@ def test_a_handwritten_binding_cannot_run(project):
     execute({"argv": forged})
     assert run_state().get("merchant_runtime_authorization_issued") is not True
     assert one(db, "SELECT count(*) AS n FROM merchant_ops.projects WHERE reused_document_revision_id "
-                   "IS NOT NULL")["n"] == 0
+                   "IS NOT NULL AND merchant_id = %s", project.merchant_id)["n"] == 0
 
 
 def test_a_source_change_after_the_preview_refuses_the_create_before_any_spend(project):
@@ -324,7 +324,8 @@ def test_concurrent_creates_of_one_operation_bind_once(project):
         thread.join()
     assert outcomes.count("ok") == 1, outcomes
     rows = [dict(r) for r in _rows(db, "SELECT id::text AS id, reused_document_revision_id::text AS r "
-                                       "FROM merchant_ops.projects WHERE reused_document_revision_id IS NOT NULL")]
+                                       "FROM merchant_ops.projects WHERE reused_document_revision_id IS NOT NULL "
+                                       "AND merchant_id = %s", project.merchant_id)]
     assert rows == [{"id": operation["project_id"], "r": revision}]
     assert claims(db) == ["COMPLETED"]
 

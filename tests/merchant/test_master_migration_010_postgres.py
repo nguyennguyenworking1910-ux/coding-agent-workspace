@@ -141,10 +141,13 @@ def test_a_signed_revision_can_still_be_superseded_by_the_engine_path(repository
 
 
 def test_existing_data_is_untouched(repository):
+    # Rows that existed when 010 was applied were not backfilled. Rows written later through
+    # the confirmed lifecycle (e.g. accepted live records) legitimately carry these columns.
+    before_010 = "created_at < (SELECT executed_at FROM merchant_ops.schema_migrations WHERE version = 10)"
     with repository.connection(read_only=True) as connection:
         assert connection.execute(
-            "SELECT count(*) AS n FROM merchant_ops.document_approvals WHERE recorded_by IS NOT NULL "
-            "OR decided_at IS NOT NULL").fetchone()["n"] == 0
+            "SELECT count(*) AS n FROM merchant_ops.document_approvals WHERE (recorded_by IS NOT NULL "
+            f"OR decided_at IS NOT NULL) AND {before_010}").fetchone()["n"] == 0
         assert connection.execute(
-            "SELECT count(*) AS n FROM merchant_ops.document_revisions WHERE signing_attestation IS NOT NULL"
-        ).fetchone()["n"] == 0
+            "SELECT count(*) AS n FROM merchant_ops.document_revisions WHERE signing_attestation IS NOT NULL "
+            f"AND {before_010}").fetchone()["n"] == 0
