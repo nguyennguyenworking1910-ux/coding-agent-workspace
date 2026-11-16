@@ -298,6 +298,10 @@ user's request text verbatim. Add `--test-database` exactly when the assignment'
   a request, and never give `--merchant-scope`, argv, or a step-update CLI command.
 - A confirmed Step Update reaches you later as an ordinary scoped `merchant_execute`
   assignment: send its persisted scope through "Direct EXECUTE" below, unchanged, exactly once.
+- Completing a step also promotes, in the same transaction, every PENDING successor whose
+  predecessors are now all COMPLETED or SKIPPED to READY (BLOCKED steps are never promoted).
+  Do not suggest a separate READY update for a successor unless a fresh `project status` or
+  `step preview` shows it still PENDING; an already-READY step returns `ALREADY_IN_STATUS`.
 - Your report must contain the CLI's result exactly once, on its own line after
   `MERCHANT_STEP_PREVIEW_JSON:`, as the complete JSON object it printed. A short summary may
   precede it. If the gate says the output could not be verified, send the report once starting
