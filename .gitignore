@@ -1,6 +1,7 @@
 # Generated files
 .claude/agent_runners/
 .claude/runtime/
+.claude/runtime_backup_*/
 .agent-workspace/
 
 # Local Claude Code settings
